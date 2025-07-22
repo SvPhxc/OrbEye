@@ -26,10 +26,12 @@ def update_hsv_range_from_blob(frame, blob, tolerance=(10, 50, 50)):
     cv2.setTrackbarPos("Upper S", "Controls", upper[1])
     cv2.setTrackbarPos("Upper V", "Controls", upper[2])
 
-    print(f"HSV adjusted to target: Lower={lower}, Upper={upper}")
+    print(f"🎯 HSV adjusted to target: Lower={lower}, Upper={upper}")
 
 # --- Mouse Callback Function ---
 def select_blob(event, x, y, flags, param):
+    if event != cv2.EVENT_LBUTTONDOWN:
+        return
     shared_data = param["shared_data"]
     tracked_blobs = param["tracked_blobs"]
     frame = param["frame"]
@@ -38,7 +40,7 @@ def select_blob(event, x, y, flags, param):
             shared_data["selected_blob"] = (bx, by, bw, bh)
             shared_data["target"] = (bx + bw // 2, by + bh // 2)
             update_hsv_range_from_blob(frame, (bx, by, bw, bh))
-            print(f"Locked onto blob at ({bx}, {by})")
+            print(f"✅ Locked onto blob at ({bx}, {by})")
             break
 
 # --- Main Tracking Function ---
@@ -58,24 +60,25 @@ def run_tracking(shared_data):
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("Cannot open camera")
+        print("❌ Cannot open camera")
         return
 
     shared_data["selected_blob"] = None
     shared_data["target"] = None
+    shared_data["direction"] = None
 
     cv2.namedWindow("Webcam")
-    # Keep a mutable wrapper to hold dynamic params
     mouse_params = {
         "shared_data": shared_data,
         "tracked_blobs": [],
         "frame": None
     }
     cv2.setMouseCallback("Webcam", select_blob, param=mouse_params)
+
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("Can't receive frame")
+            print("❌ Can't receive frame")
             break
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -91,12 +94,13 @@ def run_tracking(shared_data):
         lower_hsv = np.array([lh, ls, lv])
         upper_hsv = np.array([uh, us, uv])
 
+        # Mask and clean
         mask = cv2.inRange(hsv, lower_hsv, upper_hsv)
         mask = cv2.erode(mask, None, iterations=2)
         mask = cv2.dilate(mask, None, iterations=2)
 
+        # Find blobs
         contours, _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
         tracked_blobs = []
         for contour in contours:
             area = cv2.contourArea(contour)
@@ -104,10 +108,9 @@ def run_tracking(shared_data):
                 x, y, w, h = cv2.boundingRect(contour)
                 tracked_blobs.append((x, y, w, h))
 
-        selected_blob = shared_data["selected_blob"]
         selected_center = shared_data["target"]
 
-        # Update selected blob if locked
+        # Lock onto closest blob if tracking
         if selected_center and tracked_blobs:
             closest_blob = None
             min_dist = float("inf")
@@ -120,14 +123,16 @@ def run_tracking(shared_data):
 
             if closest_blob:
                 shared_data["selected_blob"] = closest_blob
-                shared_data["target"] = (closest_blob[0] + closest_blob[2] // 2,
-                                         closest_blob[1] + closest_blob[3] // 2)
+                shared_data["target"] = (
+                    closest_blob[0] + closest_blob[2] // 2,
+                    closest_blob[1] + closest_blob[3] // 2
+                )
             else:
-                print("Lost blob")
+                print("⚠️ Lost blob")
                 shared_data["selected_blob"] = None
                 shared_data["target"] = None
 
-        # Draw
+        # Draw results
         if shared_data["selected_blob"]:
             x, y, w, h = shared_data["selected_blob"]
             cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
@@ -137,18 +142,43 @@ def run_tracking(shared_data):
             for (x, y, w, h) in tracked_blobs:
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-        # Show windows
+        # Direction logic
+        if shared_data["target"] is not None:
+            cx, cy = shared_data["target"]
+            frame_center = (frame.shape[1] // 2, frame.shape[0] // 2)
+            x_offset = cx - frame_center[0]
+            y_offset = cy - frame_center[1]
+            dead_zone = 30
+
+            if abs(x_offset) < dead_zone and abs(y_offset) < dead_zone:
+                direction = "center"
+            elif abs(x_offset) >= abs(y_offset):
+                direction = "right" if x_offset > 0 else "left"
+            else:
+                direction = "down" if y_offset > 0 else "up"
+
+            shared_data["direction"] = direction
+            #print(f"➡️ Direction to move: {direction}")
+        else:
+            shared_data["direction"] = None
+
+        # Update mouse callback params
+        mouse_params["tracked_blobs"] = tracked_blobs
+        mouse_params["frame"] = frame.copy()
+
+        # Show frames
         cv2.imshow("Webcam", frame)
         cv2.imshow("Mask", mask)
 
         # Keyboard input
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
-            break
+            shared_data["shutdown"] = True
+            raise KeyboardInterrupt
         elif key == ord('r'):
             shared_data["selected_blob"] = None
             shared_data["target"] = None
-
+            shared_data["direction"] = None
             # Reset HSV sliders to black
             cv2.setTrackbarPos("Lower H", "Controls", DEFAULT_LOWER_HSV[0])
             cv2.setTrackbarPos("Lower S", "Controls", DEFAULT_LOWER_HSV[1])
@@ -156,12 +186,7 @@ def run_tracking(shared_data):
             cv2.setTrackbarPos("Upper H", "Controls", DEFAULT_UPPER_HSV[0])
             cv2.setTrackbarPos("Upper S", "Controls", DEFAULT_UPPER_HSV[1])
             cv2.setTrackbarPos("Upper V", "Controls", DEFAULT_UPPER_HSV[2])
-
-            print("Reset: tracking all blobs with default black HSV range")
-
-        # Update mouse callback
-        mouse_params["tracked_blobs"] = tracked_blobs
-        mouse_params["frame"] = frame.copy()
+            print("🔁 Reset to black tracking")
 
     cap.release()
     cv2.destroyAllWindows()
