@@ -16,7 +16,7 @@ if __name__ == "__main__":
         p1.start()
         p2.start()
 
-        # 🔁 Monitor shutdown flag
+        # Monitor shutdown flag
         try:
             while not shared_data["shutdown"]:
                 time.sleep(0.1)

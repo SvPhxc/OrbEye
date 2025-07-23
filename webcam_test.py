@@ -60,7 +60,7 @@ def run_tracking(shared_data):
 
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("❌ Cannot open camera")
+        print("Cannot open camera")
         return
 
     shared_data["selected_blob"] = None
@@ -128,7 +128,7 @@ def run_tracking(shared_data):
                     closest_blob[1] + closest_blob[3] // 2
                 )
             else:
-                print("⚠️ Lost blob")
+                print("Lost blob")
                 shared_data["selected_blob"] = None
                 shared_data["target"] = None
 
