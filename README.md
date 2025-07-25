@@ -12,3 +12,4 @@ Lap
 #GUI
 Status: Tracking, Searching, Commanding
 Tracking commands: pan left, right, up, down
+PyQt5 pyqtgraph PyOpenGL
