@@ -9,7 +9,8 @@ if __name__ == "__main__":
         shared_data["direction"] = None
         shared_data["target"] = None
         shared_data["selected_blob"] = None
-        shared_data["shutdown"] = False  # The shutdown flag
+        shared_data["shutdown"] = False  
+        shared_data["commanding"] = None
 
         p1 = Process(target=run_tracking, args=(shared_data,))
         p2 = Process(target=run_motor_control, args=(shared_data,))

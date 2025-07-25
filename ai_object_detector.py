@@ -2,15 +2,15 @@ from ultralytics import YOLO
 import cv2
 
 # Load your model (custom or pretrained)
-model = YOLO("yolov8n.pt")  # Replace with your custom model if needed
-
+model = YOLO("e25_416.pt")  # Replace with your custom model if needed
+print(model.names) 
 # Class filter (e.g., only detect 'person' which is class 0 in COCO)
 TARGET_CLASSES = [0]  # Change this to your custom class ID(s)
 
 # Open webcam
 cap = cv2.VideoCapture(0)
 if not cap.isOpened():
-    print("❌ Could not open webcam.")
+    print("Could not open webcam.")
     exit()
 
 # Run frame-by-frame tracking with filtering
@@ -27,7 +27,7 @@ while True:
     for box in results[0].boxes:
         cls_id = int(box.cls[0])
         if cls_id in TARGET_CLASSES:
-            print(f"✅ Tracking object with class {cls_id} at {box.xywh[0].tolist()}")
+            print(f"Tracking object with class {cls_id} at {box.xywh[0].tolist()}")
 
     # Show annotated frame
     cv2.imshow("YOLOv8 Tracker", annotated_frame)
