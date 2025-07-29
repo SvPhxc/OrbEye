@@ -2,7 +2,7 @@ from ultralytics import YOLO
 import cv2
 
 # Load your model (custom or pretrained)
-model = YOLO("e25_416.pt")  # Replace with your custom model if needed
+model = YOLO("e100_640.pt")  # Replace with your custom model if needed
 print(model.names) 
 # Class filter (e.g., only detect 'person' which is class 0 in COCO)
 TARGET_CLASSES = [0]  # Change this to your custom class ID(s)

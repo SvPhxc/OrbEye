@@ -3,30 +3,32 @@ import numpy as np
 
 # --- Default HSV range for black ---
 DEFAULT_LOWER_HSV = [0, 0, 0]
-DEFAULT_UPPER_HSV = [180, 255, 50]
+DEFAULT_UPPER_HSV = [180, 255, 30]
 
 # --- Auto-expand HSV when target is selected ---
-def update_hsv_range_from_blob(frame, blob, tolerance=(10, 50, 50)):
+def update_hsv_range_from_blob(frame, blob):
+    print("blob")
     x, y, w, h = blob
     roi = frame[y:y+h, x:x+w]
     hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    avg_hsv = np.mean(hsv_roi.reshape(-1, 3), axis=0).astype(int)
 
-    h, s, v = avg_hsv
-    dh, ds, dv = tolerance
+    hsv_pixels = hsv_roi.reshape(-1, 3)
+    median_hsv = np.median(hsv_pixels, axis=0).astype(int)
 
-    lower = np.clip([h - dh, s - ds, v - dv], [0, 0, 0], [180, 255, 255])
-    upper = np.clip([h + dh, s + ds, v + dv], [0, 0, 0], [180, 255, 255])
+    h, s, v = median_hsv
+    print(f"Locked HSV median: H={h}, S={s}, V={v}")
 
-    # Update GUI sliders
+    # Use small tolerance to avoid losing lock completely
+    lower = np.clip([h - 5, s - 15, v - 15], [0, 0, 0], [180, 255, 255])
+    upper = np.clip([h + 5, s + 15, v + 15], [0, 0, 0], [180, 255, 255])
+
+
     cv2.setTrackbarPos("Lower H", "Controls", lower[0])
     cv2.setTrackbarPos("Lower S", "Controls", lower[1])
     cv2.setTrackbarPos("Lower V", "Controls", lower[2])
     cv2.setTrackbarPos("Upper H", "Controls", upper[0])
     cv2.setTrackbarPos("Upper S", "Controls", upper[1])
     cv2.setTrackbarPos("Upper V", "Controls", upper[2])
-
-    print(f"🎯 HSV adjusted to target: Lower={lower}, Upper={upper}")
 
 # --- Mouse Callback Function ---
 def select_blob(event, x, y, flags, param):
@@ -40,12 +42,13 @@ def select_blob(event, x, y, flags, param):
             shared_data["selected_blob"] = (bx, by, bw, bh)
             shared_data["target"] = (bx + bw // 2, by + bh // 2)
             update_hsv_range_from_blob(frame, (bx, by, bw, bh))
-            print(f"✅ Locked onto blob at ({bx}, {by})")
+            print(f"Locked onto blob at ({bx}, {by})")
             break
 
 # --- Main Tracking Function ---
 def run_tracking(shared_data):
-    lock_threshold = 2000
+    lock_threshold = 5000
+    print("blobbbbb")
 
     cv2.namedWindow("Controls")
     cv2.resizeWindow("Controls", 500, 300)
@@ -78,10 +81,11 @@ def run_tracking(shared_data):
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("❌ Can't receive frame")
+            print("Can't receive frame")
             break
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        hsv = cv2.GaussianBlur(hsv, (5, 5), 0)  # Noise reduction
 
         # Read HSV values from trackbars
         lh = cv2.getTrackbarPos("Lower H", "Controls")
@@ -143,24 +147,23 @@ def run_tracking(shared_data):
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
         # Direction logic
-        if shared_data["target"] is not None:
-            cx, cy = shared_data["target"]
-            frame_center = (frame.shape[1] // 2, frame.shape[0] // 2)
-            x_offset = cx - frame_center[0]
-            y_offset = cy - frame_center[1]
-            dead_zone = 30
+        # if shared_data["target"] is not None:
+        #     cx, cy = shared_data["target"]
+        #     frame_center = (frame.shape[1] // 2, frame.shape[0] // 2)
+        #     x_offset = cx - frame_center[0]
+        #     y_offset = cy - frame_center[1]
+        #     dead_zone = 30
 
-            if abs(x_offset) < dead_zone and abs(y_offset) < dead_zone:
-                direction = "center"
-            elif abs(x_offset) >= abs(y_offset):
-                direction = "right" if x_offset > 0 else "left"
-            else:
-                direction = "down" if y_offset > 0 else "up"
+        #     if abs(x_offset) < dead_zone and abs(y_offset) < dead_zone:
+        #         direction = "center"
+        #     elif abs(x_offset) >= abs(y_offset):
+        #         direction = "right" if x_offset > 0 else "left"
+        #     else:
+        #         direction = "down" if y_offset > 0 else "up"
 
-            shared_data["direction"] = direction
-            #print(f"➡️ Direction to move: {direction}")
-        else:
-            shared_data["direction"] = None
+        #     shared_data["direction"] = direction
+        # else:
+        #     shared_data["direction"] = None
 
         # Update mouse callback params
         mouse_params["tracked_blobs"] = tracked_blobs
@@ -179,14 +182,16 @@ def run_tracking(shared_data):
             shared_data["selected_blob"] = None
             shared_data["target"] = None
             shared_data["direction"] = None
-            # Reset HSV sliders to black
             cv2.setTrackbarPos("Lower H", "Controls", DEFAULT_LOWER_HSV[0])
             cv2.setTrackbarPos("Lower S", "Controls", DEFAULT_LOWER_HSV[1])
             cv2.setTrackbarPos("Lower V", "Controls", DEFAULT_LOWER_HSV[2])
             cv2.setTrackbarPos("Upper H", "Controls", DEFAULT_UPPER_HSV[0])
             cv2.setTrackbarPos("Upper S", "Controls", DEFAULT_UPPER_HSV[1])
             cv2.setTrackbarPos("Upper V", "Controls", DEFAULT_UPPER_HSV[2])
-            print("🔁 Reset to black tracking")
+            print("Reset to black tracking")
+        elif key == ord('u') and shared_data["selected_blob"]:
+            update_hsv_range_from_blob(mouse_params["frame"], shared_data["selected_blob"])
+            print("HSV re-calibrated from blob")
 
     cap.release()
     cv2.destroyAllWindows()
