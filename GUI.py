@@ -1,6 +1,6 @@
 import sys
 import numpy as np
-from PyQt5 import QtWidgets
+from PyQt5 import QtWidgets, QtCore
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 import time
@@ -8,18 +8,19 @@ import time
 class TrackerWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Satellite Tracker - Circular Orbit")
-        self.resize(800, 600)
+        self.setWindowTitle("LockedIn Martin")
+        self.resize(1000, 600)
 
-        # Central widget and layout
+        # Central widget and main layout
         self.central_widget = QtWidgets.QWidget()
         self.setCentralWidget(self.central_widget)
-        self.layout = QtWidgets.QVBoxLayout(self.central_widget)
+        main_layout = QtWidgets.QHBoxLayout(self.central_widget)
 
-        # 3D View
+        # === Left: 3D View ===
         self.view = gl.GLViewWidget()
-        self.layout.addWidget(self.view)
+        self.view.setFocusPolicy(QtCore.Qt.NoFocus)
         self.view.setCameraPosition(distance=20)
+        main_layout.addWidget(self.view, stretch=3)
 
         # Grid
         grid = gl.GLGridItem()
@@ -33,37 +34,98 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.laser = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], [1, 0, 0]]), color=(0, 1, 0, 1), width=2)
         self.view.addItem(self.laser)
 
-        # Parameters for circular orbit
-        self.radius = 8
-        self.orbit_speed = 0.2  # radians per second
-        self.orbit_height = 3   # Z-axis level of the orbit
-        self.start_time = time.time()
-
-        # Timer for updates
-        self.timer = pg.QtCore.QTimer()
-        self.timer.timeout.connect(self.update_orbit)
-        self.timer.start(30)  # 30 ms ≈ 33 FPS
-
-        # Create a small sphere using pyqtgraph's mesh data
+        # Station at origin
         md = gl.MeshData.sphere(rows=10, cols=20, radius=0.5)
         self.station = gl.GLMeshItem(meshdata=md, smooth=True, color=(0, 0, 1, 1), shader='shaded')
-        self.station.translate(0, 0, 0)  # Place at origin
+        self.station.translate(0, 0, 0)
         self.view.addItem(self.station)
 
+        # Orbit parameters
+        self.radius = 8
+        self.orbit_speed = 0.2
+        self.elevation_deg = 30  # initial elevation angle
+        self.start_time = time.time()
+        self.orbit_enabled = True
+
+        # Timer
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.update_orbit)
+        self.timer.start(30)
+
+        # === Right: Control Panel ===
+        controls = QtWidgets.QVBoxLayout()
+        main_layout.addLayout(controls, stretch=1)
+
+        # Add Sphere Button
+        self.btn_add_sphere = QtWidgets.QPushButton("Add Sphere at Drone")
+        self.btn_add_sphere.clicked.connect(self.add_sphere)
+        controls.addWidget(self.btn_add_sphere)
+
+        # Toggle Orbit Button
+        self.btn_toggle_orbit = QtWidgets.QPushButton("Toggle Orbit")
+        self.btn_toggle_orbit.setCheckable(True)
+        self.btn_toggle_orbit.setChecked(True)
+        self.btn_toggle_orbit.toggled.connect(self.toggle_orbit)
+        controls.addWidget(self.btn_toggle_orbit)
+
+        # Elevation Angle Controls
+        controls.addWidget(QtWidgets.QLabel("Elevation Angle (°)"))
+        self.slider_elevation = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.slider_elevation.setMinimum(0)
+        self.slider_elevation.setMaximum(90)
+        self.slider_elevation.setValue(self.elevation_deg)
+        self.slider_elevation.valueChanged.connect(self.set_elevation_angle)
+        controls.addWidget(self.slider_elevation)
+
+        self.lcd_elevation = QtWidgets.QLCDNumber()
+        self.lcd_elevation.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
+        self.lcd_elevation.setDigitCount(4)
+        self.lcd_elevation.display(self.elevation_deg)
+        controls.addWidget(self.lcd_elevation)
+
+        controls.addStretch()
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key == pg.QtCore.Qt.Key_A:
+            self.add_sphere()
+
+    def add_sphere(self):
+        md = gl.MeshData.sphere(rows=5, cols=10, radius=0.1)
+        sphere = gl.GLMeshItem(meshdata=md, smooth=True, color=(0, 1, 0, 1), shader='shaded')
+        x, y, z = self.satellite.pos[0]
+        sphere.translate(x, y, z)
+        self.view.addItem(sphere)
+
+    def toggle_orbit(self, enabled):
+        self.orbit_enabled = enabled
+        if enabled:
+            self.start_time = time.time()  # reset time
+
+    def set_elevation_angle(self, value):
+        self.elevation_deg = value
+        self.lcd_elevation.display(value)
+
     def update_orbit(self):
-        # Time since start
+        if not self.orbit_enabled:
+            return
+
+        # Time and orbit angle
         t = time.time() - self.start_time
         angle = self.orbit_speed * t
 
-        # Circular orbit in XY plane at constant Z
-        x = self.radius * np.cos(angle)
-        y = self.radius * np.sin(angle)
-        z = self.orbit_height
+        # Convert elevation angle to radians
+        elevation_rad = np.radians(self.elevation_deg)
 
-        # Update satellite (drone) position
+        # Calculate position in spherical coordinates
+        x = self.radius * np.cos(angle) * np.cos(elevation_rad)
+        y = self.radius * np.sin(angle) * np.cos(elevation_rad)
+        z = self.radius * np.sin(elevation_rad)
+
+        # Update satellite position
         self.satellite.setData(pos=np.array([[x, y, z]]))
 
-        # Update laser pointing from origin to satellite
+        # Update laser vector
         self.laser.setData(pos=np.array([[0, 0, 0], [x, y, z]]))
 
 if __name__ == "__main__":
