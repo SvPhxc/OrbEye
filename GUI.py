@@ -5,11 +5,17 @@ import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 import time
 
+from datahandler import parse_tle_file, generate_orbit_xyz, plot_orbit_with_earth
+
+
+
+
 class TrackerWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("LockedIn Martin")
         self.resize(1000, 600)
+        self.debug_scale = 0.01
 
         # Central widget and main layout
         self.central_widget = QtWidgets.QWidget()
@@ -85,6 +91,11 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         controls.addStretch()
 
+        self.orbit_xyz = generate_orbit_xyz('example.tle', duration_minutes=90, step_seconds=30)
+        self.plot_orbit_spheres()
+        # or
+        # self.plot_orbit_points_fast()
+
     def keyPressEvent(self, event):
         key = event.key()
         if key == pg.QtCore.Qt.Key_A:
@@ -96,6 +107,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         x, y, z = self.satellite.pos[0]
         sphere.translate(x, y, z)
         self.view.addItem(sphere)
+        print("Sphere added at", (x, y, z))
 
     def toggle_orbit(self, enabled):
         self.orbit_enabled = enabled
@@ -128,8 +140,23 @@ class TrackerWindow(QtWidgets.QMainWindow):
         # Update laser vector
         self.laser.setData(pos=np.array([[0, 0, 0], [x, y, z]]))
 
+    def plot_orbit_spheres(self):
+        # Create a small sphere at each XYZ point
+        for point in self.orbit_xyz:
+            if np.isnan(point).any():
+                print("nothing added")
+                continue  # skip invalid points
+            md = gl.MeshData.sphere(rows=5, cols=10, radius=1)
+            sphere = gl.GLMeshItem(meshdata=md, smooth=True, color=(1, 1, 0, 1), shader='shaded')
+            scaled_point = np.array(point) * self.debug_scale
+            sphere.translate(*scaled_point)
+            self.view.addItem(sphere)  
+            print("something added at", scaled_point)
+
+
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     window = TrackerWindow()
     window.show()
     sys.exit(app.exec_())
+    
