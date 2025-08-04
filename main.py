@@ -17,7 +17,7 @@ if __name__ == "__main__":
         shared_data["Range"] = None
         shared_data["Strength"] = None
 
-        shared_data["lidar_array"] = np.array([0.0, 0.0, 0.0])
+        shared_data["lidar_array"] = manager.list([0, 0, 0])  # [distance, strength, timestamp]
         shared_data["pan_tilt"] = None
 
         #p1 = Process(target=run_tracking, args=(shared_data,))

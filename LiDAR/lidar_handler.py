@@ -30,7 +30,7 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
                 distance, strength = read_tfmini_data(ser)
                 if distance is not None and strength is not None:
                     timestamp = time.time()
-                    shared_data["lidar_array"] = np.array([distance, strength, timestamp])
+                    shared_data["lidar_array"].append(distance, strength, timestamp)
                 time.sleep(0.01)
     except serial.SerialException as e:
         print(f"[TFmini] Serial error: {e}")

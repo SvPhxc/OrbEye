@@ -23,6 +23,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.debug_scale = 0.1
         self.orbit_items = []  # Store all orbit and vector items
 
+        live_data = _shared_data 
+
         # Central widget and layout
         self.central_widget = QtWidgets.QWidget()
         self.setCentralWidget(self.central_widget)
@@ -101,11 +103,27 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.slider_elevation.valueChanged.connect(self.set_elevation_angle)
         controls.addWidget(self.slider_elevation)
 
+
+        # LCD for elevation angle
         self.lcd_elevation = QtWidgets.QLCDNumber()
         self.lcd_elevation.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
         self.lcd_elevation.setDigitCount(4)
         self.lcd_elevation.display(self.elevation_deg)
         controls.addWidget(self.lcd_elevation)
+
+        # Range Display
+        controls.addWidget(QtWidgets.QLabel("Range Data from Lidar:"))
+        self.lcd_range = QtWidgets.QLCDNumber()
+        self.lcd_range.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
+        self.lcd_range.setDigitCount(6)
+        controls.addWidget(self.lcd_range)
+
+        # Strength Display
+        controls.addWidget(QtWidgets.QLabel("Strength Data from Lidar:"))
+        self.lcd_strength = QtWidgets.QLCDNumber()
+        self.lcd_strength.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
+        self.lcd_strength.setDigitCount(6)
+        controls.addWidget(self.lcd_strength)
 
         # Shutdown button
         self.btn_shutdown = QtWidgets.QPushButton("Shutdown")
@@ -232,6 +250,18 @@ class TrackerWindow(QtWidgets.QMainWindow):
     def set_elevation_angle(self, value):
         self.elevation_deg = value
         self.lcd_elevation.display(value)
+    
+    def update_lidar_display(self):
+        try:
+            lidar_log = self.live_data["lidar_array"]
+            if len(lidar_log) > 0:
+                latest = lidar_log[-1]
+                range_val = latest[1]
+                strength_val = latest[2]
+                self.lcd_strength.display(strength_val)
+                self.lcd_range.display(range_val)
+        except Exception as e:
+            print("Error reading lidar data:", e)
 
     def add_sphere(self):
         md = gl.MeshData.sphere(rows=5, cols=10, radius=1000)
