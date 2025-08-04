@@ -133,7 +133,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         self.lidar_timer = QtCore.QTimer()
         self.lidar_timer.timeout.connect(self.update_lidar_display)
-        self.lidar_timer.start(100)  
+        self.lidar_timer.start(200)  
 
         controls.addStretch()
 
@@ -257,11 +257,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.lcd_elevation.display(value)
     
     def update_lidar_display(self):
-        lidar_array = self.shared_data.get("lidar_array", [])
-        if len(lidar_array) > 0:
+        if "lidar_data" in self.shared_data:
             distance = self.shared_data["lidar_data"][0]
             strength = self.shared_data["lidar_data"][1]
-            print(f"1LiDAR Data: Distance={distance}, Strength={strength}")
+            print(f"LiDAR Data: Distance={distance}, Strength={strength}")
             self.lcd_range.display(distance)
             self.lcd_strength.display(strength)
 
