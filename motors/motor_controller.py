@@ -209,6 +209,7 @@ def run_motor_control(shared_data):
     stepper_process = Process(target=stepper_worker, args=(movement_queue, shared_data))
     stepper_process.start()
 
+    set_servo_angle_absolute(90, shared_data)
     try:
         set_servo_angle_absolute(90, shared_data)
         set_pan_angle_and_wait(0, movement_queue, shared_data)
