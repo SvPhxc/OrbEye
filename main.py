@@ -1,6 +1,6 @@
-from multiprocessing import Process, Array, Value
+from multiprocessing import Process, Queue, Array, Value
 from webcam.blob_tracker import run_tracking
-from motors.controller import run_motor_control  # if used
+from motors.motor_controller import run_motor_control  # if used
 from LiDAR.lidar_handler import run_lidar
 from tracking.tracker import tracking  # if used
 from GUI import run_gui
@@ -35,7 +35,8 @@ if __name__ == "__main__":
 
     # Start processes
     # p1 = Process(target=run_tracking, args=(shared_data,))
-    p2 = Process(target=run_motor_control, args=(shared_data,))
+    movement_queue = Queue()
+    p2 = Process(target=run_motor_control, args=(shared_data, movement_queue))
     p3 = Process(target=run_gui, args=(shared_data,))
     p4 = Process(target=run_lidar, args=(shared_data,))
     # p5 = Process(target=tracking, args=(shared_data,))

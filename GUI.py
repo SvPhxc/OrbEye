@@ -274,7 +274,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     def background_scan(self):
         print("[GUI] Triggering background scan")
-        self.shared_data["scan_trigger"] = True
+        self.shared_data["scan_trigger"].value = True
 
     def add_sphere(self):
         md = gl.MeshData.sphere(rows=5, cols=10, radius=1000)

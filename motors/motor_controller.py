@@ -197,18 +197,23 @@ def concentric_ring_search(movement_queue, shared_data):
     return False
 
 
-def run_motor_control(shared_data):
-    from multiprocessing import Queue
-    movement_queue = Queue()
-
-    '''shared_data['stepper_degrees'] = 0.0
+def run_motor_control(shared_data, movement_queue):
+    '''try:
+        print("[MotorControl] Starting...")
+        from multiprocessing import Queue
+        movement_queue = Queue()
+        ...
+    except Exception as e:
+        print(f"[MotorControl] Exception occurred: {e}")
+    print("hi")
+    shared_data['stepper_degrees'] = 0.0
     shared_data['cumulative_error'] = 0.0
     shared_data['servo_degrees'] = 90.0
     shared_data['scan_trigger'] = False  # GUI sets this to True to trigger scan'''
 
     stepper_process = Process(target=stepper_worker, args=(movement_queue, shared_data))
     stepper_process.start()
-
+    print("hi")
     set_servo_angle_absolute(90, shared_data)
     try:
         set_servo_angle_absolute(90, shared_data)
@@ -216,10 +221,10 @@ def run_motor_control(shared_data):
 
         print("[MotorControl] Idle, waiting for scan trigger...")
         while not shared_data['shutdown'].value:
-            if shared_data['scan_trigger']:
+            if shared_data['scan_trigger'].value:  # ✅ .value is critical
                 print("[MotorControl] Trigger received: starting scan")
                 concentric_ring_search(movement_queue, shared_data)
-                shared_data['scan_trigger'] = False
+                shared_data['scan_trigger'].value = False  # ✅ Reset trigger properly
             sleep(0.1)
     finally:
         movement_queue.put(None)
@@ -232,7 +237,7 @@ def run_motor_control(shared_data):
 
 # --- Main Execution Block ---
 
-'''if __name__ == '__main__':
+if __name__ == '__main__':
     with Manager() as manager:
         shared_data = manager.dict()
         shared_data['stepper_degrees'] = 0.0
@@ -262,4 +267,4 @@ def run_motor_control(shared_data):
             GPIO.output(4, GPIO.HIGH)
             pi.set_servo_pulsewidth(13, 0)
             pi.stop()
-            print("Script finished.")'''
+            print("Script finished.")
