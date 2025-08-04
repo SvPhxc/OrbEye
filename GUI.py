@@ -100,6 +100,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         # Toggle Background-Scan Button
         self.btn_background = QtWidgets.QPushButton("Background Scan")
         self.btn_background.clicked.connect(self.background_scan)
+        controls.addWidget(self.btn_background)
 
         # Elevation angle slider
         controls.addWidget(QtWidgets.QLabel("Elevation Angle (°)"))
