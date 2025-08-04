@@ -3,20 +3,21 @@ import numpy as np
 import time
 
 def read_tfmini_data(serial_port):
-    """
-    Reads one data frame (9 bytes) from TFmini and extracts range and strength.
-    """
-    if serial_port.in_waiting >= 9:
-        if serial_port.read() != b'\x59':
-            return None, None
-        if serial_port.read() != b'\x59':
-            return None, None
+    buffer = bytearray()
+    
+    while True:
+        data = serial_port.read(serial_port.in_waiting or 1)
+        buffer += data
 
-        raw_data = serial_port.read(7)
-        distance = raw_data[0] + raw_data[1] * 256
-        strength = raw_data[2] + raw_data[3] * 256
-        return distance, strength
-    return None, None
+        while len(buffer) >= 9:
+            if buffer[0] == 0x59 and buffer[1] == 0x59:
+                # Extract and parse a full frame
+                distance = buffer[2] + (buffer[3] << 8)
+                strength = buffer[4] + (buffer[5] << 8)
+                print(f"Distance: {distance} cm, Strength: {strength}")
+                buffer = buffer[9:]  # Remove this frame from the buffer
+            else:
+                buffer = buffer[1:]  # Skip until next potential frame
 
 def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
     """
@@ -24,7 +25,7 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
     Publishes [distance, strength, timestamp] to shared_data["lidar_data"]
     """
     try:
-        with serial.Serial(port, baudrate, timeout=1) as ser:
+        with serial.Serial(port, baudrate, timeout=0.1) as ser:
             print("[TFmini] Serial opened, reading data...")
             while not shared_data["shutdown"].value:
                 distance, strength = read_tfmini_data(ser)
