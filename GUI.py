@@ -264,13 +264,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
             self.lcd_range.display(distance)
             self.lcd_strength.display(strength)
             print(f"[GUI] LiDAR: {distance} cm | Strength: {strength}")
-    
-    '''def update_lidar_display(self):
-        distance, strength = self.read_tfmini_data()
-        if distance is not None:
-            self.lcd_range.display(distance)
-            self.lcd_strength.display(strength)
-            print(f"[GUI] LiDAR (direct): {distance} cm | Strength: {strength}")'''
 
 
 
