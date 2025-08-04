@@ -2,6 +2,7 @@ from multiprocessing import Process, Manager
 from webcam.blob_tracker import run_tracking
 from motors.controller import run_motor_control  # if used
 from LiDAR.lidar_handler import run_lidar
+from tracking.tracker import tracking  # if used
 from GUI import run_gui
 import numpy as np
 import time
@@ -17,17 +18,19 @@ if __name__ == "__main__":
         shared_data["Range"] = None
         shared_data["Strength"] = None
 
-        shared_data["lidar_array"] = manager.list([0, 0, 0])  # [distance, strength, timestamp]
+        shared_data["lidar_data"] = manager.list([0.0, 0.0, 0.0])  # [distance, strength, timestamp]
         shared_data["pan_tilt"] = None
 
         #p1 = Process(target=run_tracking, args=(shared_data,))
         #p2 = Process(target=run_motor_control, args=(shared_data,))
         p3 = Process(target=run_gui, args=(shared_data,))
         p4 = Process(target=run_lidar, args=(shared_data,))
+        p5 = Process(target=tracking, args=(shared_data))
         #p1.start()
         #p2.start()
         p3.start()
         p4.start()
+        p5.start()
 
         try:
             while not shared_data["shutdown"]:
@@ -40,8 +43,10 @@ if __name__ == "__main__":
         #p2.terminate()
         p3.terminate()
         p4.terminate()
+        p5.terminate()
         #p1.join()
         #p2.join()
         p3.join
         p4.join()
+        p5.join()
         print("Program exited cleanly")

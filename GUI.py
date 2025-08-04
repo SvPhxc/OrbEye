@@ -259,9 +259,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
     def update_lidar_display(self):
         lidar_array = self.shared_data.get("lidar_array", [])
         if len(lidar_array) > 0:
-            latest = lidar_array[-1]  # most recent [distance, strength, timestamp]
-            distance = latest[0]
-            strength = latest[1]
+            distance = self.shared_data["lidar_data"][0]
+            strength = self.shared_data["lidar_data"][1]
             self.lcd_range.display(distance)
             self.lcd_strength.display(strength)
 
