@@ -232,7 +232,7 @@ def run_motor_control(shared_data):
 
 # --- Main Execution Block ---
 
-if __name__ == '__main__':
+'''if __name__ == '__main__':
     with Manager() as manager:
         shared_data = manager.dict()
         shared_data['stepper_degrees'] = 0.0
@@ -262,4 +262,4 @@ if __name__ == '__main__':
             GPIO.output(4, GPIO.HIGH)
             pi.set_servo_pulsewidth(13, 0)
             pi.stop()
-            print("Script finished.")
+            print("Script finished.")'''
