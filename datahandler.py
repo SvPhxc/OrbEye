@@ -1,12 +1,15 @@
 from sgp4.api import Satrec, jday
-from datetime import datetime, timedelta
+from datetime import timedelta
 import numpy as np
+import requests
 
+# SGP4: for orbit propagation
+from sgp4.conveniences import sat_epoch_datetime
 
-#test
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib import cm
+from astropy.coordinates import ITRS, GCRS, EarthLocation
+from astropy.time import Time
+from astropy import units as u
+
 
 def parse_tle_file(file_path):
     """
@@ -55,58 +58,63 @@ def parse_tle_file(file_path):
     return kepler_elements
 
 
-def generate_orbit_xyz(tle_filename='example.tle', duration_minutes=90, step_seconds=60):
-    # Read TLE from file
-    with open(tle_filename, 'r') as f:
-        lines = f.readlines()
-        tle_line1 = lines[1].strip()
-        tle_line2 = lines[2].strip()
-    
+def generate_orbit_xyz(tle_filename=None, tle_lines=None, duration_minutes=90, step_seconds=60):
+    if tle_lines:
+        tle_line1, tle_line2 = tle_lines
+    elif tle_filename:
+        with open(tle_filename, 'r') as f:
+            lines = f.readlines()
+            tle_line1 = lines[1].strip()
+            tle_line2 = lines[2].strip()
+    else:
+        raise ValueError("Either tle_filename or tle_lines must be provided.")
+
     satellite = Satrec.twoline2rv(tle_line1, tle_line2)
+    start_time = sat_epoch_datetime(satellite)
 
-    # Get the TLE epoch
-    jd0 = satellite.jdsatepoch
-    fr0 = satellite.jdsatepochF
-
-    # How many points
     num_steps = int((duration_minutes * 60) / step_seconds)
-
-    # Store XYZ positions
     xyz_positions = np.zeros((num_steps, 3))
 
     for i in range(num_steps):
-        dt_minutes = (i * step_seconds) / 60.0
-        jd = jd0
-        fr = fr0 + dt_minutes / 1440.0  # 1 day = 1440 minutes
+        t = start_time + timedelta(seconds=i * step_seconds)
+        jd, fr = jday(t.year, t.month, t.day, t.hour, t.minute, t.second + t.microsecond * 1e-6)
 
         e, r, _ = satellite.sgp4(jd, fr)
-        xyz_positions[i] = r if e == 0 else [np.nan, np.nan, np.nan]
+        if e == 0:
+            xyz_positions[i] = r
+        else:
+            xyz_positions[i] = [np.nan, np.nan, np.nan]
 
     return xyz_positions
 
+def fetch_tle_by_name(satellite_name):
+    """
+    Fetches TLE data for a satellite from Celestrak using its name.
+    Returns a tuple of (line1, line2)
+    """
+    url = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle"
+    response = requests.get(url)
+    lines = response.text.strip().splitlines()
+
+    for i in range(0, len(lines) - 2, 3):
+        name = lines[i].strip()
+        if satellite_name.lower() in name.lower():
+            return lines[i + 1].strip(), lines[i + 2].strip()
+    
+    raise ValueError(f"Satellite '{satellite_name}' not found.")
 
 
-def plot_orbit_with_earth(xyz):
-    fig = plt.figure(figsize=(8, 8))
-    ax = fig.add_subplot(111, projection='3d')
+def get_sofia_eci(lat=42.7, lon=23.3, alt=0, time_utc=None):
+    """
+    Convert Sofia's ECEF position to ECI (GCRS) at a given time.
+    """
+    location = EarthLocation(lat=lat*u.deg, lon=lon*u.deg, height=alt*u.m)
+    obstime = Time(time_utc or Time.now())
 
-    # Plot orbit path
-    ax.plot(xyz[:, 0], xyz[:, 1], xyz[:, 2], label="Satellite Orbit")
-
-    # Draw Earth
-    earth_radius = 6371  # km
-    u = np.linspace(0, 2 * np.pi, 100)
-    v = np.linspace(0, np.pi, 100)
-    x = earth_radius * np.outer(np.cos(u), np.sin(v))
-    y = earth_radius * np.outer(np.sin(u), np.sin(v))
-    z = earth_radius * np.outer(np.ones(np.size(u)), np.cos(v))
-    ax.plot_surface(x, y, z, cmap=cm.terrain, alpha=0.6)
-
-    # Plot aesthetics
-    ax.set_xlabel('X (km)')
-    ax.set_ylabel('Y (km)')
-    ax.set_zlabel('Z (km)')
-    ax.set_title('Orbit in ECI frame with Earth')
-    ax.set_box_aspect([1, 1, 1])
-    ax.legend()
-    plt.show()
+    itrs = location.get_itrs(obstime=obstime)
+    gcrs = itrs.transform_to(GCRS(obstime=obstime))
+    return np.array([
+    gcrs.cartesian.x.value,
+    gcrs.cartesian.y.value,
+    gcrs.cartesian.z.value
+    ])

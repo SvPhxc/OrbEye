@@ -5,9 +5,14 @@ import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 import time
 
-from datahandler import parse_tle_file, generate_orbit_xyz, plot_orbit_with_earth
+from astropy.time import Time
 
-
+from datahandler import (
+    parse_tle_file,
+    generate_orbit_xyz,
+    fetch_tle_by_name,
+    get_sofia_eci
+)
 
 
 class TrackerWindow(QtWidgets.QMainWindow):
@@ -15,24 +20,23 @@ class TrackerWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("LockedIn Martin")
         self.resize(1000, 600)
-        self.debug_scale = 0.01
+        self.debug_scale = 0.1
+        self.orbit_items = []  # Store all orbit and vector items
 
-        # Central widget and main layout
+        # Central widget and layout
         self.central_widget = QtWidgets.QWidget()
         self.setCentralWidget(self.central_widget)
         main_layout = QtWidgets.QHBoxLayout(self.central_widget)
 
         # === Left: 3D View ===
         self.view = gl.GLViewWidget()
-        self.view.setFocusPolicy(QtCore.Qt.NoFocus)
         self.view.setCameraPosition(distance=20)
         main_layout.addWidget(self.view, stretch=3)
 
-        # Grid
         grid = gl.GLGridItem()
         self.view.addItem(grid)
 
-        # Satellite (drone)
+        # Satellite object
         self.satellite = gl.GLScatterPlotItem(pos=np.array([[0, 0, 0]]), color=(1, 0, 0, 1), size=10)
         self.view.addItem(self.satellite)
 
@@ -40,16 +44,15 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.laser = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], [1, 0, 0]]), color=(0, 1, 0, 1), width=2)
         self.view.addItem(self.laser)
 
-        # Station at origin
+        # SLR Station marker
         md = gl.MeshData.sphere(rows=10, cols=20, radius=0.5)
         self.station = gl.GLMeshItem(meshdata=md, smooth=True, color=(0, 0, 1, 1), shader='shaded')
-        self.station.translate(0, 0, 0)
         self.view.addItem(self.station)
 
-        # Orbit parameters
+        # Orbit animation params
         self.radius = 8
         self.orbit_speed = 0.2
-        self.elevation_deg = 30  # initial elevation angle
+        self.elevation_deg = 30
         self.start_time = time.time()
         self.orbit_enabled = True
 
@@ -58,9 +61,24 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.timer.timeout.connect(self.update_orbit)
         self.timer.start(30)
 
-        # === Right: Control Panel ===
+        # === Right: Controls ===
         controls = QtWidgets.QVBoxLayout()
         main_layout.addLayout(controls, stretch=1)
+
+        # Satellite name input
+        self.sat_name_input = QtWidgets.QLineEdit()
+        self.sat_name_input.setPlaceholderText("ISS (ZARYA)")
+        controls.addWidget(self.sat_name_input)
+
+        # Fetch + Plot button
+        self.btn_fetch_plot = QtWidgets.QPushButton("Fetch & Plot Satellite")
+        self.btn_fetch_plot.clicked.connect(self.fetch_and_plot_satellite)
+        controls.addWidget(self.btn_fetch_plot)
+
+        # Remove orbit button
+        self.btn_remove_orbit = QtWidgets.QPushButton("Remove Orbit")
+        self.btn_remove_orbit.clicked.connect(self.remove_orbit)
+        controls.addWidget(self.btn_remove_orbit)
 
         # Add Sphere Button
         self.btn_add_sphere = QtWidgets.QPushButton("Add Sphere at Drone")
@@ -74,7 +92,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_toggle_orbit.toggled.connect(self.toggle_orbit)
         controls.addWidget(self.btn_toggle_orbit)
 
-        # Elevation Angle Controls
+        # Elevation angle slider
         controls.addWidget(QtWidgets.QLabel("Elevation Angle (°)"))
         self.slider_elevation = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.slider_elevation.setMinimum(0)
@@ -89,74 +107,161 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.lcd_elevation.display(self.elevation_deg)
         controls.addWidget(self.lcd_elevation)
 
+        # Shutdown button
+        self.btn_shutdown = QtWidgets.QPushButton("Shutdown")
+        self.btn_shutdown.clicked.connect(self.Pshutdown)
+        controls.addWidget(self.btn_shutdown)
+
         controls.addStretch()
 
-        self.orbit_xyz = generate_orbit_xyz('example.tle', duration_minutes=90, step_seconds=30)
-        self.plot_orbit_spheres()
-        # or
-        # self.plot_orbit_points_fast()
+        
 
-    def keyPressEvent(self, event):
-        key = event.key()
-        if key == pg.QtCore.Qt.Key_A:
-            self.add_sphere()
+    def fetch_and_plot_satellite(self):
+        name = self.sat_name_input.text().strip()
+        if not name:
+            print("No satellite name entered.")
+            return
+
+        try:
+            # Fetch TLE and parse elements
+            tle_lines = fetch_tle_by_name(name)
+
+            with open("temp.tle", "w") as f:
+                f.write(f"{name}\n{tle_lines[0]}\n{tle_lines[1]}\n")
+
+            elements = parse_tle_file("temp.tle")[0]
+
+            # Propagate orbit
+            self.orbit_xyz = generate_orbit_xyz(tle_lines=tle_lines, duration_minutes=90)
+
+            # Clear old visuals
+            self.remove_orbit()
+
+            # Plot orbit and reference vectors
+            self.plot_orbit_line()
+            self.plot_keplerian_reference(
+                inclination_deg=elements['inclination_deg'],
+                raan_deg=elements['raan_deg'],
+                arg_perigee_deg=elements['arg_perigee_deg'],
+                length=2000.0
+            )
+            print(f"Plotted orbit and frame for '{name}'")
+        except Exception as e:
+            print(f"Error: {e}")
+        # Plot line to Sofia
+        sofia_pos = get_sofia_eci(time_utc=Time.now())  # current ECI position
+        sofia_line = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], sofia_pos * self.debug_scale]),
+                                    color=(0, 1, 1, 1), width=2)
+        self.view.addItem(sofia_line)
+        self.orbit_items.append(sofia_line)
+
+    def remove_orbit(self):
+        for item in self.orbit_items:
+            self.view.removeItem(item)
+        self.orbit_items.clear()
+
+    def plot_orbit_line(self):
+        valid_points = self.orbit_xyz[~np.isnan(self.orbit_xyz).any(axis=1)]
+        scaled_points = valid_points * self.debug_scale
+        orbit_line = gl.GLLinePlotItem(pos=scaled_points, color=(1, 1, 0, 1), width=2, antialias=True, mode='line_strip')
+        self.view.addItem(orbit_line)
+        self.orbit_items.append(orbit_line)
+
+    def plot_keplerian_reference(self, inclination_deg, raan_deg, arg_perigee_deg, length=5.0):
+        inc = np.radians(inclination_deg)
+        raan = np.radians(raan_deg)
+        argp = np.radians(arg_perigee_deg)
+
+        # Z-axis
+        z_axis = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], [0, 0, length]]),
+                                   color=(0, 0, 1, 1), width=2)
+        self.view.addItem(z_axis)
+        self.orbit_items.append(z_axis)
+
+        # X and Y
+        x_axis = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], [length, 0, 0]]),
+                                   color=(1, 0, 0, 1), width=2)
+        y_axis = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], [0, length, 0]]),
+                                   color=(0, 1, 0, 1), width=2)
+        self.view.addItem(x_axis)
+        self.view.addItem(y_axis)
+        self.orbit_items.extend([x_axis, y_axis])
+
+        # RAAN vector
+        raan_vec = np.array([np.cos(raan), np.sin(raan), 0]) * length
+        raan_line = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], raan_vec]),
+                                      color=(1, 1, 0, 1), width=2)
+        self.view.addItem(raan_line)
+        self.orbit_items.append(raan_line)
+
+        # Perigee vector in orbital plane
+        perigee_dir = np.array([np.cos(argp), np.sin(argp), 0])
+        R_raan = np.array([
+            [np.cos(raan), -np.sin(raan), 0],
+            [np.sin(raan),  np.cos(raan), 0],
+            [0, 0, 1]
+        ])
+        R_inc = np.array([
+            [1, 0, 0],
+            [0, np.cos(inc), -np.sin(inc)],
+            [0, np.sin(inc),  np.cos(inc)]
+        ])
+        perigee_world = R_raan @ (R_inc @ perigee_dir) * length
+        perigee_line = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], perigee_world]),
+                                         color=(1, 0, 1, 1), width=2)
+        self.view.addItem(perigee_line)
+        self.orbit_items.append(perigee_line)
+
+    def update_orbit(self):
+        if not self.orbit_enabled:
+            return
+        t = time.time() - self.start_time
+        angle = self.orbit_speed * t
+        elevation_rad = np.radians(self.elevation_deg)
+        x = self.radius * np.cos(angle) * np.cos(elevation_rad)
+        y = self.radius * np.sin(angle) * np.cos(elevation_rad)
+        z = self.radius * np.sin(elevation_rad)
+        self.satellite.setData(pos=np.array([[x, y, z]]))
+        self.laser.setData(pos=np.array([[0, 0, 0], [x, y, z]]))
+
+    def toggle_orbit(self, enabled):
+        self.orbit_enabled = enabled
+        if enabled:
+            self.start_time = time.time()
+
+    def set_elevation_angle(self, value):
+        self.elevation_deg = value
+        self.lcd_elevation.display(value)
 
     def add_sphere(self):
-        md = gl.MeshData.sphere(rows=5, cols=10, radius=0.1)
+        md = gl.MeshData.sphere(rows=5, cols=10, radius=1000)
         sphere = gl.GLMeshItem(meshdata=md, smooth=True, color=(0, 1, 0, 1), shader='shaded')
         x, y, z = self.satellite.pos[0]
         sphere.translate(x, y, z)
         self.view.addItem(sphere)
         print("Sphere added at", (x, y, z))
 
-    def toggle_orbit(self, enabled):
-        self.orbit_enabled = enabled
-        if enabled:
-            self.start_time = time.time()  # reset time
-
-    def set_elevation_angle(self, value):
-        self.elevation_deg = value
-        self.lcd_elevation.display(value)
-
-    def update_orbit(self):
-        if not self.orbit_enabled:
-            return
-
-        # Time and orbit angle
-        t = time.time() - self.start_time
-        angle = self.orbit_speed * t
-
-        # Convert elevation angle to radians
-        elevation_rad = np.radians(self.elevation_deg)
-
-        # Calculate position in spherical coordinates
-        x = self.radius * np.cos(angle) * np.cos(elevation_rad)
-        y = self.radius * np.sin(angle) * np.cos(elevation_rad)
-        z = self.radius * np.sin(elevation_rad)
-
-        # Update satellite position
-        self.satellite.setData(pos=np.array([[x, y, z]]))
-
-        # Update laser vector
-        self.laser.setData(pos=np.array([[0, 0, 0], [x, y, z]]))
-
-    def plot_orbit_spheres(self):
-        # Create a small sphere at each XYZ point
-        for point in self.orbit_xyz:
-            if np.isnan(point).any():
-                print("nothing added")
-                continue  # skip invalid points
-            md = gl.MeshData.sphere(rows=5, cols=10, radius=1)
-            sphere = gl.GLMeshItem(meshdata=md, smooth=True, color=(1, 1, 0, 1), shader='shaded')
-            scaled_point = np.array(point) * self.debug_scale
-            sphere.translate(*scaled_point)
-            self.view.addItem(sphere)  
-            print("something added at", scaled_point)
+    def Pshutdown(self):
+        print("Shutting down GUI...")
+        QtWidgets.QApplication.quit()
+        _shared_data["shutdown"] = True
 
 
 if __name__ == "__main__":
+    '''app = QtWidgets.QApplication(sys.argv)
+    window = TrackerWindow()
+    window.show()
+    sys.exit(app.exec_())'''
+
+
+
+_shared_data = None  # global storage for shared_data
+
+def run_gui(shared):
+    global _shared_data
+    _shared_data = shared
+
     app = QtWidgets.QApplication(sys.argv)
     window = TrackerWindow()
     window.show()
     sys.exit(app.exec_())
-    
