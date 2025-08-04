@@ -4,6 +4,7 @@ from PyQt5 import QtWidgets, QtCore
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 import time
+import serial
 
 from astropy.time import Time
 
@@ -256,14 +257,29 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.elevation_deg = value
         self.lcd_elevation.display(value)
     
-    def update_lidar_display(self):
+    '''def update_lidar_display(self):
         lidar_data = self.shared_data.get("lidar_data")
         if lidar_data is not None:
             distance = lidar_data[0]
             strength = lidar_data[1]
             self.lcd_range.display(distance)
             self.lcd_strength.display(strength)
-            print(f"[GUI] LiDAR: {distance} cm | Strength: {strength}")
+            print(f"[GUI] LiDAR: {distance} cm | Strength: {strength}")'''
+    
+    def update_lidar_display(self):
+        distance, strength = self.read_tfmini_data()
+        if distance is not None:
+            self.lcd_range.display(distance)
+            self.lcd_strength.display(strength)
+            print(f"[GUI] LiDAR (direct): {distance} cm | Strength: {strength}")
+    
+    def poll_lidar_serial(self, port="/dev/serial0", baudrate=115200):
+        try:
+            self.lidar_serial = serial.Serial(port, baudrate, timeout=1)
+            print("[GUI] Connected to LiDAR serial")
+        except serial.SerialException as e:
+            print(f"[GUI] Serial connection error: {e}")
+            self.lidar_serial = None
 
 
 
@@ -298,3 +314,17 @@ def run_gui(shared):
     window = TrackerWindow()
     window.show()
     sys.exit(app.exec_())
+
+def read_tfmini_data(self):
+    if not self.lidar_serial or self.lidar_serial.in_waiting < 9:
+        return None, None
+
+    if self.lidar_serial.read() != b'\x59':
+        return None, None
+    if self.lidar_serial.read() != b'\x59':
+        return None, None
+
+    raw = self.lidar_serial.read(7)
+    distance = raw[0] + raw[1] * 256
+    strength = raw[2] + raw[3] * 256
+    return distance, strength
