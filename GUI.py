@@ -23,6 +23,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.debug_scale = 0.1
         self.orbit_items = []  # Store all orbit and vector items
 
+        global live_data
         live_data = _shared_data 
 
         # Central widget and layout
