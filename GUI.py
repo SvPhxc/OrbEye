@@ -98,10 +98,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
         controls.addWidget(self.btn_toggle_orbit)
 
         # Toggle Background-Scan Button
-        self.btn_background = QtWidgets.QPushButton("Background Scan")
-        self.btn_background.setCheckable(True)
-        self.btn_background.setChecked(True)
-        self.btn_background.toggled.connect(self.background_scan)
+        self.btn_background = QtWidgets.QPushButton("Add Sphere at Drone")
+        self.btn_background.clicked.connect(self.background_scan)
         controls.addWidget(self.btn_background)
 
         # Elevation angle slider

@@ -10,11 +10,15 @@ if __name__ == "__main__":
     # Shared memory setup
     lidar_data = Array('d', 3)  # [distance, strength, timestamp]
     shutdown_flag = Value('b', False)  # Boolean flag
+    scan_trigger = Value('b', False)  # GUI sets this to True to trigger scan
 
     # Optional shared values for future expansion
     direction = Value('i', -1)
     target = Value('i', -1)
     commanding = Value('i', -1)
+    stepper_degrees = Value('d', 0.0)  # For stepper motor position
+    cumulative_error = Value('d', 0.0)  # For PID control
+    servo_degrees = Value('d', 90.0)  # For servo position
 
     # Build shared_data dictionary
     shared_data = {
@@ -22,7 +26,11 @@ if __name__ == "__main__":
         "shutdown": shutdown_flag,
         "direction": direction,
         "target": target,
-        "commanding": commanding
+        "commanding": commanding,
+        "scan_trigger": scan_trigger,  # GUI sets this to True to trigger scan
+        "stepper_degrees": stepper_degrees,
+        "cumulative_error": cumulative_error,  # For PID
+        "servo_degrees": servo_degrees  # For servo position
     }
 
     # Start processes
