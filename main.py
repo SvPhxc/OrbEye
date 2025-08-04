@@ -25,12 +25,12 @@ if __name__ == "__main__":
         #p2 = Process(target=run_motor_control, args=(shared_data,))
         p3 = Process(target=run_gui, args=(shared_data,))
         p4 = Process(target=run_lidar, args=(shared_data,))
-        p5 = Process(target=tracking, args=(shared_data))
+        #p5 = Process(target=tracking, args=(shared_data))
         #p1.start()
         #p2.start()
         p3.start()
         p4.start()
-        p5.start()
+        #p5.start()
 
         try:
             while not shared_data["shutdown"]:
@@ -43,10 +43,10 @@ if __name__ == "__main__":
         #p2.terminate()
         p3.terminate()
         p4.terminate()
-        p5.terminate()
+        #p5.terminate()
         #p1.join()
         #p2.join()
         p3.join
         p4.join()
-        p5.join()
+        #p5.join()
         print("Program exited cleanly")
