@@ -277,7 +277,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
     
     def poll_lidar_serial(self, port="/dev/serial0", baudrate=115200):
         try:
-            self.lidar_serial = serial.Serial(port, baudrate, timeout=1)
+            self.lidar_serial = serial.Serial(port, baudrate, timeout=0.01)
             print("[GUI] Connected to LiDAR serial")
         except serial.SerialException as e:
             print(f"[GUI] Serial connection error: {e}")
