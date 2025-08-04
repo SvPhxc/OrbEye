@@ -133,7 +133,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         self.lidar_timer = QtCore.QTimer()
         self.lidar_timer.timeout.connect(self.update_lidar_display)
-        self.lidar_timer.start(200)  
+        self.lidar_timer.start(50)  
 
         controls.addStretch()
 
@@ -257,12 +257,15 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.lcd_elevation.display(value)
     
     def update_lidar_display(self):
-        if "lidar_data" in self.shared_data:
-            distance = self.shared_data["lidar_data"][0]
-            strength = self.shared_data["lidar_data"][1]
-            print(f"LiDAR Data: Distance={distance}, Strength={strength}")
+        lidar_data = self.shared_data.get("lidar_data")
+        if lidar_data is not None:
+            distance = lidar_data[0]
+            strength = lidar_data[1]
             self.lcd_range.display(distance)
             self.lcd_strength.display(strength)
+            print(f"[GUI] LiDAR: {distance} cm | Strength: {strength}")
+
+
 
     def add_sphere(self):
         md = gl.MeshData.sphere(rows=5, cols=10, radius=1000)
@@ -275,8 +278,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
     def Pshutdown(self):
         print("Shutting down GUI...")
         QtWidgets.QApplication.quit()
-        _shared_data["shutdown"] = True
-
+        self.shared_data["shutdown"].value = True
 
 if __name__ == "__main__":
     '''app = QtWidgets.QApplication(sys.argv)

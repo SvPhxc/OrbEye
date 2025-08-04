@@ -21,18 +21,19 @@ def read_tfmini_data(serial_port):
 def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
     """
     TFmini process for Raspberry Pi UART.
-    Publishes np.array([distance, strength, timestamp]) to shared_data["lidar_array"]
+    Publishes [distance, strength, timestamp] to shared_data["lidar_data"]
     """
     try:
         with serial.Serial(port, baudrate, timeout=1) as ser:
             print("[TFmini] Serial opened, reading data...")
-            while not shared_data.get("shutdown", False):
+            while not shared_data["shutdown"].value:
                 distance, strength = read_tfmini_data(ser)
                 if distance is not None and strength is not None:
-                    shared_data["lidar_data"][0] = distance
-                    shared_data["lidar_data"][1] = strength
-                    shared_data["lidar_data"][2] = time.time()
-                    print("Wrote to shared_data:", list(shared_data["lidar_data"]))
+                    lidar_data = shared_data["lidar_data"]
+                    lidar_data[0] = distance
+                    lidar_data[1] = strength
+                    lidar_data[2] = time.time()
+                    print("Wrote to shared_data:", list(lidar_data))
                 time.sleep(0.01)
     except serial.SerialException as e:
         print(f"[TFmini] Serial error: {e}")
