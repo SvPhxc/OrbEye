@@ -7,6 +7,8 @@ import time
 
 from astropy.time import Time
 
+from motors.motor_controller import *
+
 from datahandler import (
     parse_tle_file,
     generate_orbit_xyz,
@@ -94,6 +96,13 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_toggle_orbit.setChecked(True)
         self.btn_toggle_orbit.toggled.connect(self.toggle_orbit)
         controls.addWidget(self.btn_toggle_orbit)
+
+        # Toggle Background-Scan Button
+        self.btn_background = QtWidgets.QPushButton("Background Scan")
+        self.btn_background.setCheckable(True)
+        self.btn_background.setChecked(True)
+        self.btn_background.toggled.connect(self.background_scan)
+        controls.addWidget(self.btn_background)
 
         # Elevation angle slider
         controls.addWidget(QtWidgets.QLabel("Elevation Angle (°)"))
@@ -265,7 +274,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
             self.lcd_strength.display(strength)
             #print(f"[GUI] LiDAR: {distance} cm | Strength: {strength}")
 
-
+    def background_scan(self, enabled):
+        if enabled:
+            print("[GUI] Triggering background scan")
+            self.shared_data["scan_trigger"] = True
 
     def add_sphere(self):
         md = gl.MeshData.sphere(rows=5, cols=10, radius=1000)
