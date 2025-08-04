@@ -201,10 +201,10 @@ def run_motor_control(shared_data):
     from multiprocessing import Queue
     movement_queue = Queue()
 
-    shared_data['stepper_degrees'] = 0.0
+    '''shared_data['stepper_degrees'] = 0.0
     shared_data['cumulative_error'] = 0.0
     shared_data['servo_degrees'] = 90.0
-    shared_data['scan_trigger'] = False  # GUI sets this to True to trigger scan
+    shared_data['scan_trigger'] = False  # GUI sets this to True to trigger scan'''
 
     stepper_process = Process(target=stepper_worker, args=(movement_queue, shared_data))
     stepper_process.start()
