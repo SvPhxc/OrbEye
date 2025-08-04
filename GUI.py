@@ -23,8 +23,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.debug_scale = 0.1
         self.orbit_items = []  # Store all orbit and vector items
 
-        global live_data
-        live_data = _shared_data 
+        global _shared_data
+        self.shared_data = _shared_data
 
         # Central widget and layout
         self.central_widget = QtWidgets.QWidget()
@@ -112,18 +112,18 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.lcd_elevation.display(self.elevation_deg)
         controls.addWidget(self.lcd_elevation)
 
-        # Range Display
-        controls.addWidget(QtWidgets.QLabel("Range Data from Lidar:"))
+        # LiDAR range
+        controls.addWidget(QtWidgets.QLabel("LiDAR Range (cm)"))
         self.lcd_range = QtWidgets.QLCDNumber()
         self.lcd_range.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
-        self.lcd_range.setDigitCount(6)
+        self.lcd_range.setDigitCount(5)
         controls.addWidget(self.lcd_range)
 
-        # Strength Display
-        controls.addWidget(QtWidgets.QLabel("Strength Data from Lidar:"))
+        # LiDAR strength
+        controls.addWidget(QtWidgets.QLabel("LiDAR Strength"))
         self.lcd_strength = QtWidgets.QLCDNumber()
         self.lcd_strength.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
-        self.lcd_strength.setDigitCount(6)
+        self.lcd_strength.setDigitCount(5)
         controls.addWidget(self.lcd_strength)
 
         # Shutdown button
@@ -257,16 +257,13 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.lcd_elevation.display(value)
     
     def update_lidar_display(self):
-        try:
-            lidar_log = self.live_data["lidar_array"]
-            if len(lidar_log) > 0:
-                latest = lidar_log[-1]
-                range_val = latest[1]
-                strength_val = latest[2]
-                self.lcd_strength.display(strength_val)
-                self.lcd_range.display(range_val)
-        except Exception as e:
-            print("Error reading lidar data:", e)
+        lidar_array = self.shared_data.get("lidar_array", [])
+        if len(lidar_array) > 0:
+            latest = lidar_array[-1]  # most recent [distance, strength, timestamp]
+            distance = latest[0]
+            strength = latest[1]
+            self.lcd_range.display(distance)
+            self.lcd_strength.display(strength)
 
     def add_sphere(self):
         md = gl.MeshData.sphere(rows=5, cols=10, radius=1000)
@@ -290,7 +287,7 @@ if __name__ == "__main__":
 
 
 
-_shared_data = None  # global storage for shared_data
+_shared_data = None  # global
 
 def run_gui(shared):
     global _shared_data
