@@ -1,4 +1,5 @@
 import serial
+import numpy as np
 import time
 
 def read_tfmini_data(serial_port):
@@ -6,11 +7,9 @@ def read_tfmini_data(serial_port):
     Reads one data frame (9 bytes) from TFmini and extracts range and strength.
     """
     if serial_port.in_waiting >= 9:
-        first_byte = serial_port.read()
-        if first_byte != b'\x59':
+        if serial_port.read() != b'\x59':
             return None, None
-        second_byte = serial_port.read()
-        if second_byte != b'\x59':
+        if serial_port.read() != b'\x59':
             return None, None
 
         raw_data = serial_port.read(7)
@@ -19,18 +18,19 @@ def read_tfmini_data(serial_port):
         return distance, strength
     return None, None
 
-def tfmini_process(shared_data, port="/dev/serial0", baudrate=115200):
+def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
     """
-    TFmini worker process for Raspberry Pi GPIO UART.
-    Updates shared_data with Range and Strength.
+    TFmini process for Raspberry Pi UART.
+    Publishes np.array([distance, strength, timestamp]) to shared_data["lidar_array"]
     """
     try:
         with serial.Serial(port, baudrate, timeout=1) as ser:
             print("[TFmini] Serial opened, reading data...")
-            while True:
+            while not shared_data.get("shutdown", False):
                 distance, strength = read_tfmini_data(ser)
                 if distance is not None and strength is not None:
-                    shared_data["Range"] = distance
-                    shared_data["Strength"] = strength
+                    timestamp = time.time()
+                    shared_data["lidar_array"] = np.array([distance, strength, timestamp])
+                time.sleep(0.01)
     except serial.SerialException as e:
         print(f"[TFmini] Serial error: {e}")
