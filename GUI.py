@@ -130,6 +130,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_shutdown.clicked.connect(self.Pshutdown)
         controls.addWidget(self.btn_shutdown)
 
+        self.lidar_timer = QtCore.QTimer()
+        self.lidar_timer.timeout.connect(self.update_lidar_display)
+        self.lidar_timer.start(100)  
+
         controls.addStretch()
 
         
