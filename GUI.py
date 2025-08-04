@@ -261,6 +261,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         if len(lidar_array) > 0:
             distance = self.shared_data["lidar_data"][0]
             strength = self.shared_data["lidar_data"][1]
+            print(f"1LiDAR Data: Distance={distance}, Strength={strength}")
             self.lcd_range.display(distance)
             self.lcd_strength.display(strength)
 

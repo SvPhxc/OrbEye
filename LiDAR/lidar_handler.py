@@ -29,6 +29,7 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
             while not shared_data.get("shutdown", False):
                 distance, strength = read_tfmini_data(ser)
                 if distance is not None and strength is not None:
+                    print(f"1[TFmini] Distance: {distance}, Strength: {strength}")
                     shared_data["lidar_data"][0] = distance
                     shared_data["lidar_data"][1] = strength
                     shared_data["lidar_data"][2] = time.time()
