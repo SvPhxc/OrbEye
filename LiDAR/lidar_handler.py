@@ -31,7 +31,7 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
                 if distance is not None and strength is not None:
                     shared_data["lidar_data"][0] = distance
                     shared_data["lidar_data"][1] = strength
-                    shared_data["lidar_data"][2] = time.timestamp()
+                    shared_data["lidar_data"][2] = time.time()
                     print("Wrote to shared_data:", list(shared_data["lidar_data"]))
                 time.sleep(0.01)
     except serial.SerialException as e:
