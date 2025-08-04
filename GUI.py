@@ -263,7 +263,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
             strength = lidar_data[1]
             self.lcd_range.display(distance)
             self.lcd_strength.display(strength)
-            print(f"[GUI] LiDAR: {distance} cm | Strength: {strength}")
+            #print(f"[GUI] LiDAR: {distance} cm | Strength: {strength}")
 
 
 
