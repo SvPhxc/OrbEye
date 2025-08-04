@@ -281,6 +281,20 @@ class TrackerWindow(QtWidgets.QMainWindow):
             print(f"[GUI] Serial connection error: {e}")
             self.lidar_serial = None
 
+    def read_tfmini_data(self):
+        if not self.lidar_serial or self.lidar_serial.in_waiting < 9:
+            return None, None
+
+        if self.lidar_serial.read() != b'\x59':
+            return None, None
+        if self.lidar_serial.read() != b'\x59':
+            return None, None
+
+        raw = self.lidar_serial.read(7)
+        distance = raw[0] + raw[1] * 256
+        strength = raw[2] + raw[3] * 256
+        return distance, strength
+
 
 
     def add_sphere(self):
@@ -315,16 +329,3 @@ def run_gui(shared):
     window.show()
     sys.exit(app.exec_())
 
-def read_tfmini_data(self):
-    if not self.lidar_serial or self.lidar_serial.in_waiting < 9:
-        return None, None
-
-    if self.lidar_serial.read() != b'\x59':
-        return None, None
-    if self.lidar_serial.read() != b'\x59':
-        return None, None
-
-    raw = self.lidar_serial.read(7)
-    distance = raw[0] + raw[1] * 256
-    strength = raw[2] + raw[3] * 256
-    return distance, strength
