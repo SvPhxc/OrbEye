@@ -318,6 +318,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
             strength = lidar_data[1]
             self.lcd_range.display(distance)
             self.lcd_strength.display(strength)
+            print(self.shared_data["pan_left"].value)
             #print(f"[GUI] LiDAR: {distance} cm | Strength: {strength}")
 
     def background_scan(self):
