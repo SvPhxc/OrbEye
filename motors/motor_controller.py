@@ -217,22 +217,23 @@ def run_motor_control(shared_data, movement_queue):
                 print("[MotorControl] Trigger received: starting scan")
                 concentric_ring_search(movement_queue, shared_data)
                 shared_data['scan_trigger'].value = False
+            
+            if shared_data['tilt_up'].value:
+                move('up', 2.0, None, movement_queue, shared_data)
+                shared_data['tilt_up'].value = False
+
+            if shared_data['tilt_down'].value:
+                move('down', 2.0, None, movement_queue, shared_data)
+                shared_data['tilt_down'].value = False
+
+            if shared_data['pan_left'].value:
+                move('left', 2.0, STEPPER_DELAY, movement_queue, shared_data)
+                shared_data['pan_left'].value = False
+
+            if shared_data['pan_right'].value:
+                move('right', 2.0, STEPPER_DELAY, movement_queue, shared_data)
+                shared_data['pan_right'].value = False
             sleep(0.05)
-        if shared_data['tilt_up'].value:
-            move('up', 2.0, None, movement_queue, shared_data)
-            shared_data['tilt_up'].value = False
-
-        if shared_data['tilt_down'].value:
-            move('down', 2.0, None, movement_queue, shared_data)
-            shared_data['tilt_down'].value = False
-
-        if shared_data['pan_left'].value:
-            move('left', 2.0, STEPPER_DELAY, movement_queue, shared_data)
-            shared_data['pan_left'].value = False
-
-        if shared_data['pan_right'].value:
-            move('right', 2.0, STEPPER_DELAY, movement_queue, shared_data)
-            shared_data['pan_right'].value = False
     finally:
         movement_queue.put(None)
         stepper_process.join()
