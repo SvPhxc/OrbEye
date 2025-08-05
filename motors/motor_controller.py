@@ -219,19 +219,19 @@ def run_motor_control(shared_data, movement_queue):
                 shared_data['scan_trigger'].value = False
             
             if shared_data['tilt_up'].value:
-                move('up', 2.0, None, movement_queue, shared_data)
+                move('up', 5.0, None, movement_queue, shared_data)
                 shared_data['tilt_up'].value = False
 
             if shared_data['tilt_down'].value:
-                move('down', 2.0, None, movement_queue, shared_data)
+                move('down', 5.0, None, movement_queue, shared_data)
                 shared_data['tilt_down'].value = False
 
             if shared_data['pan_left'].value:
-                move('left', 2.0, STEPPER_DELAY, movement_queue, shared_data)
+                move('left', 5., STEPPER_DELAY, movement_queue, shared_data)
                 shared_data['pan_left'].value = False
 
             if shared_data['pan_right'].value:
-                move('right', 2.0, STEPPER_DELAY, movement_queue, shared_data)
+                move('right', 5., STEPPER_DELAY, movement_queue, shared_data)
                 shared_data['pan_right'].value = False
             sleep(0.05)
     finally:
