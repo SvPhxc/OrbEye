@@ -61,22 +61,15 @@ def stepper_worker(movement_queue, shared_data):
 
 
 def smooth_servo_move(target_degrees, shared_data, step_delay=0.01, step_size=1):
-    """
-    Moves the servo motor to a target position in small, smooth increments.
-    (This function is from your provided code and is NOT modified)
-    """
-    # NOTE: Your pulse width calculation is non-standard but we will use it as-is.
-    # Standard is 500-2500 for 0-180 deg. Yours is 500-2500 for 0-22.2 deg.
-    # We will use it as you wrote it.
     current_degrees = shared_data['servo_degrees'].value
     if target_degrees > current_degrees:
-        for degrees in range(current_degrees, target_degrees + 1, step_size):
+        for degrees in range(int(round(current_degrees)), int(round(target_degrees)) + 1, step_size):
             pulse_width = 500 + (degrees / 0.09)
             pi.set_servo_pulsewidth(13, pulse_width)
             shared_data['servo_degrees'].value = degrees
             sleep(step_delay)
     else:
-        for degrees in range(current_degrees, target_degrees - 1, -step_size):
+        for degrees in range(int(round(current_degrees)), int(round(target_degrees)) - 1, -step_size):
             pulse_width = 500 + (degrees / 0.09)
             pi.set_servo_pulsewidth(13, pulse_width)
             shared_data['servo_degrees'].value = degrees
