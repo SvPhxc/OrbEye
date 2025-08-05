@@ -5,19 +5,6 @@ import RPi.GPIO as GPIO
 from time import sleep, monotonic
 import math
 
-# --- GPIO and PWM Initialization (Your code) ---
-GPIO.setwarnings(False)
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(4, GPIO.OUT)
-GPIO.setup(3, GPIO.OUT)
-GPIO.setup(2, GPIO.OUT)
-GPIO.setup(6, GPIO.OUT)
-GPIO.output(6, GPIO.HIGH)
-GPIO.output(4, GPIO.LOW)
-pi = pigpio.pi()
-pi.set_mode(13, pigpio.OUTPUT)
-pi.set_PWM_frequency(13, 50)
-
 
 # --- Your Provided Worker and Move Functions (Unchanged) ---
 
@@ -190,6 +177,16 @@ def concentric_ring_search(movement_queue, shared_data):
     return False
 
 
+def initialize_gpio():
+    GPIO.setwarnings(False)
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(4, GPIO.OUT)
+    GPIO.setup(3, GPIO.OUT)
+    GPIO.setup(2, GPIO.OUT)
+    GPIO.setup(6, GPIO.OUT)
+    GPIO.output(6, GPIO.HIGH)
+    GPIO.output(4, GPIO.LOW)
+
 def run_motor_control(shared_data, movement_queue):
     print("[MotorControl] Starting...")
 
@@ -197,6 +194,8 @@ def run_motor_control(shared_data, movement_queue):
     shared_data['cumulative_error'].value = 0.0
     shared_data['servo_degrees'].value = 90.0
     shared_data['scan_trigger'].value = False
+
+    initialize_gpio()
 
     stepper_process = Process(target=stepper_worker, args=(movement_queue, shared_data))
     stepper_process.start()
@@ -218,6 +217,7 @@ def run_motor_control(shared_data, movement_queue):
         GPIO.output(4, GPIO.HIGH)
         pi.set_servo_pulsewidth(13, 0)
         pi.stop()
+        GPIO.cleanup()  
         print("[MotorControl] Shut down cleanly")
 
 
