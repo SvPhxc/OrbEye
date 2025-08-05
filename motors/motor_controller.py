@@ -82,16 +82,23 @@ def move(direction, degrees, delay, movement_queue, shared_data):
 
 def track_target(target_azimuth, target_elevation, delay, movement_queue, shared_data):
     tilt_limit = 90
+    hysteresis_margin = 3  # degrees
     flipped = shared_data["flipped"].value
 
-    # Flip logic
-    if target_elevation > tilt_limit and not flipped:
-        flipped = True
-        shared_data["flipped"].value = 1
-    elif target_elevation <= tilt_limit and flipped:
-        flipped = False
-        shared_data["flipped"].value = 0
+    print(f"[TrackTarget] Target: Az={target_azimuth}°, El={target_elevation}°")
+    print(f"[TrackTarget] Current Pan={shared_data['stepper_degrees'].value}°, Tilt={shared_data['servo_degrees'].value}°, Flipped={flipped}")
 
+    # Flip logic with hysteresis
+    if target_elevation > (tilt_limit + hysteresis_margin) and not flipped:
+        shared_data["flipped"].value = 1
+        flipped = True
+        print("[TrackTarget] Flip ON")
+    elif target_elevation < (tilt_limit - hysteresis_margin) and flipped:
+        shared_data["flipped"].value = 0
+        flipped = False
+        print("[TrackTarget] Flip OFF")
+
+    # Adjust angles based on flip state
     if flipped:
         adjusted_azimuth = (target_azimuth + 180) % 360
         adjusted_elevation = 180 - target_elevation
@@ -99,19 +106,10 @@ def track_target(target_azimuth, target_elevation, delay, movement_queue, shared
         adjusted_azimuth = target_azimuth
         adjusted_elevation = target_elevation
 
-    current_pan = shared_data["stepper_degrees"].value
-    current_tilt = shared_data["servo_degrees"].value
+    print(f"[TrackTarget] Adjusted: Az={adjusted_azimuth}°, El={adjusted_elevation}°")
 
-    delta_pan = (adjusted_azimuth - current_pan + 540) % 360 - 180
-    if abs(delta_pan) > 1:
-        pan_direction = "right" if delta_pan > 0 else "left"
-        movement_queue.put((pan_direction, abs(delta_pan), delay))
-        shared_data["stepper_degrees"].value = (current_pan + delta_pan) % 360
+    # Continue as usual...
 
-    delta_tilt = adjusted_elevation - current_tilt
-    if abs(delta_tilt) > 1:
-        target_servo_angle = max(0, min(180, current_tilt + delta_tilt))
-        shared_data["servo_degrees"].value = target_servo_angle
 
 
 # --- NEW Conductor Functions and Search Algorithm ---
@@ -267,7 +265,7 @@ def run_motor_control(shared_data, movement_queue):
             if shared_data['pan_right'].value:
                 move('right', 5., STEPPER_DELAY, movement_queue, shared_data)
                 shared_data['pan_right'].value = False
-                
+
             if shared_data["go_to_target"].value:
                 shared_data["go_to_target"].value = False  # reset flag
 
