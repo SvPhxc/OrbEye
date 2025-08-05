@@ -185,10 +185,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
         # Add to main control panel
         controls.addLayout(dpad_layout)
 
-        btn_up.clicked.connect(lambda: self.shared_data['tilt_up'].__setattr__('value', True))
-        btn_down.clicked.connect(lambda: self.shared_data['tilt_down'].__setattr__('value', True))
-        btn_left.clicked.connect(lambda: self.shared_data['pan_left'].__setattr__('value', True))
-        btn_right.clicked.connect(lambda: self.shared_data['pan_right'].__setattr__('value', True))
+        btn_up.clicked.connect(lambda: self.shared_data['tilt_up'].value.__setattr__('value', True))
+        btn_down.clicked.connect(lambda: self.shared_data['tilt_down'].value.__setattr__('value', True))
+        btn_left.clicked.connect(lambda: self.shared_data['pan_left'].value.__setattr__('value', True))
+        btn_right.clicked.connect(lambda: self.shared_data['pan_right'].value.__setattr__('value', True))
         
         controls.addStretch()
 
