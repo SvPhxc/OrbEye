@@ -5,47 +5,7 @@ import RPi.GPIO as GPIO
 from time import sleep, monotonic
 import math
 
-
-# --- Your Provided Worker and Move Functions (Unchanged) ---
-
-def stepper_worker(movement_queue, shared_data):
-    """
-    Process function that listens for commands on a queue and controls the stepper motor.
-    (This function is from your provided code and is NOT modified)
-    """
-    while True:
-        command = movement_queue.get()
-        if command is None:
-            break
-        direction, degrees, delay = command
-        ideal_microsteps = degrees / 0.05625
-        total_microsteps_to_consider = ideal_microsteps + shared_data['cumulative_error'].value
-        actual_microsteps_to_take = round(total_microsteps_to_consider)
-        shared_data['cumulative_error'].value = total_microsteps_to_consider - actual_microsteps_to_take
-        
-        # NOTE: Your original code had a bug here. 'right' and 'left' were swapped.
-        # Direction pin HIGH is typically one direction, LOW is the other.
-        if direction == 'right':
-            GPIO.output(3, GPIO.LOW) # Set direction (adjust if your motor is backwards)
-        else: # 'left'
-            GPIO.output(3, GPIO.HIGH)
-
-        for _ in range(actual_microsteps_to_take):
-            # NOTE: Your original code had a bug here. Pin 2 is step, Pin 3 is dir.
-            GPIO.output(2, GPIO.HIGH)
-            sleep(delay)
-            GPIO.output(2, GPIO.LOW)
-            sleep(delay)
-        
-        actual_degrees_this_move = actual_microsteps_to_take * 0.05625
-        
-        # This update is atomic because of the Manager
-        current_pos = shared_data['stepper_degrees'].value
-        if direction == 'left':
-            shared_data['stepper_degrees'].value = (current_pos - actual_degrees_this_move) % 360
-        else:
-            shared_data['stepper_degrees'].value = (current_pos + actual_degrees_this_move) % 360
-
+# --- Your Provided Worker and Move Functions (Unchanged for servo) ---
 
 def smooth_servo_move(target_degrees, shared_data, step_delay=0.01, step_size=1):
     current_degrees = shared_data['servo_degrees'].value
@@ -62,136 +22,101 @@ def smooth_servo_move(target_degrees, shared_data, step_delay=0.01, step_size=1)
             shared_data['servo_degrees'].value = degrees
             sleep(step_delay)
 
+def set_servo_angle_absolute(target_angle, shared_data):
+    """Uses your existing move function to set an absolute servo angle."""
+    smooth_servo_move(target_angle, shared_data)
 
-def move(direction, degrees, delay, movement_queue, shared_data):
-    """
-    A unified function to command either the stepper or the servo motor.
-    (This function is from your provided code and is slightly adapted for clarity)
-    """
-    if direction in ['left', 'right']:
-        command = (direction, degrees, delay)
-        movement_queue.put(command)
-    elif direction in ['up', 'down']:
-        target_degrees = shared_data['servo_degrees'].value
-        if direction == 'up':
-            target_degrees += degrees
-        else:
-            target_degrees -= degrees
-        target_degrees = max(0, min(180, target_degrees))
-        smooth_servo_move(target_degrees, shared_data)
 
 # --- NEW Conductor Functions and Search Algorithm ---
 
 # --- Search Parameters ---
-SEARCH_FREQUENCY_HZ = 1000.0
-LOOP_DELAY_S = 1.0 / SEARCH_FREQUENCY_HZ
 CENTER_TILT_ANGLE = 90.0
 MAX_TILT_RADIUS = 45.0
-TILT_STEP_DEGREES = 1.5
-PAN_STEP_DEGREES = 1.5
-STEPPER_DELAY = 0.00001
+TILT_STEP_DEGREES = 1.0
+PAN_DEGREES_PER_SECOND = 45.0  # Base speed for panning
+STEPPER_PULSE_PIN = 2 # The GPIO pin for the stepper pulses
+STEPPER_DIR_PIN = 3   # The GPIO pin for the stepper direction
+MICROSTEPS_PER_REVOLUTION = 3200 # 1.8 degree motor with 1/16 microstepping
 
 def read_lidar():
     """Placeholder for reading the TF-MINI S sensor."""
     return (999, 0) # (distance, strength)
 
-def set_servo_angle_absolute(target_angle, shared_data):
-    """Uses your existing move function to set an absolute servo angle."""
-    current_angle = shared_data['servo_degrees'].value
-    delta = target_angle - current_angle
-    
-    if delta > 0:
-        # The 'move' function for servo is blocking, which is what we want here.
-        smooth_servo_move(target_angle, shared_data)
-    elif delta < 0:
-        smooth_servo_move(target_angle, shared_data)
+def degrees_to_hz(degrees_per_second):
+    """Converts rotational speed in degrees/sec to frequency in Hz for the stepper."""
+    return (degrees_per_second / 360) * MICROSTEPS_PER_REVOLUTION
 
-def set_pan_angle_and_wait(target_angle, movement_queue, shared_data):
-    """
-    Commands the stepper to an absolute angle and WAITS for it to arrive
-    by polling the shared data variable. This is the key to synchronization.
-    """
-    current_angle = shared_data['stepper_degrees'].value
-    delta = (target_angle - current_angle + 180) % 360 - 180
-    
-    if abs(delta) < 0.1: # Don't move if we are already there
-        return
-
-    if delta > 0:
-        direction = 'right'
-    else:
-        direction = 'left'
-    
-    # Send the non-blocking command using your 'move' function
-    move(direction, abs(delta), STEPPER_DELAY, movement_queue, shared_data)
-    
-    # Poll the shared data until the stepper process confirms the move is done
-    # This loop makes the async function behave like a sync one.
-    while abs(shared_data['stepper_degrees'].value - target_angle) > 1.0: # Tolerance of 1 degree
-        sleep(0.005)
-
-
-def concentric_ring_search(movement_queue, shared_data):
-    """The main search algorithm, using only your provided functions."""
-    print("\n--- STARTING CONCENTRIC RING SEARCH ---")
-    pan_direction = 1  # 1 for CW, -1 for CCW
+def concentric_ring_search_smooth(shared_data):
+    """The main search algorithm, modified for smooth sweeping motion."""
+    print("\n--- STARTING SMOOTH CONCENTRIC RING SEARCH ---")
+    pan_direction_is_cw = True  # True for CW, False for CCW
 
     for radius in range(int(TILT_STEP_DEGREES), int(MAX_TILT_RADIUS) + 1, int(TILT_STEP_DEGREES)):
         target_tilt = CENTER_TILT_ANGLE - radius
         set_servo_angle_absolute(target_tilt, shared_data)
         print(f"\n--- Scanning new ring at Tilt: {shared_data['servo_degrees'].value:.1f}° ---")
 
-        tilt_rad_for_scaling = math.radians(target_tilt)
-        scaling_factor = abs(math.sin(tilt_rad_for_scaling))
-        pan_range_degrees = 360.0 * scaling_factor
-        num_pan_steps = int(pan_range_degrees / PAN_STEP_DEGREES)
+        # Calculate the sweep range and duration for this ring
+        tilt_rad_for_scaling = math.radians(90 - target_tilt) # Angle from the pole
+        scaling_factor = abs(math.cos(tilt_rad_for_scaling))
+        pan_range_degrees = 360.0
         
-        if num_pan_steps < 1: continue
+        # Adjust pan speed based on the tilt angle to maintain consistent surface speed
+        # Slower pan speed when tilted further away from the center
+        current_pan_speed_dps = PAN_DEGREES_PER_SECOND * scaling_factor
+        if current_pan_speed_dps < 1.0: # Prevent extremely slow speeds
+            current_pan_speed_dps = 1.0
 
-        start_pan = shared_data['stepper_degrees'].value
+        sweep_duration_seconds = pan_range_degrees / current_pan_speed_dps
+        scan_frequency_hz = degrees_to_hz(current_pan_speed_dps)
+
+        # Set the panning direction
+        if pan_direction_is_cw:
+            GPIO.output(STEPPER_DIR_PIN, GPIO.LOW) # Adjust if your motor is backwards
+        else:
+            GPIO.output(STEPPER_DIR_PIN, GPIO.HIGH)
+
+        print(f"Sweep Duration: {sweep_duration_seconds:.2f}s, Pan Speed: {current_pan_speed_dps:.1f}°/s")
         
-        for i in range(num_pan_steps + 1):
-            loop_start_time = monotonic()
-            
-            step_angle = i * PAN_STEP_DEGREES
-            target_pan = (start_pan + step_angle * pan_direction)
-            
-            set_pan_angle_and_wait(target_pan, movement_queue, shared_data)
+        # Start hardware PWM for smooth motion
+        pi.hardware_PWM(STEPPER_PULSE_PIN, int(scan_frequency_hz), 500000) # 50% duty cycle
 
+        scan_start_time = monotonic()
+        while (monotonic() - scan_start_time) < sweep_duration_seconds:
             distance, strength = read_lidar()
-            print(f"\rSearching... Pan: {shared_data['stepper_degrees'].value:5.1f}°, Tilt: {shared_data['servo_degrees'].value:5.1f}°", end="")
-            
+            # We no longer have a precise real-time degree, but this is inherent to sweep-scanning
+            print(f"\rSearching... Tilt: {shared_data['servo_degrees'].value:5.1f}° (Sweeping)", end="")
+
             if strength > 200 and distance < 50:
+                pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0) # Stop the motor
                 print(f"\n\nTARGET ACQUIRED!")
                 return True
             
-            time_elapsed = monotonic() - loop_start_time
-            sleep_duration = LOOP_DELAY_S - time_elapsed
-            if sleep_duration > 0:
-                sleep(sleep_duration)
+            sleep(0.01) # Poll the sensor at 100Hz
+
+        # Stop the motor at the end of the sweep
+        pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
         
-        pan_direction *= -1
+        # Reverse direction for the next ring
+        pan_direction_is_cw = not pan_direction_is_cw
         print()
 
     print("\n\nSEARCH FAILED: Target not found.")
     return False
 
-
 def initialize_gpio():
     GPIO.setwarnings(False)
     GPIO.setmode(GPIO.BCM)
-    GPIO.setup(4, GPIO.OUT)
+    GPIO.setup(4, GPIO.OUT) # Enable pin
     GPIO.setup(3, GPIO.OUT)
-    GPIO.setup(2, GPIO.OUT)
+    GPIO.setup(19, GPIO.OUT)
     GPIO.setup(6, GPIO.OUT)
     GPIO.output(6, GPIO.HIGH)
-    GPIO.output(4, GPIO.LOW)
+    GPIO.output(4, GPIO.LOW) # Enable driver
 
-def run_motor_control(shared_data, movement_queue):
+def run_motor_control(shared_data):
     print("[MotorControl] Starting...")
 
-    shared_data['stepper_degrees'].value = 0.0
-    shared_data['cumulative_error'].value = 0.0
     shared_data['servo_degrees'].value = 90.0
     shared_data['scan_trigger'].value = False
 
@@ -199,62 +124,34 @@ def run_motor_control(shared_data, movement_queue):
     global pi
     pi = pigpio.pi()
 
-    stepper_process = Process(target=stepper_worker, args=(movement_queue, shared_data))
-    stepper_process.start()
-
+    # Set initial position
     set_servo_angle_absolute(90, shared_data)
-    set_pan_angle_and_wait(0, movement_queue, shared_data)
+    sleep(1) # Wait for servo to settle
 
     try:
         print("[MotorControl] Idle, waiting for scan trigger...")
-        while not shared_data['shutdown'].value:
+        while not shared_data.get('shutdown', False):
             if shared_data['scan_trigger'].value:
                 print("[MotorControl] Trigger received: starting scan")
-                concentric_ring_search(movement_queue, shared_data)
+                concentric_ring_search_smooth(shared_data)
                 shared_data['scan_trigger'].value = False
-            sleep(0.05)
+            sleep(0.1)
     finally:
-        movement_queue.put(None)
-        stepper_process.join()
-        GPIO.output(4, GPIO.HIGH)
-        pi.set_servo_pulsewidth(13, 0)
+        pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0) # Ensure motor is off
+        GPIO.output(4, GPIO.HIGH) # Disable driver
+        pi.set_servo_pulsewidth(13, 0) # Disable servo
         pi.stop()
         GPIO.cleanup()  
         print("[MotorControl] Shut down cleanly")
 
-
-
 # --- Main Execution Block ---
-'''
 if __name__ == '__main__':
     with Manager() as manager:
         shared_data = manager.dict()
-        shared_data['stepper_degrees'] = 0.0
-        shared_data['cumulative_error'] = 0.0
-        shared_data['servo_degrees'] = 90 # Start at 90 degrees
+        shared_data['servo_degrees'] = 90.0
 
-        movement_queue = Queue()
-        stepper_process = Process(target=stepper_worker, args=(movement_queue, shared_data))
-        stepper_process.start()
-
-        try:
-            # Set initial position
-            set_servo_angle_absolute(90, shared_data)
-            set_pan_angle_and_wait(0, movement_queue, shared_data)
-            print("Initial position set. Starting search in 2 seconds...")
-            sleep(2)
-            
-            # Run the search
-            concentric_ring_search(movement_queue, shared_data)
-
-        except KeyboardInterrupt:
-            print("\nProgram interrupted by user.")
-        finally:
-            print("Cleaning up...")
-            movement_queue.put(None)
-            stepper_process.join()
-            GPIO.output(4, GPIO.HIGH)
-            pi.set_servo_pulsewidth(13, 0)
-            pi.stop()
-            print("Script finished.")
-'''
+        # For demonstration, we'll trigger the scan immediately.
+        shared_data['scan_trigger'] = True 
+        
+        # The motor control logic now runs in the main process for simplicity
+        run_motor_control(shared_data)
