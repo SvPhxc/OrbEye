@@ -167,8 +167,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
         # Add to main control panel
         controls.addLayout(dpad_layout)
 
-        # Connect buttons to your motor control logic (placeholder example)
-        btn_up.clicked.connect(lambda: print("Tilt up"))
+        STEP_SIZE = 2.0  # degrees
+        STEPPER_DELAY = 0.00001  # same as in motor_controller
+
+        btn_up.clicked.connect(lambda: move('up', STEP_SIZE, None, self.shared_data["movement_queue"], self.shared_data))
         btn_down.clicked.connect(lambda: print("Tilt down"))
         btn_left.clicked.connect(lambda: print("Pan left"))
         btn_right.clicked.connect(lambda: print("Pan right"))
