@@ -9,45 +9,37 @@ import math
 # --- Your Provided Worker and Move Functions (Unchanged) ---
 
 def stepper_worker(movement_queue, shared_data):
-    """
-    Process function that listens for commands on a queue and controls the stepper motor.
-    (This function is from your provided code and is NOT modified)
-    """
     while True:
         command = movement_queue.get()
         if command is None:
             break
+
         direction, degrees, delay = command
+
         ideal_microsteps = degrees / 0.05625
         total_microsteps_to_consider = ideal_microsteps + shared_data['cumulative_error'].value
         actual_microsteps_to_take = round(total_microsteps_to_consider)
         shared_data['cumulative_error'].value = total_microsteps_to_consider - actual_microsteps_to_take
 
-        
+        # === NEW: read current position BEFORE using it ===
+        current_pos = shared_data['stepper_degrees'].value
 
-        # NOTE: Your original code had a bug here. 'right' and 'left' were swapped.
-        # Direction pin HIGH is typically one direction, LOW is the other.
+        actual_degrees_this_move = actual_microsteps_to_take * 0.05625
+
+        # Set direction
         if direction == 'left':
-            GPIO.output(3, GPIO.LOW) # Set direction (adjust if your motor is backwards)
-        else: # 'left'
+            GPIO.output(3, GPIO.LOW)
+        else:
             GPIO.output(3, GPIO.HIGH)
 
+        # Step the motor
         for _ in range(actual_microsteps_to_take):
-            # NOTE: Your original code had a bug here. Pin 2 is step, Pin 3 is dir.
             GPIO.output(2, GPIO.HIGH)
             sleep(delay)
             GPIO.output(2, GPIO.LOW)
             sleep(delay)
-        
-        if direction == 'left':
-            shared_data['stepper_degrees'].value = (current_pos - actual_degrees_this_move) % 360
-        else:
-            shared_data['stepper_degrees'].value = (current_pos + actual_degrees_this_move) % 360
 
-        actual_degrees_this_move = actual_microsteps_to_take * 0.05625
-
-        # This update is atomic because of the Manager
-        current_pos = shared_data['stepper_degrees'].value
+        # Update position AFTER motion completes
         if direction == 'left':
             shared_data['stepper_degrees'].value = (current_pos - actual_degrees_this_move) % 360
         else:
