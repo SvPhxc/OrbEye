@@ -32,9 +32,9 @@ def stepper_worker(movement_queue, shared_data):
             break
         direction, degrees, delay = command
         ideal_microsteps = degrees / 0.05625
-        total_microsteps_to_consider = ideal_microsteps + shared_data['cumulative_error']
+        total_microsteps_to_consider = ideal_microsteps + shared_data['cumulative_error'].value
         actual_microsteps_to_take = round(total_microsteps_to_consider)
-        shared_data['cumulative_error'] = total_microsteps_to_consider - actual_microsteps_to_take
+        shared_data['cumulative_error'].value = total_microsteps_to_consider - actual_microsteps_to_take
         
         # NOTE: Your original code had a bug here. 'right' and 'left' were swapped.
         # Direction pin HIGH is typically one direction, LOW is the other.
@@ -53,11 +53,11 @@ def stepper_worker(movement_queue, shared_data):
         actual_degrees_this_move = actual_microsteps_to_take * 0.05625
         
         # This update is atomic because of the Manager
-        current_pos = shared_data['stepper_degrees']
+        current_pos = shared_data['stepper_degrees'].value
         if direction == 'left':
-            shared_data['stepper_degrees'] = (current_pos - actual_degrees_this_move) % 360
+            shared_data['stepper_degrees'].value = (current_pos - actual_degrees_this_move) % 360
         else:
-            shared_data['stepper_degrees'] = (current_pos + actual_degrees_this_move) % 360
+            shared_data['stepper_degrees'].value = (current_pos + actual_degrees_this_move) % 360
 
 
 def smooth_servo_move(target_degrees, shared_data, step_delay=0.01, step_size=1):
@@ -68,18 +68,18 @@ def smooth_servo_move(target_degrees, shared_data, step_delay=0.01, step_size=1)
     # NOTE: Your pulse width calculation is non-standard but we will use it as-is.
     # Standard is 500-2500 for 0-180 deg. Yours is 500-2500 for 0-22.2 deg.
     # We will use it as you wrote it.
-    current_degrees = shared_data['servo_degrees']
+    current_degrees = shared_data['servo_degrees'].value
     if target_degrees > current_degrees:
         for degrees in range(current_degrees, target_degrees + 1, step_size):
             pulse_width = 500 + (degrees / 0.09)
             pi.set_servo_pulsewidth(13, pulse_width)
-            shared_data['servo_degrees'] = degrees
+            shared_data['servo_degrees'].value = degrees
             sleep(step_delay)
     else:
         for degrees in range(current_degrees, target_degrees - 1, -step_size):
             pulse_width = 500 + (degrees / 0.09)
             pi.set_servo_pulsewidth(13, pulse_width)
-            shared_data['servo_degrees'] = degrees
+            shared_data['servo_degrees'].value = degrees
             sleep(step_delay)
 
 
@@ -92,7 +92,7 @@ def move(direction, degrees, delay, movement_queue, shared_data):
         command = (direction, degrees, delay)
         movement_queue.put(command)
     elif direction in ['up', 'down']:
-        target_degrees = shared_data['servo_degrees']
+        target_degrees = shared_data['servo_degrees'].value
         if direction == 'up':
             target_degrees += degrees
         else:
@@ -117,7 +117,7 @@ def read_lidar():
 
 def set_servo_angle_absolute(target_angle, shared_data):
     """Uses your existing move function to set an absolute servo angle."""
-    current_angle = shared_data['servo_degrees']
+    current_angle = shared_data['servo_degrees'].value
     delta = target_angle - current_angle
     
     if delta > 0:
@@ -131,7 +131,7 @@ def set_pan_angle_and_wait(target_angle, movement_queue, shared_data):
     Commands the stepper to an absolute angle and WAITS for it to arrive
     by polling the shared data variable. This is the key to synchronization.
     """
-    current_angle = shared_data['stepper_degrees']
+    current_angle = shared_data['stepper_degrees'].value
     delta = (target_angle - current_angle + 180) % 360 - 180
     
     if abs(delta) < 0.1: # Don't move if we are already there
@@ -147,7 +147,7 @@ def set_pan_angle_and_wait(target_angle, movement_queue, shared_data):
     
     # Poll the shared data until the stepper process confirms the move is done
     # This loop makes the async function behave like a sync one.
-    while abs(shared_data['stepper_degrees'] - target_angle) > 1.0: # Tolerance of 1 degree
+    while abs(shared_data['stepper_degrees'].value - target_angle) > 1.0: # Tolerance of 1 degree
         sleep(0.01)
 
 
@@ -159,7 +159,7 @@ def concentric_ring_search(movement_queue, shared_data):
     for radius in range(int(TILT_STEP_DEGREES), int(MAX_TILT_RADIUS) + 1, int(TILT_STEP_DEGREES)):
         target_tilt = CENTER_TILT_ANGLE - radius
         set_servo_angle_absolute(target_tilt, shared_data)
-        print(f"\n--- Scanning new ring at Tilt: {shared_data['servo_degrees']:.1f}° ---")
+        print(f"\n--- Scanning new ring at Tilt: {shared_data['servo_degrees'].value:.1f}° ---")
 
         tilt_rad_for_scaling = math.radians(target_tilt)
         scaling_factor = abs(math.sin(tilt_rad_for_scaling))
@@ -168,7 +168,7 @@ def concentric_ring_search(movement_queue, shared_data):
         
         if num_pan_steps < 1: continue
 
-        start_pan = shared_data['stepper_degrees']
+        start_pan = shared_data['stepper_degrees'].value
         
         for i in range(num_pan_steps + 1):
             loop_start_time = monotonic()
@@ -179,7 +179,7 @@ def concentric_ring_search(movement_queue, shared_data):
             set_pan_angle_and_wait(target_pan, movement_queue, shared_data)
 
             distance, strength = read_lidar()
-            print(f"\rSearching... Pan: {shared_data['stepper_degrees']:5.1f}°, Tilt: {shared_data['servo_degrees']:5.1f}°", end="")
+            print(f"\rSearching... Pan: {shared_data['stepper_degrees'].value:5.1f}°, Tilt: {shared_data['servo_degrees'].value:5.1f}°", end="")
             
             if strength > 200 and distance < 50:
                 print(f"\n\nTARGET ACQUIRED!")
@@ -198,33 +198,26 @@ def concentric_ring_search(movement_queue, shared_data):
 
 
 def run_motor_control(shared_data, movement_queue):
-    '''try:
-        print("[MotorControl] Starting...")
-        from multiprocessing import Queue
-        movement_queue = Queue()
-        ...
-    except Exception as e:
-        print(f"[MotorControl] Exception occurred: {e}")
-    print("hi")
-    shared_data['stepper_degrees'] = 0.0
-    shared_data['cumulative_error'] = 0.0
-    shared_data['servo_degrees'] = 90.0
-    shared_data['scan_trigger'] = False  # GUI sets this to True to trigger scan'''
+    print("[MotorControl] Starting...")
+
+    shared_data['stepper_degrees'].value = 0.0
+    shared_data['cumulative_error'].value = 0.0
+    shared_data['servo_degrees'].value = 90.0
+    shared_data['scan_trigger'].value = False
 
     stepper_process = Process(target=stepper_worker, args=(movement_queue, shared_data))
     stepper_process.start()
-    print("hi")
-    set_servo_angle_absolute(90, shared_data)
-    try:
-        set_servo_angle_absolute(90, shared_data)
-        set_pan_angle_and_wait(0, movement_queue, shared_data)
 
+    set_servo_angle_absolute(90, shared_data)
+    set_pan_angle_and_wait(0, movement_queue, shared_data)
+
+    try:
         print("[MotorControl] Idle, waiting for scan trigger...")
         while not shared_data['shutdown'].value:
-            if shared_data['scan_trigger'].value:  # ✅ .value is critical
+            if shared_data['scan_trigger'].value:
                 print("[MotorControl] Trigger received: starting scan")
                 concentric_ring_search(movement_queue, shared_data)
-                shared_data['scan_trigger'].value = False  # ✅ Reset trigger properly
+                shared_data['scan_trigger'].value = False
             sleep(0.1)
     finally:
         movement_queue.put(None)
@@ -235,8 +228,9 @@ def run_motor_control(shared_data, movement_queue):
         print("[MotorControl] Shut down cleanly")
 
 
-# --- Main Execution Block ---
 
+# --- Main Execution Block ---
+'''
 if __name__ == '__main__':
     with Manager() as manager:
         shared_data = manager.dict()
@@ -268,3 +262,4 @@ if __name__ == '__main__':
             pi.set_servo_pulsewidth(13, 0)
             pi.stop()
             print("Script finished.")
+'''

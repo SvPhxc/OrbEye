@@ -141,6 +141,37 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.lidar_timer = QtCore.QTimer()
         self.lidar_timer.timeout.connect(self.update_lidar_display)
         self.lidar_timer.start(50)  
+
+        # === Pan/Tilt Controls ===
+        controls.addWidget(QtWidgets.QLabel("Pan/Tilt Controls"))
+        dpad_layout = QtWidgets.QGridLayout()
+
+        # Create buttons
+        btn_up = QtWidgets.QPushButton("↑")
+        btn_down = QtWidgets.QPushButton("↓")
+        btn_left = QtWidgets.QPushButton("←")
+        btn_right = QtWidgets.QPushButton("→")
+
+        # Add buttons to grid (row, col)
+        dpad_layout.addWidget(btn_up, 0, 1)
+        dpad_layout.addWidget(btn_left, 1, 0)
+        dpad_layout.addWidget(btn_right, 1, 2)
+        dpad_layout.addWidget(btn_down, 2, 1)
+
+        # Optional: Center empty widgets to keep spacing
+        dpad_layout.addItem(QtWidgets.QSpacerItem(0, 0), 0, 0)
+        dpad_layout.addItem(QtWidgets.QSpacerItem(0, 0), 0, 2)
+        dpad_layout.addItem(QtWidgets.QSpacerItem(0, 0), 2, 0)
+        dpad_layout.addItem(QtWidgets.QSpacerItem(0, 0), 2, 2)
+
+        # Add to main control panel
+        controls.addLayout(dpad_layout)
+
+        # Connect buttons to your motor control logic (placeholder example)
+        btn_up.clicked.connect(lambda: print("Tilt up"))
+        btn_down.clicked.connect(lambda: print("Tilt down"))
+        btn_left.clicked.connect(lambda: print("Pan left"))
+        btn_right.clicked.connect(lambda: print("Pan right"))
         
         controls.addStretch()
 
