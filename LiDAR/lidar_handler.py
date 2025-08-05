@@ -16,7 +16,8 @@ def read_tfmini_data(serial_port):
                 strength = buffer[4] + (buffer[5] << 8)
                 #print(f"Distance: {distance} cm, Strength: {strength}")
                 buffer = buffer[9:]  # Remove this frame from the buffer
-                return distance, strength
+                timestamp = time.time()
+                return distance, strength, timestamp
             else:
                 buffer = buffer[1:]  # Skip until next potential frame
 
