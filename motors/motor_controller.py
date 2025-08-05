@@ -87,8 +87,8 @@ SEARCH_FREQUENCY_HZ = 100.0
 LOOP_DELAY_S = 1.0 / SEARCH_FREQUENCY_HZ
 CENTER_TILT_ANGLE = 90.0
 MAX_TILT_RADIUS = 45.0
-TILT_STEP_DEGREES = 5.0
-PAN_STEP_DEGREES = 5.0
+TILT_STEP_DEGREES = 1.5
+PAN_STEP_DEGREES = 1.5
 STEPPER_DELAY = 0.00001
 
 def read_lidar():
@@ -127,7 +127,7 @@ def set_pan_angle_and_wait(target_angle, movement_queue, shared_data):
     
     # Poll the shared data until the stepper process confirms the move is done
     # This loop makes the async function behave like a sync one.
-    while abs(shared_data['stepper_degrees'].value - target_angle) < 1.0: # Tolerance of 1 degree
+    while abs(shared_data['stepper_degrees'].value - target_angle) > 1.0: # Tolerance of 1 degree
         sleep(0.005)
 
 
