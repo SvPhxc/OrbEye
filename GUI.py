@@ -140,7 +140,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         self.lidar_timer = QtCore.QTimer()
         self.lidar_timer.timeout.connect(self.update_lidar_display)
-        self.lidar_timer.start(50)  
+        self.lidar_timer.start(10)  
 
         # === Pan/Tilt Controls ===
         controls.addWidget(QtWidgets.QLabel("Pan/Tilt Controls"))
