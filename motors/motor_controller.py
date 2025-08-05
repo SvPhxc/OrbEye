@@ -81,24 +81,35 @@ def move(direction, degrees, delay, movement_queue, shared_data):
         smooth_servo_move(target_degrees, shared_data)
 
 def track_target(target_azimuth, target_elevation, delay, movement_queue, shared_data):
-    tilt_limit = 90
-    hysteresis_margin = 3  # degrees
-    flipped = shared_data["flipped"].value
+    """
+    Moves the pan-tilt system to the specified azimuth and elevation,
+    handling flip logic if the elevation exceeds the tilt limit.
+    """
 
-    print(f"[TrackTarget] Target: Az={target_azimuth}°, El={target_elevation}°")
-    print(f"[TrackTarget] Current Pan={shared_data['stepper_degrees'].value}°, Tilt={shared_data['servo_degrees'].value}°, Flipped={flipped}")
+    # === SETTINGS ===
+    tilt_limit = 90  # Maximum servo tilt before flipping
+    hysteresis_margin = 3  # degrees — prevents rapid flip-flopping
 
-    # Flip logic with hysteresis
+    # === CURRENT STATE ===
+    current_pan = shared_data["stepper_degrees"].value
+    current_tilt = shared_data["servo_degrees"].value
+    flipped = shared_data["flipped"].value == 1
+
+    # === DEBUG ===
+    print(f"\n[TrackTarget] Target: Az={target_azimuth:.2f}°, El={target_elevation:.2f}°")
+    print(f"[TrackTarget] Current: Pan={current_pan:.2f}°, Tilt={current_tilt:.2f}°, Flipped={flipped}")
+
+    # === FLIP LOGIC ===
     if target_elevation > (tilt_limit + hysteresis_margin) and not flipped:
-        shared_data["flipped"].value = 1
         flipped = True
+        shared_data["flipped"].value = 1
         print("[TrackTarget] Flip ON")
     elif target_elevation < (tilt_limit - hysteresis_margin) and flipped:
-        shared_data["flipped"].value = 0
         flipped = False
+        shared_data["flipped"].value = 0
         print("[TrackTarget] Flip OFF")
 
-    # Adjust angles based on flip state
+    # === APPLY FLIP ADJUSTMENTS ===
     if flipped:
         adjusted_azimuth = (target_azimuth + 180) % 360
         adjusted_elevation = 180 - target_elevation
@@ -106,9 +117,28 @@ def track_target(target_azimuth, target_elevation, delay, movement_queue, shared
         adjusted_azimuth = target_azimuth
         adjusted_elevation = target_elevation
 
-    print(f"[TrackTarget] Adjusted: Az={adjusted_azimuth}°, El={adjusted_elevation}°")
+    print(f"[TrackTarget] Adjusted: Az={adjusted_azimuth:.2f}°, El={adjusted_elevation:.2f}°")
 
-    # Continue as usual...
+    # === PAN MOVEMENT ===
+    delta_pan = (adjusted_azimuth - current_pan + 540) % 360 - 180  # shortest path
+    if abs(delta_pan) > 1:
+        pan_direction = "right" if delta_pan > 0 else "left"
+        movement_queue.put((pan_direction, abs(delta_pan), delay))
+        new_pan = (current_pan + delta_pan) % 360
+        shared_data["stepper_degrees"].value = new_pan
+        print(f"[TrackTarget] PAN: {pan_direction} by {abs(delta_pan):.2f}° → {new_pan:.2f}°")
+    else:
+        print("[TrackTarget] PAN: No significant movement")
+
+    # === TILT MOVEMENT ===
+    delta_tilt = adjusted_elevation - current_tilt
+    if abs(delta_tilt) > 1:
+        new_tilt = max(0, min(180, current_tilt + delta_tilt))
+        shared_data["servo_degrees"].value = new_tilt
+        print(f"[TrackTarget] TILT: Move by {delta_tilt:.2f}° → {new_tilt:.2f}°")
+    else:
+        print("[TrackTarget] TILT: No significant movement")
+
 
 
 
