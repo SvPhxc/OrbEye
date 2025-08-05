@@ -83,7 +83,7 @@ def move(direction, degrees, delay, movement_queue, shared_data):
 # --- NEW Conductor Functions and Search Algorithm ---
 
 # --- Search Parameters ---
-SEARCH_FREQUENCY_HZ = 100.0
+SEARCH_FREQUENCY_HZ = 1000.0
 LOOP_DELAY_S = 1.0 / SEARCH_FREQUENCY_HZ
 CENTER_TILT_ANGLE = 90.0
 MAX_TILT_RADIUS = 45.0
