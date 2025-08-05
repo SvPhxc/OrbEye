@@ -134,7 +134,7 @@ def track_target(target_azimuth, target_elevation, delay, movement_queue, shared
     delta_tilt = adjusted_elevation - current_tilt
     if abs(delta_tilt) > 1:
         new_tilt = max(0, min(180, current_tilt + delta_tilt))
-        shared_data["servo_degrees"].value = new_tilt
+        smooth_servo_move(new_tilt, shared_data)
         print(f"[TrackTarget] TILT: Move by {delta_tilt:.2f}° → {new_tilt:.2f}°")
     else:
         print("[TrackTarget] TILT: No significant movement")

@@ -21,7 +21,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
     def __init__(self, shared_data, movement_queue):
         super().__init__()
         self.setWindowTitle("LockedIn Martin")
-        self.resize(1000, 600)
+        self.resize(1300, 600)
         self.debug_scale = 0.1
         self.orbit_items = []  # Store all orbit and vector items
 
