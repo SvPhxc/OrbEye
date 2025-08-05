@@ -185,10 +185,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
         # Add to main control panel
         controls.addLayout(dpad_layout)
 
-        btn_up.clicked.connect(lambda: self.shared_data['tilt_up'].value.__setattr__('value', True))
-        btn_down.clicked.connect(lambda: self.shared_data['tilt_down'].value.__setattr__('value', True))
-        btn_left.clicked.connect(lambda: self.shared_data['pan_left'].value.__setattr__('value', True))
-        btn_right.clicked.connect(lambda: self.shared_data['pan_right'].value.__setattr__('value', True))
+        btn_up.clicked.connect(self.set_tilt_up)
+        btn_down.clicked.connect(self.set_tilt_down)
+        btn_left.clicked.connect(self.set_pan_left)
+        btn_right.clicked.connect(self.set_pan_right)
         
         controls.addStretch()
 
@@ -320,6 +320,18 @@ class TrackerWindow(QtWidgets.QMainWindow):
             self.lcd_strength.display(strength)
             print(self.shared_data["pan_left"].value)
             #print(f"[GUI] LiDAR: {distance} cm | Strength: {strength}")
+
+    def set_tilt_up(self):
+        self.shared_data['tilt_up'].value = True
+
+    def set_tilt_down(self):
+        self.shared_data['tilt_down'].value = True
+
+    def set_pan_left(self):
+        self.shared_data['pan_left'].value = True
+
+    def set_pan_right(self):
+        self.shared_data['pan_right'].value = True
 
     def background_scan(self):
         print("[GUI] Triggering background scan")
