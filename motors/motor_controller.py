@@ -212,7 +212,7 @@ def run_motor_control(shared_data, movement_queue):
                 print("[MotorControl] Trigger received: starting scan")
                 concentric_ring_search(movement_queue, shared_data)
                 shared_data['scan_trigger'].value = False
-            sleep(0.1)
+            sleep(0.05)
     finally:
         movement_queue.put(None)
         stepper_process.join()
