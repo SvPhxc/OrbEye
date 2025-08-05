@@ -25,7 +25,7 @@ def stepper_worker(movement_queue, shared_data):
 
         # NOTE: Your original code had a bug here. 'right' and 'left' were swapped.
         # Direction pin HIGH is typically one direction, LOW is the other.
-        if direction == 'right':
+        if direction == 'left':
             GPIO.output(3, GPIO.LOW) # Set direction (adjust if your motor is backwards)
         else: # 'left'
             GPIO.output(3, GPIO.HIGH)
