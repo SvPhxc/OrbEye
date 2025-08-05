@@ -63,22 +63,49 @@ def smooth_servo_move(target_degrees, shared_data, step_delay=0.01, step_size=1)
             sleep(step_delay)
 
 
-def move(direction, degrees, delay, movement_queue, shared_data):
+def move_to(target_azimuth, target_elevation, delay, movement_queue, shared_data):
     """
-    A unified function to command either the stepper or the servo motor.
-    (This function is from your provided code and is slightly adapted for clarity)
+    Moves the pan-tilt system to track the target azimuth and elevation,
+    flipping the pan and mirroring the tilt if the elevation exceeds tilt_limit.
     """
-    if direction in ['left', 'right']:
-        command = (direction, degrees, delay)
-        movement_queue.put(command)
-    elif direction in ['up', 'down']:
-        target_degrees = shared_data['servo_degrees'].value
-        if direction == 'up':
-            target_degrees += degrees
-        else:
-            target_degrees -= degrees
-        target_degrees = max(0, min(180, target_degrees))
-        smooth_servo_move(target_degrees, shared_data)
+    tilt_limit = 90  # You can change this to 120 if your system allows
+    flipped = shared_data['flipped'].value
+
+    # Check if we need to flip
+    if target_elevation > tilt_limit and not flipped:
+        flipped = True
+        shared_data['flipped'].value = 1
+    elif target_elevation <= tilt_limit and flipped:
+        flipped = False
+        shared_data['flipped'].value = 0
+
+    # Adjust angles if flipped
+    if flipped:
+        adjusted_azimuth = (target_azimuth + 180) % 360
+        adjusted_elevation = 180 - target_elevation
+    else:
+        adjusted_azimuth = target_azimuth
+        adjusted_elevation = target_elevation
+
+    # Get current angles from shared memory
+    current_pan = shared_data['pan_degrees'].value
+    current_tilt = shared_data['servo_degrees'].value
+
+    # Calculate pan delta
+    delta_pan = (adjusted_azimuth - current_pan + 540) % 360 - 180
+    if abs(delta_pan) > 1:  # Ignore small jitters
+        pan_direction = 'right' if delta_pan > 0 else 'left'
+        movement_queue.put((pan_direction, abs(delta_pan), delay))
+        shared_data['pan_degrees'].value = (current_pan + delta_pan) % 360
+
+    # Calculate tilt delta
+    delta_tilt = adjusted_elevation - current_tilt
+    if abs(delta_tilt) > 1:
+        tilt_direction = 'up' if delta_tilt > 0 else 'down'
+        target_servo_angle = current_tilt + delta_tilt
+        target_servo_angle = max(0, min(180, target_servo_angle))
+        smooth_servo_move(target_servo_angle, shared_data)
+
 
 # --- NEW Conductor Functions and Search Algorithm ---
 
