@@ -332,8 +332,9 @@ if __name__ == "__main__":
 
 _shared_data = None  # global
 
-def run_gui(shared):
+def run_gui(shared, movement_queue):
     global _shared_data
+    shared["movement_queue"] = movement_queue
     _shared_data = shared
 
     app = QtWidgets.QApplication(sys.argv)

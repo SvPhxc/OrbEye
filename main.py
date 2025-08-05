@@ -37,7 +37,7 @@ if __name__ == "__main__":
     # p1 = Process(target=run_tracking, args=(shared_data,))
     movement_queue = Queue()
     p2 = Process(target=run_motor_control, args=(shared_data, movement_queue))
-    p3 = Process(target=run_gui, args=(shared_data,))
+    p3 = Process(target=run_gui, args=(shared_data, movement_queue))
     p4 = Process(target=run_lidar, args=(shared_data,))
     # p5 = Process(target=tracking, args=(shared_data,))
 
