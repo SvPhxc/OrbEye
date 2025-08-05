@@ -23,6 +23,11 @@ def stepper_worker(movement_queue, shared_data):
         actual_microsteps_to_take = round(total_microsteps_to_consider)
         shared_data['cumulative_error'].value = total_microsteps_to_consider - actual_microsteps_to_take
 
+        if direction == 'left':
+            shared_data['stepper_degrees'].value = (current_pos - actual_degrees_this_move) % 360
+        else:
+            shared_data['stepper_degrees'].value = (current_pos + actual_degrees_this_move) % 360
+
         # NOTE: Your original code had a bug here. 'right' and 'left' were swapped.
         # Direction pin HIGH is typically one direction, LOW is the other.
         if direction == 'left':
@@ -124,9 +129,7 @@ def track_target(target_azimuth, target_elevation, delay, movement_queue, shared
     if abs(delta_pan) > 1:
         pan_direction = "right" if delta_pan > 0 else "left"
         movement_queue.put((pan_direction, abs(delta_pan), delay))
-        new_pan = (current_pan + delta_pan) % 360
-        shared_data["stepper_degrees"].value = new_pan
-        print(f"[TrackTarget] PAN: {pan_direction} by {abs(delta_pan):.2f}° → {new_pan:.2f}°")
+        print(f"[TrackTarget] PAN: {pan_direction} by {abs(delta_pan):.2f}° → {adjusted_azimuth:.2f}°")
     else:
         print("[TrackTarget] PAN: No significant movement")
 
