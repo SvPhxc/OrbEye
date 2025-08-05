@@ -34,7 +34,7 @@ CENTER_TILT_ANGLE = 90.0
 MAX_TILT_RADIUS = 45.0
 TILT_STEP_DEGREES = 1.0
 PAN_DEGREES_PER_SECOND = 45.0  # Base speed for panning
-STEPPER_PULSE_PIN = 2 # The GPIO pin for the stepper pulses
+STEPPER_PULSE_PIN = 19 # The GPIO pin for the stepper pulses
 STEPPER_DIR_PIN = 3   # The GPIO pin for the stepper direction
 MICROSTEPS_PER_REVOLUTION = 3200 # 1.8 degree motor with 1/16 microstepping
 
