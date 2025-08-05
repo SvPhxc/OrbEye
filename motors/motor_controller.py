@@ -127,7 +127,7 @@ def set_pan_angle_and_wait(target_angle, movement_queue, shared_data):
     
     # Poll the shared data until the stepper process confirms the move is done
     # This loop makes the async function behave like a sync one.
-    while abs(shared_data['stepper_degrees'].value - target_angle) > 1.0: # Tolerance of 1 degree
+    while abs(shared_data['stepper_degrees'].value - target_angle) < 1.0: # Tolerance of 1 degree
         sleep(0.005)
 
 
