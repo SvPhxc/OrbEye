@@ -23,10 +23,7 @@ def stepper_worker(movement_queue, shared_data):
         actual_microsteps_to_take = round(total_microsteps_to_consider)
         shared_data['cumulative_error'].value = total_microsteps_to_consider - actual_microsteps_to_take
 
-        if direction == 'left':
-            shared_data['stepper_degrees'].value = (current_pos - actual_degrees_this_move) % 360
-        else:
-            shared_data['stepper_degrees'].value = (current_pos + actual_degrees_this_move) % 360
+        
 
         # NOTE: Your original code had a bug here. 'right' and 'left' were swapped.
         # Direction pin HIGH is typically one direction, LOW is the other.
@@ -41,6 +38,11 @@ def stepper_worker(movement_queue, shared_data):
             sleep(delay)
             GPIO.output(2, GPIO.LOW)
             sleep(delay)
+        
+        if direction == 'left':
+            shared_data['stepper_degrees'].value = (current_pos - actual_degrees_this_move) % 360
+        else:
+            shared_data['stepper_degrees'].value = (current_pos + actual_degrees_this_move) % 360
 
         actual_degrees_this_move = actual_microsteps_to_take * 0.05625
 
