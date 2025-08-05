@@ -133,6 +133,20 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.lcd_strength.setDigitCount(5)
         controls.addWidget(self.lcd_strength)
 
+        # Pan angle display
+        controls.addWidget(QtWidgets.QLabel("Pan Angle (°)"))
+        self.lcd_pan = QtWidgets.QLCDNumber()
+        self.lcd_pan.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
+        self.lcd_pan.setDigitCount(6)
+        controls.addWidget(self.lcd_pan)
+
+        # Tilt angle display
+        controls.addWidget(QtWidgets.QLabel("Tilt Angle (°)"))
+        self.lcd_tilt = QtWidgets.QLCDNumber()
+        self.lcd_tilt.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
+        self.lcd_tilt.setDigitCount(6)
+        controls.addWidget(self.lcd_tilt)
+
         # Shutdown button
         self.btn_shutdown = QtWidgets.QPushButton("Shutdown")
         self.btn_shutdown.clicked.connect(self.Pshutdown)
@@ -141,6 +155,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.lidar_timer = QtCore.QTimer()
         self.lidar_timer.timeout.connect(self.update_lidar_display)
         self.lidar_timer.start(10)  
+
+        self.angle_timer = QtCore.QTimer()
+        self.angle_timer.timeout.connect(self.update_angle_display)
+        self.angle_timer.start(100)  # Update every 100 ms
 
         # === Pan/Tilt Controls ===
         controls.addWidget(QtWidgets.QLabel("Pan/Tilt Controls"))
@@ -167,13 +185,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
         # Add to main control panel
         controls.addLayout(dpad_layout)
 
-        STEP_SIZE = 2.0  # degrees
-        STEPPER_DELAY = 0.00001  # same as in motor_controller
-
-        btn_up.clicked.connect(lambda: move('up', STEP_SIZE, None, self.shared_data["movement_queue"], self.shared_data))
-        btn_down.clicked.connect(lambda: print("Tilt down"))
-        btn_left.clicked.connect(lambda: print("Pan left"))
-        btn_right.clicked.connect(lambda: print("Pan right"))
+        btn_up.clicked.connect(lambda: self.shared_data['tilt_up'].__setattr__('value', True))
+        btn_down.clicked.connect(lambda: self.shared_data['tilt_down'].__setattr__('value', True))
+        btn_left.clicked.connect(lambda: self.shared_data['pan_left'].__setattr__('value', True))
+        btn_right.clicked.connect(lambda: self.shared_data['pan_right'].__setattr__('value', True))
         
         controls.addStretch()
 
@@ -308,6 +323,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
     def background_scan(self):
         print("[GUI] Triggering background scan")
         self.shared_data["scan_trigger"].value = True
+    
+    def update_angle_display(self):
+        self.lcd_pan.display(self.shared_data['stepper_degrees'].value)
+        self.lcd_tilt.display(self.shared_data['servo_degrees'].value)
 
     def add_sphere(self):
         md = gl.MeshData.sphere(rows=5, cols=10, radius=1000)

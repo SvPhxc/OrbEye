@@ -11,6 +11,10 @@ if __name__ == "__main__":
     lidar_data = Array('d', 3)  # [distance, strength, timestamp]
     shutdown_flag = Value('b', False)  # Boolean flag
     scan_trigger = Value('b', False)  # GUI sets this to True to trigger scan
+    tilt_up = Value('b', False)
+    tilt_down = Value('b', False)
+    pan_left = Value('b', False)
+    pan_right = Value('b', False)
 
     # Optional shared values for future expansion
     direction = Value('i', -1)
@@ -19,6 +23,7 @@ if __name__ == "__main__":
     stepper_degrees = Value('d', 0.0)  # For stepper motor position
     cumulative_error = Value('d', 0.0)  # For PID control
     servo_degrees = Value('d', 90.0)  # For servo position
+    
 
     # Build shared_data dictionary
     shared_data = {
@@ -30,7 +35,11 @@ if __name__ == "__main__":
         "scan_trigger": scan_trigger,  # GUI sets this to True to trigger scan
         "stepper_degrees": stepper_degrees,
         "cumulative_error": cumulative_error,  # For PID
-        "servo_degrees": servo_degrees  # For servo position
+        "servo_degrees": servo_degrees,  # For servo position
+        "tilt_up": tilt_up,
+        "tilt_down": tilt_down,
+        "pan_left": pan_left,
+        "pan_right": pan_right
     }
 
     # Start processes
