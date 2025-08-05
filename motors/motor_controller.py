@@ -196,6 +196,8 @@ def run_motor_control(shared_data, movement_queue):
     shared_data['scan_trigger'].value = False
 
     initialize_gpio()
+    global pi
+    pi = pigpio.pi()
 
     stepper_process = Process(target=stepper_worker, args=(movement_queue, shared_data))
     stepper_process.start()
