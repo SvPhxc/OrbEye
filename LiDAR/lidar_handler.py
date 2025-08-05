@@ -39,11 +39,13 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
                 time.sleep(0.01)
     except serial.SerialException as e:
         print(f"[TFmini] Serial error: {e}")
-def pos_to_index(shared_data)
+
+def pos_to_index(shared_data):
     scale = 1.5 #change later it should be equal to concentric search step size for both servo and stepper
     step_deg = shared_data["stepper_degrees"]
     servo_deg = shared_data["servo_degrees"]
     return int(step_deg/scale+servo_deg/scale*360/scale)
+
 def append_lidar_data(np_array, shared_data):
     distance, strength, timestamp = shared_data["lidar_data"]
     np_array[index] = [strength, distance, timestamp]

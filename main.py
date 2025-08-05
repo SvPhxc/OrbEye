@@ -15,6 +15,8 @@ if __name__ == "__main__":
     tilt_down = Value('b', False)
     pan_left = Value('b', False)
     pan_right = Value('b', False)
+    flipped = Value('b', False)  
+    go_to_target = Value('b', False)
 
     # Optional shared values for future expansion
     direction = Value('i', -1)
@@ -23,6 +25,9 @@ if __name__ == "__main__":
     stepper_degrees = Value('d', 0.0)  # For stepper motor position
     cumulative_error = Value('d', 0.0)  # For PID control
     servo_degrees = Value('d', 90.0)  # For servo position
+    target_azimuth = Value('d', 0.0)
+    target_elevation = Value('d', 0.0)
+    
     
 
     # Build shared_data dictionary
@@ -39,7 +44,11 @@ if __name__ == "__main__":
         "tilt_up": tilt_up,
         "tilt_down": tilt_down,
         "pan_left": pan_left,
-        "pan_right": pan_right
+        "pan_right": pan_right,
+        "flipped": flipped,  # For GUI to know if the camera is flipped
+        "go_to_target": go_to_target,  # For GUI to trigger go to target
+        "target_azimuth": target_azimuth,  # For target azimuth
+        "target_elevation": target_elevation,  # For target elevation
     }
 
     # Start processes

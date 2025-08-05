@@ -18,7 +18,7 @@ from datahandler import (
 
 
 class TrackerWindow(QtWidgets.QMainWindow):
-    def __init__(self):
+    def __init__(self, shared_data, movement_queue):
         super().__init__()
         self.setWindowTitle("LockedIn Martin")
         self.resize(1000, 600)
@@ -69,6 +69,31 @@ class TrackerWindow(QtWidgets.QMainWindow):
         # === Right: Controls ===
         controls = QtWidgets.QVBoxLayout()
         main_layout.addLayout(controls, stretch=1)
+
+        target_controls = QtWidgets.QVBoxLayout()
+
+        # Target Azimuth input
+        target_controls.addWidget(QtWidgets.QLabel("Target Azimuth (°)"))
+        self.az_input = QtWidgets.QLineEdit()
+        self.az_input.setPlaceholderText("0–360")
+        target_controls.addWidget(self.az_input)
+
+        # Target Elevation input
+        target_controls.addWidget(QtWidgets.QLabel("Target Elevation (°)"))
+        self.el_input = QtWidgets.QLineEdit()
+        self.el_input.setPlaceholderText("0–90")
+        target_controls.addWidget(self.el_input)
+
+        # Go Button
+        self.btn_go = QtWidgets.QPushButton("Go")
+        self.btn_go.clicked.connect(self.on_go_clicked)
+        target_controls.addWidget(self.btn_go)
+
+        # Spacer to push widgets to the top
+        target_controls.addStretch()
+
+        # Add this new column to the main layout
+        main_layout.addLayout(target_controls, stretch=1)
 
         # Satellite name input
         self.sat_name_input = QtWidgets.QLineEdit()
@@ -182,6 +207,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         dpad_layout.addItem(QtWidgets.QSpacerItem(0, 0), 2, 0)
         dpad_layout.addItem(QtWidgets.QSpacerItem(0, 0), 2, 2)
 
+
         # Add to main control panel
         controls.addLayout(dpad_layout)
 
@@ -189,7 +215,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         btn_down.clicked.connect(self.set_tilt_down)
         btn_left.clicked.connect(self.set_pan_left)
         btn_right.clicked.connect(self.set_pan_right)
-        
+
         controls.addStretch()
 
         
@@ -311,6 +337,18 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.elevation_deg = value
         self.lcd_elevation.display(value)
     
+    def on_go_clicked(self):
+        try:
+            az = float(self.az_input.text())
+            el = float(self.el_input.text())
+
+            self.shared_data["target_azimuth"].value = az
+            self.shared_data["target_elevation"].value = el
+            self.shared_data["go_to_target"].value = True  # trigger!
+
+        except ValueError:
+            print("Invalid input: please enter numeric values")
+
     def update_lidar_display(self):
         lidar_data = self.shared_data.get("lidar_data")
         if lidar_data is not None:
@@ -369,7 +407,7 @@ def run_gui(shared, movement_queue):
     _shared_data = shared
 
     app = QtWidgets.QApplication(sys.argv)
-    window = TrackerWindow()
+    window = TrackerWindow(_shared_data, movement_queue)
     window.show()
     sys.exit(app.exec_())
 
