@@ -149,7 +149,7 @@ CENTER_TILT_ANGLE = 90.0
 MAX_TILT_RADIUS = 45.0
 TILT_STEP_DEGREES = 1.5
 PAN_STEP_DEGREES = 1.5
-STEPPER_DELAY = 0.00001
+STEPPER_DELAY = 0.001   #0.00001
 
 def read_lidar():
     """Placeholder for reading the TF-MINI S sensor."""
