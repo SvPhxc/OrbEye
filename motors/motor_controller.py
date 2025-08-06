@@ -108,7 +108,7 @@ def track_target(target_azimuth, target_elevation, delay, movement_queue, shared
 
 SEARCH_FREQUENCY_HZ = 100.0
 CENTER_TILT_ANGLE = 90.0
-MAX_TILT_RADIUS = 45.0
+MAX_TILT_RADIUS = 90.0
 TILT_STEP_DEGREES = 1.5
 LIDAR_READ_INTERVAL_DEGREES = 1.5
 STEPPER_PULSE_PIN = 19
