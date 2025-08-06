@@ -23,9 +23,12 @@ def stepper_worker(movement_queue, shared_data):
         total_microsteps_to_consider = ideal_microsteps + shared_data['cumulative_error'].value
         actual_microsteps_to_take = round(total_microsteps_to_consider)
         shared_data['cumulative_error'].value = total_microsteps_to_consider - actual_microsteps_to_take
-        
+
         print(f"[WORKER] Move: {degrees:.4f}°, Steps: {actual_microsteps_to_take}, Error: {shared_data['cumulative_error'].value:.4f}")
 
+        if actual_microsteps_to_take == 0:
+            print("[WORKER] Skipping 0-step move")
+            return
         # === NEW: read current position BEFORE using it ===
         current_pos = shared_data['stepper_degrees'].value
 
@@ -179,7 +182,8 @@ def set_pan_angle_and_wait(target_angle, movement_queue, shared_data):
     current_angle = shared_data['stepper_degrees'].value
     delta = (target_angle - current_angle + 180) % 360 - 180
 
-    if abs(delta) < 0.1: # Don't move if we are already there
+    if abs(delta) < 1.0:
+        print(f"[PAN] Already close to target (Δ={delta:.2f}); skipping move")
         return
 
     if delta > 0:
