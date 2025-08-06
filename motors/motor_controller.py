@@ -223,7 +223,7 @@ def concentric_ring_search(movement_queue, shared_data):
             loop_start_time = monotonic()
 
             step_angle = i * PAN_STEP_DEGREES
-            target_pan = (start_pan + step_angle * pan_direction)
+            target_pan = round((start_pan + step_angle * pan_direction), 2)
 
             set_pan_angle_and_wait(target_pan, movement_queue, shared_data)
 
