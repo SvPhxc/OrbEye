@@ -18,7 +18,6 @@ def stepper_worker(pi, movement_queue, shared_data):
     """
     print("[WORKER] Stepper worker started (using PIGPIO waves)")
     
-    # Define pins here for clarity
     STEPPER_PULSE_PIN = 19
     STEPPER_DIR_PIN = 3
 
@@ -34,7 +33,6 @@ def stepper_worker(pi, movement_queue, shared_data):
 
         direction, degrees_to_move, delay = command
 
-        # --- Calculate steps (this logic is unchanged) ---
         ideal_microsteps = degrees_to_move / 0.05625
         total_microsteps_to_consider = ideal_microsteps + shared_data['cumulative_error'].value
         actual_microsteps_to_take = round(total_microsteps_to_consider)
@@ -43,19 +41,16 @@ def stepper_worker(pi, movement_queue, shared_data):
         if actual_microsteps_to_take == 0:
             continue
 
-        # --- Set direction (using pigpio) ---
         if direction == 'left':
             pi.write(STEPPER_DIR_PIN, 0) # GPIO.LOW
         else:
             pi.write(STEPPER_DIR_PIN, 1) # GPIO.HIGH
         
-        # --- Generate and send steps using a PIGPIO wave ---
-        # The delay determines the pulse frequency (speed)
         us_delay = int(delay * 1_000_000)
+        if us_delay < 10: us_delay = 10 # Prevent too high frequency
         
         pi.wave_clear()
         
-        # Create one pulse: ON, delay, OFF, delay
         pulse = [
             pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, us_delay),
             pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, us_delay)
@@ -64,17 +59,23 @@ def stepper_worker(pi, movement_queue, shared_data):
         pi.wave_add_generic(pulse)
         wave_id = pi.wave_create()
         
-        # Create a chain of waves to send the exact number of pulses
-        chain = [255, 0, wave_id, 255, 1, actual_microsteps_to_take, 0]
+        # ***** THE FIX IS HERE *****
+        # We must split the total steps into a Most Significant Byte (MSB)
+        # and a Least Significant Byte (LSB) for the wave chain command.
+        
+        repeats_lsb = actual_microsteps_to_take % 256
+        repeats_msb = actual_microsteps_to_take // 256
+        
+        # The chain format is: [start, wave, repeat, lsb, msb]
+        chain = [255, 0, wave_id, 255, 1, repeats_lsb, repeats_msb]
+        
         pi.wave_chain(chain)
         
-        # Wait for the wave to finish sending
         while pi.wave_tx_busy():
             sleep(0.01)
         
         pi.wave_delete(wave_id)
 
-        # --- Update shared position data (this logic is unchanged) ---
         current_pos = shared_data['stepper_degrees'].value
         actual_degrees_this_move = actual_microsteps_to_take * 0.05625
         if direction == 'left':
@@ -126,8 +127,9 @@ def track_target(target_azimuth, target_elevation, delay, movement_queue, shared
     adjusted_elevation = 180 - target_elevation if flipped else target_elevation
 
     delta_pan = (adjusted_azimuth - current_pan + 540) % 360 - 180
-    if abs(delta_pan) > 1:
+    if abs(delta_pan) > 0.1: # Use a small tolerance
         pan_direction = "right" if delta_pan > 0 else "left"
+        # The move function will now correctly handle large degree values
         move(pan_direction, abs(delta_pan), delay, movement_queue, shared_data)
 
     delta_tilt = adjusted_elevation - current_tilt
@@ -174,7 +176,7 @@ def concentric_ring_search_smooth(pi, shared_data):
         
         pi.write(STEPPER_DIR_PIN, 1 if pan_direction > 0 else 0)
         
-        scan_frequency_hz = 4000 # Higher frequency for faster scan
+        scan_frequency_hz = 4000
         pi.hardware_PWM(STEPPER_PULSE_PIN, scan_frequency_hz, 500000)
 
         for _ in range(0, total_steps_for_360_pan, steps_per_lidar_read):
@@ -205,7 +207,6 @@ def concentric_ring_search_smooth(pi, shared_data):
     return False
 
 def initialize_gpio():
-    """Initializes only the non-PIGPIO managed pins if necessary."""
     GPIO.setwarnings(False)
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(STEPPER_ENABLE_PIN, GPIO.OUT)
@@ -217,21 +218,18 @@ def initialize_gpio():
 def run_motor_control(shared_data, movement_queue):
     """Main loop for the motor control process."""
     print("[MotorControl] Starting...")
-    # RPi.GPIO is still used for simple ON/OFF pins
     initialize_gpio() 
     
-    # PIGPIO is used for all timed pulse generation
     global pi
     pi = pigpio.pi()
     if not pi.connected:
         print("[MotorControl] pigpio daemon not running. Exiting.")
         return
 
-    # Set pin modes using PIGPIO for pins it will control
     pi.set_mode(STEPPER_PULSE_PIN, pigpio.OUTPUT)
     pi.set_mode(STEPPER_DIR_PIN, pigpio.OUTPUT)
 
-    # ***** CHANGE: Pass the 'pi' object to the worker *****
+    # Pass the 'pi' object to the worker
     stepper_process = Process(target=stepper_worker, args=(pi, movement_queue, shared_data))
     stepper_process.start()
 
@@ -245,7 +243,6 @@ def run_motor_control(shared_data, movement_queue):
                 concentric_ring_search_smooth(pi, shared_data)
                 shared_data['scan_trigger'].value = False
             
-            # Manual control flag checks (unchanged)
             if shared_data['tilt_up'].value:
                 move('up', 5.0, None, movement_queue, shared_data)
                 shared_data['tilt_up'].value = False
@@ -255,7 +252,6 @@ def run_motor_control(shared_data, movement_queue):
                 shared_data['tilt_down'].value = False
 
             if shared_data['pan_left'].value:
-                # Use a small delay for the PIGPIO wave generation
                 move('left', 5.0, 0.0001, movement_queue, shared_data)
                 shared_data['pan_left'].value = False
 
