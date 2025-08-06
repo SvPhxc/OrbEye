@@ -128,7 +128,7 @@ CENTER_TILT_ANGLE = 90.0
 MAX_TILT_RADIUS = 45.0
 TILT_STEP_DEGREES = 1.5
 LIDAR_READ_INTERVAL_DEGREES = 1.5 # How often to take a reading in degrees
-STEPPER_PULSE_PIN = 2
+STEPPER_PULSE_PIN = 19
 STEPPER_DIR_PIN = 3
 STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
@@ -272,7 +272,7 @@ def run_motor_control(shared_data, movement_queue):
         GPIO.cleanup()  
         print("[MotorControl] Shutdown complete.")
 
-if __name__ == '__main__':
+'''if __name__ == '__main__':
     with Manager() as manager:
         shared_data = manager.dict()
         shared_data['shutdown'] = False # Initialize shutdown flag
@@ -311,4 +311,4 @@ if __name__ == '__main__':
             print("[Main] Initiating shutdown...")
             shared_data['shutdown'] = True
             motor_process.join()
-            print("[Main] Script finished.")```
+            print("[Main] Script finished.")```'''
