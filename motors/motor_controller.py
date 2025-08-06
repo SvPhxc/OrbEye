@@ -23,6 +23,8 @@ def stepper_worker(movement_queue, shared_data):
         total_microsteps_to_consider = ideal_microsteps + shared_data['cumulative_error'].value
         actual_microsteps_to_take = round(total_microsteps_to_consider)
         shared_data['cumulative_error'].value = total_microsteps_to_consider - actual_microsteps_to_take
+        
+        print(f"[WORKER] Move: {degrees:.4f}°, Steps: {actual_microsteps_to_take}, Error: {shared_data['cumulative_error'].value:.4f}")
 
         # === NEW: read current position BEFORE using it ===
         current_pos = shared_data['stepper_degrees'].value
