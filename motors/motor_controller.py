@@ -85,7 +85,7 @@ def concentric_ring_search_smooth(pi, shared_data):
         smooth_servo_move(pi, 90.0 - radius, shared_data)
         print(f"\n--- Scanning ring at Tilt: {shared_data['servo_degrees'].value:.1f}° ---")
         pi.write(STEPPER_DIR_PIN, 1 if pan_direction > 0 else 0)
-        scan_frequency_hz = 4000 # This can now be changed without affecting the servo.
+        scan_frequency_hz = 1778 # This can now be changed without affecting the servo.
         pi.hardware_PWM(STEPPER_PULSE_PIN, scan_frequency_hz, 500000)
         degrees_per_second = scan_frequency_hz * MICROSTEP_ANGLE; duration = 360.0 / degrees_per_second
         start_time = monotonic()
