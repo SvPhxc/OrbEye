@@ -9,6 +9,7 @@ import time
 if __name__ == "__main__":
     # Shared memory setup
     lidar_data = Array('d', 3)  # [distance, strength, timestamp]
+    backgorund_data = Array('d', 4)  #background array after scan
     shutdown_flag = Value('b', False)  # Boolean flag
     scan_trigger = Value('b', False)  # GUI sets this to True to trigger scan
     tilt_up = Value('b', False)
@@ -17,6 +18,7 @@ if __name__ == "__main__":
     pan_right = Value('b', False)
     flipped = Value('b', False)  
     go_to_target = Value('b', False)
+    save_background = Value('b', False)  # Flag to save background data
 
     # Optional shared values for future expansion
     direction = Value('i', -1)
@@ -33,6 +35,7 @@ if __name__ == "__main__":
     # Build shared_data dictionary
     shared_data = {
         "lidar_data": lidar_data,
+        "background_data": backgorund_data,
         "shutdown": shutdown_flag,
         "direction": direction,
         "target": target,
@@ -49,6 +52,7 @@ if __name__ == "__main__":
         "go_to_target": go_to_target,  # For GUI to trigger go to target
         "target_azimuth": target_azimuth,  # For target azimuth
         "target_elevation": target_elevation,  # For target elevation
+        "save_background": save_background,  # Flag to save background data
     }
 
     # Start processes

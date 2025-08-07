@@ -197,7 +197,6 @@ def concentric_ring_search_smooth(pi, shared_data):
         if shared_data['shutdown'].value: break
         pan_direction *= -1
         print()
-
     print("\n\nSEARCH FAILED: Target not found.")
     return False
 
@@ -238,6 +237,7 @@ def run_motor_control(shared_data, movement_queue):
                 print("[MotorControl] Trigger received: starting smooth scan")
                 concentric_ring_search_smooth(pi, shared_data)
                 shared_data['scan_trigger'].value = False
+                shared_data['save_background'].value = True
             
             if shared_data['tilt_up'].value:
                 move(pi, 'up', 5.0, None, movement_queue, shared_data)

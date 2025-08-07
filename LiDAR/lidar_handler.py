@@ -25,6 +25,10 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
     TFmini process for Raspberry Pi UART.
     Publishes [distance, strength, timestamp] to shared_data["lidar_data"]
     """
+
+    background_array = np.array([])  # Placeholder for background data
+
+
     try:
         with serial.Serial(port, baudrate, timeout=1) as ser:
             print("[TFmini] Serial opened, reading data...")
@@ -37,8 +41,25 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
                     lidar_data[2] = time.time()
                     #print("Wrote to shared_data:", list(lidar_data))
                 time.sleep(0.01)
+
+                if shared_data["scan_trigger"].value:
+                    stepper = shared_data["stepper_degrees"].value 
+                    servo = shared_data["servo_degrees"].value
+                    save_background(background_array, lidar_data, stepper, servo)
+
+                if shared_data["save_background"].value:
+                    np.save("background_data.npy", background_array)
+                    #shared_data["background_data"] = background_array
+                    shared_data["save_background"].value = False
     except serial.SerialException as e:
         print(f"[TFmini] Serial error: {e}")
+
+
+
+def save_background(background_array, lidar_data, stepper, servo):
+    pos = int(str(round(stepper)) + str(round(servo)))
+    np.append(background_array, [pos, lidar_data[0], lidar_data[1], lidar_data[2]])
+    return
 
 def pos_to_index(shared_data):
     scale = 1.5 #change later it should be equal to concentric search step size for both servo and stepper
