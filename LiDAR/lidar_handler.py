@@ -49,6 +49,8 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
 
                 if shared_data["save_background"].value:
                     np.save("background_data.npy", background_array)
+                    print(background_array)
+                    print("Background data saved to background_data.npy")
                     #shared_data["background_data"] = background_array
                     shared_data["save_background"].value = False
     except serial.SerialException as e:
