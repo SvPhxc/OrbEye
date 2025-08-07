@@ -41,6 +41,9 @@ class TrackerWindow(QtWidgets.QMainWindow):
         grid = gl.GLGridItem()
         self.view.addItem(grid)
 
+        self.background_plot = gl.GLScatterPlotItem(size=2, color=(0.5, 0.5, 1, 0.5))
+        self.view.addItem(self.background_plot)
+        
         # Satellite object
         self.satellite = gl.GLScatterPlotItem(pos=np.array([[0, 0, 0]]), color=(1, 0, 0, 1), size=10)
         self.view.addItem(self.satellite)
