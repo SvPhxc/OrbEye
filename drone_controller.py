@@ -12,80 +12,73 @@ def command_motors_to_target(azimuth, elevation, shared_data):
     with shared_data["go_to_target"].get_lock():
         shared_data["go_to_target"].value = True
 
-    # Give the motor controller time to start the move
-    time.sleep(0.1) 
-    
-    # Wait until the go_to_target flag is cleared by the motor controller
+    # Wait for the motor controller to acknowledge and start the move
+    start_time = time.time()
     while shared_data["go_to_target"].value:
         time.sleep(0.05)
-
+        if time.time() - start_time > 5: # 5-second timeout
+            print("[DroneController] Warning: Motor controller took too long to respond.")
+            break
 
 def run_drone_control(shared_data):
     """
-    Controls the drone's motors based on predictions from the Kalman filter.
-    It moves to the predicted point, circles it, and then repeats.
+    When enabled, controls drone movement based on Kalman filter predictions.
     """
     print("[DroneController] Starting...")
-
-    # Wait until the Kalman Filter is initialized and ready to provide predictions
+    
+    # Wait for the Kalman Filter to initialize
     print("[DroneController] Waiting for EKF initialization...")
     while not shared_data["ekf_initialized"].value:
         if shared_data["shutdown"].value:
-            print("[DroneController] Shutdown signal received during init wait. Exiting.")
+            print("[DroneController] Shutdown during init wait. Exiting.")
             return
         time.sleep(0.5)
     
-    print("[DroneController] EKF is initialized. Starting control loop.")
+    print("[DroneController] EKF initialized. Awaiting 'Follow' command from GUI.")
 
-    circling_radius_deg = 5.0  # The radius of the circular search pattern in degrees
-    circling_steps = 8         # The number of points in the circle
+    circling_radius_deg = 5.0
+    circling_steps = 8
     
-    last_predicted_az = 0
-    last_predicted_el = 0
-
     while not shared_data["shutdown"].value:
+        # --- THIS IS THE MAIN CONTROL SWITCH ---
+        if not shared_data["follow_drone_enabled"].value:
+            time.sleep(0.2) # Sleep while idle to reduce CPU usage
+            continue
+        
         try:
-            # 1. Get the latest prediction from the Kalman Filter
+            # 1. Get latest prediction from the Kalman Filter
             with shared_data['predicted_azimuth'].get_lock():
                 predicted_az = shared_data['predicted_azimuth'].value
             with shared_data['predicted_elevation'].get_lock():
                 predicted_el = shared_data['predicted_elevation'].value
-
-            # Only act if the prediction has changed significantly
-            if abs(predicted_az - last_predicted_az) < 0.5 and abs(predicted_el - last_predicted_el) < 0.5:
-                time.sleep(0.1)
-                continue
-
-            last_predicted_az = predicted_az
-            last_predicted_el = predicted_el
             
-            print(f"[DroneController] New target received: Az={predicted_az:.2f}, El={predicted_el:.2f}")
+            print(f"[DroneController] Following mode ACTIVE. Target: Az={predicted_az:.2f}, El={predicted_el:.2f}")
 
-            # 2. Command the motors to go to the predicted point
-            print("[DroneController] Moving to predicted target...")
+            # 2. Command motors to the predicted point
             command_motors_to_target(predicted_az, predicted_el, shared_data)
-            print("[DroneController] Arrived at target.")
+            print("[DroneController] Arrived at predicted target.")
+            time.sleep(0.5)
 
-            time.sleep(0.5) # Pause at the target before circling
-
-            # 3. Perform a circular scan around the point
-            print(f"[DroneController] Starting circular scan with radius {circling_radius_deg}...")
-            for i in range(circling_steps):
-                if shared_data["shutdown"].value: break
+            # 3. Perform a circular scan around the point to re-acquire the target
+            print("[DroneController] Performing circular scan...")
+            for i in range(circling_steps + 1): # +1 to return to center
+                if not shared_data["follow_drone_enabled"].value or shared_data["shutdown"].value:
+                    print("[DroneController] Following disabled during circle scan.")
+                    break
 
                 angle = (2 * math.pi / circling_steps) * i
                 offset_az = circling_radius_deg * math.cos(angle)
                 offset_el = circling_radius_deg * math.sin(angle)
-
-                circle_point_az = predicted_az + offset_az
-                circle_point_el = predicted_el + offset_el
                 
-                print(f"[DroneController] Circling to: Az={circle_point_az:.2f}, El={circle_point_el:.2f}")
-                command_motors_to_target(circle_point_az, circle_point_el, shared_data)
-                time.sleep(0.2) # Short pause at each point in the circle
+                # On the last step, move back to the center prediction
+                if i == circling_steps:
+                    offset_az, offset_el = 0, 0
 
-            print("[DroneController] Circle scan complete. Awaiting next prediction.")
-            time.sleep(1) # Wait before fetching the next global prediction
+                command_motors_to_target(predicted_az + offset_az, predicted_el + offset_el, shared_data)
+                time.sleep(0.2)
+
+            print("[DroneController] Circle scan complete. Awaiting next prediction update.")
+            time.sleep(1) # Wait before repeating the whole process
 
         except Exception as e:
             print(f"[DroneController] An error occurred: {e}")
