@@ -45,7 +45,7 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
                 if shared_data["scan_trigger"].value:
                     stepper = shared_data["stepper_degrees"].value 
                     servo = shared_data["servo_degrees"].value
-                    save_background(background_array, lidar_data, stepper, servo)
+                    background_array = save_background(background_array, lidar_data, stepper, servo)
 
                 if shared_data["save_background"].value:
                     np.save("background_data.npy", background_array)
@@ -60,9 +60,10 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
 
 def save_background(background_array, lidar_data, stepper, servo):
     pos = int(str(round(stepper)) + str(round(servo)))
-    background_array = np.append(background_array, [pos, lidar_data[0], lidar_data[1], lidar_data[2]])
+    new_row = np.array([[pos, lidar_data[0], lidar_data[1], lidar_data[2]]])
+    background_array = np.append(background_array, new_row, axis=0)
     print([pos, lidar_data[0], lidar_data[1], lidar_data[2]])
-    return
+    return background_array
 
 def pos_to_index(shared_data):
     scale = 1.5 #change later it should be equal to concentric search step size for both servo and stepper
