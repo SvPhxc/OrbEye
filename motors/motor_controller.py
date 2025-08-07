@@ -6,7 +6,8 @@ import RPi.GPIO as GPIO
 from time import sleep, monotonic
 import math
 
-# (stepper_worker, smooth_servo_move, move, and track_target are unchanged and correct)
+# --- Stepper Worker and Manual Movement Functions (Unchanged and Correct) ---
+# This stable worker is now used by the precise scan function.
 def stepper_worker(pi, movement_queue, shared_data):
     print("[WORKER] Stepper worker started.")
     STEPPER_PULSE_PIN = 19; STEPPER_DIR_PIN = 3
@@ -53,7 +54,7 @@ def smooth_servo_move(pi, target_degrees, shared_data, step_delay=0.01, step_siz
         sleep(step_delay)
     final_pulse_width = 500 + (target_degrees / 0.09)
     pi.set_servo_pulsewidth(13, final_pulse_width)
-    shared_data['servo_degrees'].value = degrees
+    shared_data['servo_degrees'].value = target_degrees
 
 def move(pi, direction, degrees, delay, movement_queue, shared_data):
     if direction in ['left', 'right']: movement_queue.put((direction, degrees, delay))
@@ -69,55 +70,64 @@ def track_target(pi, target_azimuth, target_elevation, delay, movement_queue, sh
     if abs(adjusted_elevation - current_tilt) > 1: smooth_servo_move(pi, adjusted_elevation, shared_data)
 
 
-# --- MODIFIED: High-Fidelity Step-Scan (Replaces concentric_ring_search_smooth) ---
+# --- CONCENTRIC SEARCH (REWRITTEN FOR ACCURACY) ---
 
 CENTER_TILT_ANGLE = 90.0
 MAX_TILT_RADIUS = 90.0
-TILT_STEP_DEGREES = 2.0  # How much the servo moves for each ring
-AZIMUTH_STEP_DEGREES = 2.0 # How much the stepper moves for each point in a ring
-SETTLE_TIME_S = 0.05 # How long to wait for a measurement after each step
+TILT_STEP_DEGREES = 2.0  # Can make this slightly larger if needed
+PAN_STEP_DEGREES = 2.0   # The step size for each pan movement
 
-def concentric_ring_scan_stepwise(pi, movement_queue, shared_data):
+def concentric_ring_search_precise(pi, movement_queue, shared_data):
     """
-    Performs a high-fidelity 'step-and-measure' background scan.
-    This is slower but guarantees accurate synchronization between motor position and LiDAR readings.
+    Performs a precise "Step-Scan" for the background map.
+    It prioritizes accuracy over speed by moving, stopping, then allowing a
+    LiDAR reading at a known, stable position.
     """
-    print("\n--- STARTING HIGH-FIDELITY STEP-SCAN ---")
+    print("\n--- STARTING PRECISE STEP-SCAN FOR BACKGROUND MAP ---")
+    pan_direction = 1
     
-    # Scan from the horizon (0 deg servo) up towards the center
-    for radius in range(int(MAX_TILT_RADIUS), -1, -int(TILT_STEP_DEGREES)):
+    # Scan from the horizon (0 deg elevation) up to the center (90 deg)
+    elevation_range = np.arange(0, MAX_TILT_RADIUS + 1, TILT_STEP_DEGREES)
+
+    for elevation in elevation_range:
         if shared_data['shutdown'].value: break
         
-        # 1. Move the servo to the new elevation ring
-        target_tilt = CENTER_TILT_ANGLE - radius
-        smooth_servo_move(pi, target_tilt, shared_data)
-        print(f"\n--- Scanning ring at Tilt: {shared_data['servo_degrees'].value:.1f}° ---")
-        sleep(0.2) # Let servo settle completely
+        # 1. Move servo to the new elevation ring
+        smooth_servo_move(pi, elevation, shared_data)
+        print(f"\n--- Scanning ring at Elevation: {elevation:.1f}° ---")
 
-        # 2. Step the stepper motor 360 degrees for the current ring
-        num_steps = int(360 / AZIMUTH_STEP_DEGREES)
-        for i in range(num_steps):
+        # 2. Perform a full 360-degree pan in discrete steps
+        steps_for_360_pan = int(360 / PAN_STEP_DEGREES)
+        for i in range(steps_for_360_pan):
             if shared_data['shutdown'].value: break
-
-            # Use the reliable 'move' command to step the motor
-            move(pi, 'right', AZIMUTH_STEP_DEGREES, 0.0001, movement_queue, shared_data)
-
-            # Wait for the move to complete. This is blocking but necessary.
-            # A more advanced version might use a completion flag.
-            # For now, a simple sleep based on expected move time is okay.
-            sleep(0.02) # Give a moment for the move command to process
             
-            # This is the crucial pause. The lidar_handler will take its reading
-            # during this time, while the motor is stationary.
-            print(f"\rScanning... Az: {shared_data['stepper_degrees'].value:5.1f}°", end="")
-            sleep(SETTLE_TIME_S)
+            # 2a. Command the stepper motor to move one small step
+            direction = 'right' if pan_direction > 0 else 'left'
+            move(pi, direction, PAN_STEP_DEGREES, 0.0001, movement_queue, shared_data)
 
-    print("\n\n--- HIGH-FIDELITY STEP-SCAN FINISHED ---")
-    # Return servo to center position
+            # 2b. **Wait for the move to complete.** This is the crucial synchronization step.
+            # We poll the shared angle until it's close to our target.
+            # This ensures the motor has physically stopped moving.
+            target_pan = (shared_data['stepper_degrees'].value + PAN_STEP_DEGREES * pan_direction) % 360
+            while abs(((shared_data['stepper_degrees'].value - target_pan + 540) % 360) - 180) > 180 - PAN_STEP_DEGREES:
+                 sleep(0.01) # Wait for stepper_worker to finish
+
+            # 2c. **Pause to guarantee LiDAR reading.**
+            # The lidar_handler process is constantly running. This short pause gives it
+            # a clean window to get a reading while the motors are perfectly still.
+            sleep(0.02) # 20ms pause for measurement
+            print(f"\rScanning... Az: {shared_data['stepper_degrees'].value:.1f}°, El: {elevation:.1f}°", end="")
+
+        print() # Newline after each completed ring
+        pan_direction *= -1 # Reverse direction for the next ring
+        
+    print("\n--- PRECISE STEP-SCAN FINISHED ---")
     smooth_servo_move(pi, CENTER_TILT_ANGLE, shared_data)
     return True
 
+
 # --- Main Control Logic ---
+
 def initialize_gpio():
     GPIO.setwarnings(False); GPIO.setmode(GPIO.BCM)
     GPIO.setup(STEPPER_ENABLE_PIN, GPIO.OUT); GPIO.setup(STEPPER_SLEEP_PIN, GPIO.OUT)
@@ -127,19 +137,24 @@ def run_motor_control(shared_data, movement_queue):
     print("[MotorControl] Starting..."); initialize_gpio() 
     pi = pigpio.pi()
     if not pi.connected: return
+
     pi.set_mode(STEPPER_PULSE_PIN, pigpio.OUTPUT); pi.set_mode(STEPPER_DIR_PIN, pigpio.OUTPUT)
+    
     stepper_process = Process(target=stepper_worker, args=(pi, movement_queue, shared_data)); stepper_process.start()
+    
     smooth_servo_move(pi, shared_data['servo_degrees'].value, shared_data)
+
     try:
         while not shared_data['shutdown'].value:
-            # --- This now calls the new, accurate scan function ---
+            # --- This now calls the PRECISE scan function ---
             if shared_data['scan_trigger'].value:
-                print("[MotorControl] Trigger received: starting high-fidelity step-scan.")
-                concentric_ring_scan_stepwise(pi, movement_queue, shared_data)
+                print("[MotorControl] Trigger received: starting precise background scan.")
+                # Pass the movement_queue so the scan can command the stepper_worker
+                concentric_ring_search_precise(pi, movement_queue, shared_data)
                 shared_data['scan_trigger'].value = False
                 shared_data['save_background'].value = True
-
-            # (The rest of the loop is unchanged)
+            
+            # (The rest of the manual control logic is unchanged)
             if shared_data['tilt_up'].value: move(pi, 'up', 5.0, None, movement_queue, shared_data); shared_data['tilt_up'].value = False
             if shared_data['tilt_down'].value: move(pi, 'down', 5.0, None, movement_queue, shared_data); shared_data['tilt_down'].value = False
             if shared_data['pan_left'].value: move(pi, 'left', 5.0, 0.0001, movement_queue, shared_data); shared_data['pan_left'].value = False
@@ -147,6 +162,7 @@ def run_motor_control(shared_data, movement_queue):
             if shared_data["go_to_target"].value:
                 track_target(pi, shared_data["target_azimuth"].value, shared_data["target_elevation"].value, 0.0001, movement_queue, shared_data)
                 shared_data["go_to_target"].value = False
+            
             sleep(0.05)
     finally:
         print("[MotorControl] Shutting down...")
