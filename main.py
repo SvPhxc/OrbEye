@@ -29,6 +29,11 @@ if __name__ == "__main__":
     servo_degrees = Value('d', 90.0)  # For servo position
     target_azimuth = Value('d', 0.0)
     target_elevation = Value('d', 0.0)
+    # Background LiDAR data for satellite detection
+    background_lidar = Array('d', 360 * 90 * 2)  # [azimuth, elevation, [strength, range]]
+    satellite_points = Array('d', 4)  # [azimuth, elevation, strength, range]
+    satellite_detected = Value('b', False)  # Flag to indicate if a satellite is detected
+
     
     
 
@@ -52,6 +57,9 @@ if __name__ == "__main__":
         "go_to_target": go_to_target,  # For GUI to trigger go to target
         "target_azimuth": target_azimuth,  # For target azimuth
         "target_elevation": target_elevation,  # For target elevation
+        "background_lidar": background_lidar,  # Shared background LiDAR data
+        "satellite_points": satellite_points,  # Shared array for satellite points
+        "satellite_detected": satellite_detected,  # Flag for satellite detection
         "save_background": save_background,  # Flag to save background data
     }
 
