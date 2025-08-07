@@ -90,7 +90,7 @@ def concentric_ring_search_smooth(pi, shared_data):
         
         pi.write(STEPPER_DIR_PIN, 1 if pan_direction > 0 else 0)
         
-        scan_frequency_hz = 100
+        scan_frequency_hz = 1778
         pi.hardware_PWM(STEPPER_PULSE_PIN, scan_frequency_hz, 500000)
 
         duration = 360.0 / (scan_frequency_hz * MICROSTEP_ANGLE)
