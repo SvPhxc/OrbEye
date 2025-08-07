@@ -4,7 +4,7 @@ from PyQt5 import QtWidgets, QtCore
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 import time
-
+import os
 from astropy.time import Time
 
 from motors.motor_controller import *
@@ -90,9 +90,14 @@ class TrackerWindow(QtWidgets.QMainWindow):
         target_controls.addWidget(self.btn_go)
 
         # Add Background Button
-        self.btn_addBack = QtWidgets.QPushButton("Go")
+        self.btn_addBack = QtWidgets.QPushButton("Add Background Mesh")
         self.btn_addBack.clicked.connect(self.load_background_mesh)
         target_controls.addWidget(self.btn_addBack)
+
+        # Follow Drone Button
+        self.btn_followDrone = QtWidgets.QPushButton("Follow Drone")
+        self.btn_followDrone.clicked.connect(self.load_background_mesh)
+        target_controls.addWidget(self.btn_followDrone)
 
         # Spacer to push widgets to the top
         target_controls.addStretch()

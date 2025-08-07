@@ -26,7 +26,7 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
     Publishes [distance, strength, timestamp] to shared_data["lidar_data"]
     """
 
-    background_array = np.array([])  # Placeholder for background data
+    background_array = np.empty((0,4))  # Placeholder for background data
 
 
     try:
