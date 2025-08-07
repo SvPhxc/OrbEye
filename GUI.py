@@ -90,9 +90,9 @@ class TrackerWindow(QtWidgets.QMainWindow):
         target_controls.addWidget(self.btn_go)
 
         # Add Background Button
-        self.btn_addBack = QtWidgets.QPushButton("Add Background Mesh")
-        self.btn_addBack.clicked.connect(self.load_background_mesh)
-        target_controls.addWidget(self.btn_addBack)
+        self.btn_show_background = QtWidgets.QPushButton("Show/Hide Background")
+        self.btn_show_background.clicked.connect(self.toggle_background_plot)
+        target_controls.addWidget(self.btn_show_background)
 
         # Follow Drone Button
         self.btn_followDrone = QtWidgets.QPushButton("Follow Drone")
@@ -360,35 +360,62 @@ class TrackerWindow(QtWidgets.QMainWindow):
             print("Invalid input: please enter numeric values")
 
 
-    def load_background_mesh(self, filename="background_data.npy"):
-        filepath = os.path.abspath(filename)
-        if not os.path.exists(filepath):
-            print(f"[ERROR] File not found: {filepath}")
+    def toggle_background_plot(self):
+        """Loads flat background array and visualizes valid 3D points."""
+        if self.background_plot.visible():
+            self.background_plot.hide()
+            print("[GUI] Background visualization hidden.")
             return
 
         try:
-            data = np.load(filepath)
+            bg_data = np.load("background_data.npy")  # shape: (N, 4)
+
+            if bg_data.shape[1] < 4:
+                print("[GUI] Invalid background array shape:", bg_data.shape)
+                return
+
+            points = []
+
+            for row in bg_data:
+                pos = int(row[0])          # encoded as e.g., 9060 = stepper=90, servo=60
+                distance_cm = row[1]
+                strength = row[2]
+                timestamp = row[3]
+
+                if not (10 < distance_cm < 1200):
+                    continue  # skip invalid or noisy points
+
+                # Decode azimuth (stepper) and elevation (servo) from `pos`
+                pos_str = str(int(pos)).zfill(4)  # pad with zeros if needed
+                if len(pos_str) < 4:
+                    continue  # invalid pos
+
+                stepper_deg = int(pos_str[:-2])  # all digits except last 2
+                servo_deg = int(pos_str[-2:])    # last 2 digits
+
+                az_rad = np.radians(stepper_deg)
+                el_rad = np.radians(servo_deg)
+                dist_m = distance_cm / 100.0  # cm → m
+
+                # Convert spherical to Cartesian
+                x = dist_m * np.cos(el_rad) * np.cos(az_rad)
+                y = dist_m * np.cos(el_rad) * np.sin(az_rad)
+                z = dist_m * np.sin(el_rad)
+
+                points.append([x, y, z])
+
+            if points:
+                print(f"[GUI] Plotting {len(points)} background points.")
+                self.background_plot.setData(pos=np.array(points))
+                self.background_plot.show()
+            else:
+                print("[GUI] No valid background points to plot.")
+
+        except FileNotFoundError:
+            print("[GUI] Error: 'background_data.npy' not found. Please run a scan first.")
         except Exception as e:
-            print(f"[ERROR] Failed to load {filepath}: {e}")
-            return
-
-        print(f"Loaded {len(data)} background points from: {filepath}")
-        for row in data:
-            azimuth = math.radians(row[0])        # Convert degrees to radians
-            elevation = math.radians(row[1])
-            distance = row[2] / 100.0              # Convert cm to meters
-
-            # Convert spherical to Cartesian coordinates
-            x = distance * math.cos(elevation) * math.cos(azimuth)
-            y = distance * math.cos(elevation) * math.sin(azimuth)
-            z = distance * math.sin(elevation)
-
-            # Create small green sphere at (x, y, z)
-            md = gl.MeshData.sphere(rows=5, cols=10, radius=0.1)
-            sphere = gl.GLMeshItem(meshdata=md, smooth=True, color=(0, 1, 0, 1), shader='shaded')
-            sphere.translate(x, y, z)
-            self.view.addItem(sphere)
-
+            print(f"[GUI] Error loading background data: {e}")
+            
     def update_lidar_display(self):
         lidar_data = self.shared_data.get("lidar_data")
         if lidar_data is not None:
