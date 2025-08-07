@@ -43,7 +43,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         self.background_plot = gl.GLScatterPlotItem(size=2, color=(0.5, 0.5, 1, 0.5))
         self.view.addItem(self.background_plot)
-        
+
         # Satellite object
         self.satellite = gl.GLScatterPlotItem(pos=np.array([[0, 0, 0]]), color=(1, 0, 0, 1), size=10)
         self.view.addItem(self.satellite)
@@ -398,7 +398,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
                 az_rad = np.radians(stepper_deg)
                 el_rad = np.radians(servo_deg)
-                dist_m = distance_cm / 100.0  # cm → m
+                dist_m = distance_cm / 10.0  # cm → m
 
                 # Convert spherical to Cartesian
                 x = dist_m * np.cos(el_rad) * np.cos(az_rad)
