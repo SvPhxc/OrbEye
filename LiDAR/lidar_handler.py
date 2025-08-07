@@ -80,7 +80,7 @@ def validate_lidar_data(distance_cm, strength, shared_data):
     # --- MODIFIED FOR TESTING ---
     # Condition 1: Distance must be between 1.5m and 10m (150cm - 1000cm)
     # Condition 2: Strength must be greater than 1000 (much easier to achieve)
-    if not (150 <= distance_cm <= 1000 and strength > 1000):
+    if not (150 <= distance_cm <= 300 and strength > 3000):
         return False
     
     # If the reading is valid, proceed to anomaly detection
@@ -110,7 +110,7 @@ def detect_satellite_direct_index(current_range, current_strength, azimuth, elev
         # This spot was scanned, so we check if the new object is different enough.
         strength_diff = abs(current_strength - background_strength)
         range_diff = abs(current_range - background_range)
-        is_anomaly = (strength_diff > 500 or range_diff > 20)
+        is_anomaly = (strength_diff > 5000 or range_diff > 50)
 
     if is_anomaly:
         with shared_data["satellite_points"].get_lock():
