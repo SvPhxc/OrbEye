@@ -96,7 +96,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         # Follow Drone Button
         self.btn_followDrone = QtWidgets.QPushButton("Follow Drone")
-        self.btn_followDrone.clicked.connect(self.load_background_mesh)
+        self.btn_followDrone.clicked.connect(self.on_go_clicked)
         target_controls.addWidget(self.btn_followDrone)
 
         # Spacer to push widgets to the top
