@@ -354,9 +354,20 @@ class TrackerWindow(QtWidgets.QMainWindow):
         except ValueError:
             print("Invalid input: please enter numeric values")
 
-    def load_background_mesh(self, filename="background_data.npy"):
-        data = np.load(filename)  # shape: (N, 5)
 
+    def load_background_mesh(self, filename="background_data.npy"):
+        filepath = os.path.abspath(filename)
+        if not os.path.exists(filepath):
+            print(f"[ERROR] File not found: {filepath}")
+            return
+
+        try:
+            data = np.load(filepath)
+        except Exception as e:
+            print(f"[ERROR] Failed to load {filepath}: {e}")
+            return
+
+        print(f"Loaded {len(data)} background points from: {filepath}")
         for row in data:
             azimuth = math.radians(row[0])        # Convert degrees to radians
             elevation = math.radians(row[1])
