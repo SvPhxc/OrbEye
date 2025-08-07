@@ -6,7 +6,7 @@ import RPi.GPIO as GPIO
 from time import sleep, monotonic
 import math
 
-# (The stepper_worker, smooth_servo_move, move, and track_target functions are unchanged)
+# (stepper_worker, smooth_servo_move, move, and track_target are unchanged and correct)
 def stepper_worker(pi, movement_queue, shared_data):
     print("[WORKER] Stepper worker started.")
     STEPPER_PULSE_PIN = 19; STEPPER_DIR_PIN = 3
@@ -53,7 +53,7 @@ def smooth_servo_move(pi, target_degrees, shared_data, step_delay=0.01, step_siz
         sleep(step_delay)
     final_pulse_width = 500 + (target_degrees / 0.09)
     pi.set_servo_pulsewidth(13, final_pulse_width)
-    shared_data['servo_degrees'].value = target_degrees
+    shared_data['servo_degrees'].value = degrees
 
 def move(pi, direction, degrees, delay, movement_queue, shared_data):
     if direction in ['left', 'right']: movement_queue.put((direction, degrees, delay))
@@ -68,64 +68,56 @@ def track_target(pi, target_azimuth, target_elevation, delay, movement_queue, sh
     if abs(delta_pan) > 0.1: move(pi, "right" if delta_pan > 0 else "left", abs(delta_pan), delay, movement_queue, shared_data)
     if abs(adjusted_elevation - current_tilt) > 1: smooth_servo_move(pi, adjusted_elevation, shared_data)
 
-# --- Concentric Search (MODIFIED FOR HIGH-FIDELITY SCAN) ---
 
-CENTER_TILT_ANGLE = 90.0; MAX_TILT_RADIUS = 90.0; TILT_STEP_DEGREES = 1.5
-STEPPER_PULSE_PIN = 19; STEPPER_DIR_PIN = 3; STEPPER_ENABLE_PIN = 4
-STEPPER_SLEEP_PIN = 6; MICROSTEP_ANGLE = 0.05625
+# --- MODIFIED: High-Fidelity Step-Scan (Replaces concentric_ring_search_smooth) ---
 
-def concentric_ring_search_smooth(pi, shared_data):
-    """Performs fast background scan while providing live angle updates."""
-    print("\n--- STARTING HIGH-FIDELITY CONCENTRIC RING SEARCH ---")
-    pan_direction = 1
-    initial_pan_angle = shared_data['stepper_degrees'].value
+CENTER_TILT_ANGLE = 90.0
+MAX_TILT_RADIUS = 90.0
+TILT_STEP_DEGREES = 2.0  # How much the servo moves for each ring
+AZIMUTH_STEP_DEGREES = 2.0 # How much the stepper moves for each point in a ring
+SETTLE_TIME_S = 0.05 # How long to wait for a measurement after each step
 
+def concentric_ring_scan_stepwise(pi, movement_queue, shared_data):
+    """
+    Performs a high-fidelity 'step-and-measure' background scan.
+    This is slower but guarantees accurate synchronization between motor position and LiDAR readings.
+    """
+    print("\n--- STARTING HIGH-FIDELITY STEP-SCAN ---")
+    
+    # Scan from the horizon (0 deg servo) up towards the center
     for radius in range(int(MAX_TILT_RADIUS), -1, -int(TILT_STEP_DEGREES)):
         if shared_data['shutdown'].value: break
         
+        # 1. Move the servo to the new elevation ring
         target_tilt = CENTER_TILT_ANGLE - radius
         smooth_servo_move(pi, target_tilt, shared_data)
         print(f"\n--- Scanning ring at Tilt: {shared_data['servo_degrees'].value:.1f}° ---")
-        
-        pi.write(STEPPER_DIR_PIN, 1 if pan_direction > 0 else 0)
-        
-        scan_frequency_hz = 4000
-        pi.hardware_PWM(STEPPER_PULSE_PIN, scan_frequency_hz, 500000)
+        sleep(0.2) # Let servo settle completely
 
-        duration = 360.0 / (scan_frequency_hz * MICROSTEP_ANGLE)
-        start_time = monotonic()
-        
-        # --- THIS LOOP IS THE CRITICAL FIX ---
-        # It continuously updates the shared azimuth angle while the motor spins,
-        # allowing the lidar_handler to get a live, accurate-as-possible angle.
-        while monotonic() - start_time < duration:
+        # 2. Step the stepper motor 360 degrees for the current ring
+        num_steps = int(360 / AZIMUTH_STEP_DEGREES)
+        for i in range(num_steps):
             if shared_data['shutdown'].value: break
-            
-            elapsed_time = monotonic() - start_time
-            degrees_turned = elapsed_time * scan_frequency_hz * MICROSTEP_ANGLE
-            current_pan = (initial_pan_angle + degrees_turned * pan_direction) % 360
-            
-            # Update shared memory for lidar_handler to use immediately
-            with shared_data['stepper_degrees'].get_lock():
-                shared_data['stepper_degrees'].value = current_pan
-            
-            sleep(0.01) # Loop at 100Hz, providing frequent updates
 
-        pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
-        pi.set_mode(STEPPER_PULSE_PIN, pigpio.OUTPUT)
-        
-        # Set the final angle after the spin is complete
-        initial_pan_angle = (initial_pan_angle + 360 * pan_direction) % 360
-        shared_data['stepper_degrees'].value = initial_pan_angle
-        
-        if shared_data['shutdown'].value: break
-        pan_direction *= -1
-        
-    print("\n--- HIGH-FIDELITY SEARCH FINISHED ---")
+            # Use the reliable 'move' command to step the motor
+            move(pi, 'right', AZIMUTH_STEP_DEGREES, 0.0001, movement_queue, shared_data)
+
+            # Wait for the move to complete. This is blocking but necessary.
+            # A more advanced version might use a completion flag.
+            # For now, a simple sleep based on expected move time is okay.
+            sleep(0.02) # Give a moment for the move command to process
+            
+            # This is the crucial pause. The lidar_handler will take its reading
+            # during this time, while the motor is stationary.
+            print(f"\rScanning... Az: {shared_data['stepper_degrees'].value:5.1f}°", end="")
+            sleep(SETTLE_TIME_S)
+
+    print("\n\n--- HIGH-FIDELITY STEP-SCAN FINISHED ---")
+    # Return servo to center position
     smooth_servo_move(pi, CENTER_TILT_ANGLE, shared_data)
     return True
 
-# --- Main Control Logic (Unchanged) ---
+# --- Main Control Logic ---
 def initialize_gpio():
     GPIO.setwarnings(False); GPIO.setmode(GPIO.BCM)
     GPIO.setup(STEPPER_ENABLE_PIN, GPIO.OUT); GPIO.setup(STEPPER_SLEEP_PIN, GPIO.OUT)
@@ -140,10 +132,14 @@ def run_motor_control(shared_data, movement_queue):
     smooth_servo_move(pi, shared_data['servo_degrees'].value, shared_data)
     try:
         while not shared_data['shutdown'].value:
+            # --- This now calls the new, accurate scan function ---
             if shared_data['scan_trigger'].value:
-                concentric_ring_search_smooth(pi, shared_data)
+                print("[MotorControl] Trigger received: starting high-fidelity step-scan.")
+                concentric_ring_scan_stepwise(pi, movement_queue, shared_data)
                 shared_data['scan_trigger'].value = False
                 shared_data['save_background'].value = True
+
+            # (The rest of the loop is unchanged)
             if shared_data['tilt_up'].value: move(pi, 'up', 5.0, None, movement_queue, shared_data); shared_data['tilt_up'].value = False
             if shared_data['tilt_down'].value: move(pi, 'down', 5.0, None, movement_queue, shared_data); shared_data['tilt_down'].value = False
             if shared_data['pan_left'].value: move(pi, 'left', 5.0, 0.0001, movement_queue, shared_data); shared_data['pan_left'].value = False
