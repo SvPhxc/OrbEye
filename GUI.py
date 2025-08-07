@@ -89,6 +89,11 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_go.clicked.connect(self.on_go_clicked)
         target_controls.addWidget(self.btn_go)
 
+        # Add Background Button
+        self.btn_addBack = QtWidgets.QPushButton("Go")
+        self.btn_addBack.clicked.connect(self.load_background_mesh)
+        target_controls.addWidget(self.btn_addBack)
+
         # Spacer to push widgets to the top
         target_controls.addStretch()
 
@@ -349,6 +354,25 @@ class TrackerWindow(QtWidgets.QMainWindow):
         except ValueError:
             print("Invalid input: please enter numeric values")
 
+    def load_background_mesh(self, filename="background_data.npy"):
+        data = np.load(filename)  # shape: (N, 5)
+
+        for row in data:
+            azimuth = math.radians(row[0])        # Convert degrees to radians
+            elevation = math.radians(row[1])
+            distance = row[2] / 100.0              # Convert cm to meters
+
+            # Convert spherical to Cartesian coordinates
+            x = distance * math.cos(elevation) * math.cos(azimuth)
+            y = distance * math.cos(elevation) * math.sin(azimuth)
+            z = distance * math.sin(elevation)
+
+            # Create small green sphere at (x, y, z)
+            md = gl.MeshData.sphere(rows=5, cols=10, radius=0.1)
+            sphere = gl.GLMeshItem(meshdata=md, smooth=True, color=(0, 1, 0, 1), shader='shaded')
+            sphere.translate(x, y, z)
+            self.view.addItem(sphere)
+
     def update_lidar_display(self):
         lidar_data = self.shared_data.get("lidar_data")
         if lidar_data is not None:
@@ -379,7 +403,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.lcd_tilt.display(self.shared_data['servo_degrees'].value)
 
     def add_sphere(self):
-        md = gl.MeshData.sphere(rows=5, cols=10, radius=1000)
+        md = gl.MeshData.sphere(rows=5, cols=10, radius=1)
         sphere = gl.GLMeshItem(meshdata=md, smooth=True, color=(0, 1, 0, 1), shader='shaded')
         x, y, z = self.satellite.pos[0]
         sphere.translate(x, y, z)
