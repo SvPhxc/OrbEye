@@ -5,81 +5,87 @@ import numpy as np
 import time
 
 def read_tfmini_data(serial_port):
+    """Reads a single data frame from the TFmini LiDAR."""
     buffer = bytearray()
-    
     while True:
         data = serial_port.read(serial_port.in_waiting or 1)
-        buffer += data
+        if data:
+            buffer += data
+            while len(buffer) >= 9:
+                if buffer[0] == 0x59 and buffer[1] == 0x59:
+                    distance = buffer[2] + (buffer[3] << 8)
+                    strength = buffer[4] + (buffer[5] << 8)
+                    buffer = buffer[9:]
+                    return distance, strength
+                else:
+                    buffer.pop(0)
 
-        while len(buffer) >= 9:
-            if buffer[0] == 0x59 and buffer[1] == 0x59:
-                distance = buffer[2] + (buffer[3] << 8)
-                strength = buffer[4] + (buffer[5] << 8)
-                buffer = buffer[9:]
-                return distance, strength
-            else:
-                buffer = buffer[1:]
+def get_background_index(azimuth, elevation):
+    """Calculates the base index in the 1D shared array for a given az/el."""
+    # Assuming elevation is 0-89, azimuth is 0-359.
+    az_idx = int(round(azimuth)) % 360
+    el_idx = int(round(elevation))
+    
+    # Clamp elevation to be within the valid range for the array (0-89)
+    if not (0 <= el_idx < 90):
+        return None
+    return (el_idx * 360 + az_idx) * 2
 
-# --- MODIFIED: Main LiDAR Process ---
 def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
     """
-    TFmini process that reads sensor data, validates it, and triggers
-    satellite detection logic.
+    Manages LiDAR data: reads it, populates background map during scans,
+    saves the map, and detects satellites against it.
     """
-    background_array = np.array([])
     try:
-        with serial.Serial(port, baudrate, timeout=1) as ser:
-            print("[TFmini] Serial opened, reading data...")
+        with serial.Serial(port, baudrate, timeout=0.1) as ser:
+            print("[LiDAR] Serial opened, reading data...")
             while not shared_data["shutdown"].value:
                 distance, strength = read_tfmini_data(ser)
-
-                if distance is not None and strength is not None:
-                    # Update the generic lidar_data for GUI or other uses
+                if distance is not None:
+                    # 1. Always update live LiDAR data for GUI
                     with shared_data["lidar_data"].get_lock():
                         shared_data["lidar_data"][0] = distance
                         shared_data["lidar_data"][1] = strength
                         shared_data["lidar_data"][2] = time.time()
                     
-                    # --- NEW: Validate every reading for potential satellite detection ---
+                    # 2. If a background scan is active, populate the background array
+                    if shared_data["scan_trigger"].value:
+                        with shared_data["stepper_degrees"].get_lock():
+                            az = shared_data["stepper_degrees"].value
+                        with shared_data["servo_degrees"].get_lock():
+                            el = shared_data["servo_degrees"].value
+                        
+                        index = get_background_index(az, el)
+                        if index is not None:
+                            with shared_data["background_lidar"].get_lock():
+                                shared_data["background_lidar"][index] = strength
+                                shared_data["background_lidar"][index + 1] = distance
+
+                    # 3. If save is triggered, save the shared background array to file
+                    if shared_data["save_background"].value:
+                        print("[LiDAR] Saving background data to file...")
+                        with shared_data["background_lidar"].get_lock():
+                            background_np = np.array(shared_data["background_lidar"]).reshape((90, 360, 2))
+                        np.save("background_data.npy", background_np)
+                        print("[LiDAR] Background data saved to 'background_data.npy'.")
+                        with shared_data["save_background"].get_lock():
+                            shared_data["save_background"].value = False # Reset flag
+
+                    # 4. Always try to detect a satellite against the background
                     validate_lidar_data(distance, strength, shared_data)
-
-                # Background scanning logic remains the same
-                if shared_data["scan_trigger"].value:
-                    stepper = shared_data["stepper_degrees"].value 
-                    servo = shared_data["servo_degrees"].value
-                    background_array = save_background(background_array, shared_data["lidar_data"], stepper, servo)
-
-                if shared_data["save_background"].value:
-                    np.save("background_data.npy", background_array)
-                    print("Background data saved to background_data.npy")
-                    shared_data["save_background"].value = False
                 
-                time.sleep(0.01)
+                time.sleep(0.005) # Loop at ~200Hz
 
     except serial.SerialException as e:
-        print(f"[TFmini] Serial error: {e}")
+        print(f"[LiDAR] Serial error: {e}")
+    print("[LiDAR] Shutting down.")
 
-# Unchanged functions
-def save_background(background_array, lidar_data, stepper, servo):
-    pos = int(str(round(stepper)) + str(round(servo)))
-    new_row = np.array([[pos, lidar_data[0], lidar_data[1], lidar_data[2]]])
-    background_array = np.append(background_array, new_row, axis=0)
-    return background_array
 
 def validate_lidar_data(distance_cm, strength, shared_data):
-    """
-    Validates LiDAR data. If valid, it proceeds to check if it's a satellite.
-    """
-    if distance_cm in [-1, -2, -4] or strength < 100 or strength == 65535:
+    """Validates data and checks if it's a satellite."""
+    if not (300 <= distance_cm <= 1000 and strength > 50000):
         return False
     
-    if not (300 <= distance_cm <= 1000): # 3-10 meters
-        return False
-    
-    if strength < 50000:
-        return False
-    
-    # If all checks pass, it might be a satellite.
     with shared_data["stepper_degrees"].get_lock():
         azimuth = shared_data["stepper_degrees"].value
     with shared_data["servo_degrees"].get_lock():
@@ -89,34 +95,31 @@ def validate_lidar_data(distance_cm, strength, shared_data):
     return True
   
 def detect_satellite_direct_index(current_range, current_strength, azimuth, elevation, shared_data):
-    """
-    Compares the current reading to the background scan to detect anomalies (satellites).
-    If an anomaly is found, it sets the satellite_detected flag for the EKF.
-    """
-    background_lidar = shared_data["background_lidar"]
-    az_idx = int(azimuth)
-    el_idx = int(elevation)
-    
-    background_strength, background_range = background_lidar[az_idx][el_idx]
-    
+    """Compares current reading to background map to find anomalies."""
+    index = get_background_index(azimuth, elevation)
+    if index is None:
+        return False
+
+    with shared_data["background_lidar"].get_lock():
+        background_strength = shared_data["background_lidar"][index]
+        background_range = shared_data["background_lidar"][index + 1]
+
+    if background_range == 0 and background_strength == 0:
+        return False # Ignore unscanned areas
+
     strength_diff = abs(current_strength - background_strength)
     range_diff = abs(current_range - background_range)
     
-    # Check tolerances
-    if strength_diff <= 5000 and range_diff <= 50:
-        # This is likely a background object, do nothing
-        return False
-    else:
-        # This is a potential satellite, update shared data for the EKF
+    # Tolerances: If reading is very different from the background, it's a satellite
+    if strength_diff > 5000 or range_diff > 50:
         with shared_data["satellite_points"].get_lock():
             shared_data["satellite_points"][0] = azimuth
             shared_data["satellite_points"][1] = elevation
             shared_data["satellite_points"][2] = current_strength
             shared_data["satellite_points"][3] = current_range
         
-        # --- THIS IS THE TRIGGER FOR THE KALMAN FILTER ---
         with shared_data["satellite_detected"].get_lock():
             shared_data["satellite_detected"].value = True
-        
-        print(f"SATELLITE DETECTED at Az: {azimuth}, El: {elevation}")
         return True
+    
+    return False
