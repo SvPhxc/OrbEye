@@ -22,11 +22,9 @@ def read_tfmini_data(serial_port):
 
 def get_background_index(azimuth, elevation):
     """Calculates the base index in the 1D shared array for a given az/el."""
-    # Assuming elevation is 0-89, azimuth is 0-359.
     az_idx = int(round(azimuth)) % 360
     el_idx = int(round(elevation))
     
-    # Clamp elevation to be within the valid range for the array (0-89)
     if not (0 <= el_idx < 90):
         return None
     return (el_idx * 360 + az_idx) * 2
@@ -42,13 +40,11 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
             while not shared_data["shutdown"].value:
                 distance, strength = read_tfmini_data(ser)
                 if distance is not None:
-                    # 1. Always update live LiDAR data for GUI
                     with shared_data["lidar_data"].get_lock():
                         shared_data["lidar_data"][0] = distance
                         shared_data["lidar_data"][1] = strength
                         shared_data["lidar_data"][2] = time.time()
                     
-                    # 2. If a background scan is active, populate the background array
                     if shared_data["scan_trigger"].value:
                         with shared_data["stepper_degrees"].get_lock():
                             az = shared_data["stepper_degrees"].value
@@ -61,7 +57,6 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
                                 shared_data["background_lidar"][index] = strength
                                 shared_data["background_lidar"][index + 1] = distance
 
-                    # 3. If save is triggered, save the shared background array to file
                     if shared_data["save_background"].value:
                         print("[LiDAR] Saving background data to file...")
                         with shared_data["background_lidar"].get_lock():
@@ -69,12 +64,11 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
                         np.save("background_data.npy", background_np)
                         print("[LiDAR] Background data saved to 'background_data.npy'.")
                         with shared_data["save_background"].get_lock():
-                            shared_data["save_background"].value = False # Reset flag
+                            shared_data["save_background"].value = False
 
-                    # 4. Always try to detect a satellite against the background
                     validate_lidar_data(distance, strength, shared_data)
                 
-                time.sleep(0.005) # Loop at ~200Hz
+                time.sleep(0.005)
 
     except serial.SerialException as e:
         print(f"[LiDAR] Serial error: {e}")
@@ -83,9 +77,13 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
 
 def validate_lidar_data(distance_cm, strength, shared_data):
     """Validates data and checks if it's a satellite."""
-    if not (300 <= distance_cm <= 1000 and strength > 50000):
+    # --- MODIFIED FOR TESTING ---
+    # Condition 1: Distance must be between 1.5m and 10m (150cm - 1000cm)
+    # Condition 2: Strength must be greater than 1000 (much easier to achieve)
+    if not (150 <= distance_cm <= 1000 and strength > 1000):
         return False
     
+    # If the reading is valid, proceed to anomaly detection
     with shared_data["stepper_degrees"].get_lock():
         azimuth = shared_data["stepper_degrees"].value
     with shared_data["servo_degrees"].get_lock():
@@ -104,14 +102,17 @@ def detect_satellite_direct_index(current_range, current_strength, azimuth, elev
         background_strength = shared_data["background_lidar"][index]
         background_range = shared_data["background_lidar"][index + 1]
 
-    if background_range == 0 and background_strength == 0:
-        return False # Ignore unscanned areas
+    if background_range == 0:
+        # This spot was not scanned or was out of range during the scan,
+        # so any valid reading is a potential satellite.
+        is_anomaly = True
+    else:
+        # This spot was scanned, so we check if the new object is different enough.
+        strength_diff = abs(current_strength - background_strength)
+        range_diff = abs(current_range - background_range)
+        is_anomaly = (strength_diff > 500 or range_diff > 20)
 
-    strength_diff = abs(current_strength - background_strength)
-    range_diff = abs(current_range - background_range)
-    
-    # Tolerances: If reading is very different from the background, it's a satellite
-    if strength_diff > 5000 or range_diff > 50:
+    if is_anomaly:
         with shared_data["satellite_points"].get_lock():
             shared_data["satellite_points"][0] = azimuth
             shared_data["satellite_points"][1] = elevation
@@ -119,7 +120,13 @@ def detect_satellite_direct_index(current_range, current_strength, azimuth, elev
             shared_data["satellite_points"][3] = current_range
         
         with shared_data["satellite_detected"].get_lock():
+            # Only print if the flag was previously false to avoid spamming the console
+            if not shared_data["satellite_detected"].value:
+                 print(f"SATELLITE DETECTED at Az: {azimuth:.1f}, El: {elevation:.1f}, Rng: {current_range}cm, Str: {current_strength}")
             shared_data["satellite_detected"].value = True
         return True
-    
-    return False
+    else:
+         # If it's not an anomaly, ensure the flag is false
+        with shared_data["satellite_detected"].get_lock():
+            shared_data["satellite_detected"].value = False
+        return False
