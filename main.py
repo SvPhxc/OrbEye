@@ -4,7 +4,7 @@ from multiprocessing import Process, Queue, Array, Value
 from webcam.blob_tracker import run_tracking
 from motors.motor_controller import run_motor_control
 from LiDAR.lidar_handler import run_lidar
-from LiDAR.kalman_filter import run_ekf_tracker, setup_ekf_shared_data
+from LiDAR.Kalman_Filter import run_ekf_tracker, setup_ekf_shared_data
 from drone_controller import run_drone_control
 from GUI import run_gui
 import time
