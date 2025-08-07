@@ -1,8 +1,11 @@
+# main.py
+
 from multiprocessing import Process, Queue, Array, Value
 from webcam.blob_tracker import run_tracking
-from motors.motor_controller import run_motor_control  # if used
+from motors.motor_controller import run_motor_control
 from LiDAR.lidar_handler import run_lidar
-from tracking.tracker import tracking  # if used
+from kalman_filter import run_ekf_tracker, setup_ekf_shared_data # MODIFIED
+from drone_controller import run_drone_control # NEW
 from GUI import run_gui
 import time
 
@@ -16,10 +19,9 @@ if __name__ == "__main__":
     tilt_down = Value('b', False)
     pan_left = Value('b', False)
     pan_right = Value('b', False)
-    flipped = Value('b', False)  
+    flipped = Value('b', False)
     go_to_target = Value('b', False)
     save_background = Value('b', False)  # Flag to save background data
-
     # Optional shared values for future expansion
     direction = Value('i', -1)
     target = Value('i', -1)
@@ -33,10 +35,8 @@ if __name__ == "__main__":
     background_lidar = Array('d', 360 * 90 * 2)  # [azimuth, elevation, [strength, range]]
     satellite_points = Array('d', 4)  # [azimuth, elevation, strength, range]
     satellite_detected = Value('b', False)  # Flag to indicate if a satellite is detected
-
     
     
-
     # Build shared_data dictionary
     shared_data = {
         "lidar_data": lidar_data,
@@ -63,19 +63,25 @@ if __name__ == "__main__":
         "save_background": save_background,  # Flag to save background data
     }
 
+    # --- NEW: Add EKF specific shared data ---
+    shared_data = setup_ekf_shared_data(shared_data)
+    
     # Start processes
     # p1 = Process(target=run_tracking, args=(shared_data,))
     movement_queue = Queue()
     p2 = Process(target=run_motor_control, args=(shared_data, movement_queue))
     p3 = Process(target=run_gui, args=(shared_data, movement_queue))
     p4 = Process(target=run_lidar, args=(shared_data,))
-    # p5 = Process(target=tracking, args=(shared_data,))
+    p_ekf = Process(target=run_ekf_tracker, args=(shared_data,)) # NEW
+    p_drone_controller = Process(target=run_drone_control, args=(shared_data,)) # NEW
+
 
     # p1.start()
     p2.start()
     p3.start()
     p4.start()
-    # p5.start()
+    p_ekf.start() # NEW
+    p_drone_controller.start() # NEW
 
     try:
         while not shutdown_flag.value:
@@ -89,11 +95,14 @@ if __name__ == "__main__":
     p2.terminate()
     p3.terminate()
     p4.terminate()
-    # p5.terminate()
+    p_ekf.terminate() # NEW
+    p_drone_controller.terminate() # NEW
 
     # p1.join()
     p2.join()
     p3.join()
     p4.join()
-    # p5.join()
+    p_ekf.join() # NEW
+    p_drone_controller.join() # NEW
+    
     print("Program exited cleanly")
