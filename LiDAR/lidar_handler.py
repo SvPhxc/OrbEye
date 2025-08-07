@@ -59,6 +59,7 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
 def save_background(background_array, lidar_data, stepper, servo):
     pos = int(str(round(stepper)) + str(round(servo)))
     np.append(background_array, [pos, lidar_data[0], lidar_data[1], lidar_data[2]])
+    print([pos, lidar_data[0], lidar_data[1], lidar_data[2]])
     return
 
 def pos_to_index(shared_data):
