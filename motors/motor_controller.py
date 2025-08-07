@@ -189,11 +189,6 @@ def concentric_ring_search_smooth(pi, shared_data):
             shared_data['stepper_degrees'].value = new_pan
 
             print(f"\rSearching... Pan: {new_pan:5.1f}°, Tilt: {shared_data['servo_degrees'].value:5.1f}° | LiDAR Dist: {distance:.2f}", end="")
-
-            if strength > 200 and distance < 50:
-                print(f"\n\nTARGET ACQUIRED!")
-                pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
-                return True
                 
             sleep_duration = steps_per_lidar_read / scan_frequency_hz
             sleep(sleep_duration)
@@ -201,8 +196,6 @@ def concentric_ring_search_smooth(pi, shared_data):
         pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
         if shared_data['shutdown'].value: break
         pan_direction *= -1
-        print()
-    print("\n\nSEARCH FAILED: Target not found.")
     return False
 
 def initialize_gpio():
