@@ -52,7 +52,7 @@ def smooth_servo_move(pi, target_degrees, shared_data, step_delay=0.01, step_siz
     degrees_range = range(int(round(current_degrees)), int(round(target_degrees)), step)
     for degrees in degrees_range:
         # Calculate the required pulse width in microseconds (500-2500 is typical for servos)
-        pulse_width = 500 + (degrees / 0.09)
+        pulse_width = 500 + (degrees / 0.09) + (28/0.09)
         # Instead of `set_servo_pulsewidth`, we use `set_PWM_dutycycle`.
         # This uses software timing and will not conflict with the hardware PWM on the stepper pin.
         pi.set_PWM_dutycycle(SERVO_PIN, pulse_width)
@@ -60,7 +60,7 @@ def smooth_servo_move(pi, target_degrees, shared_data, step_delay=0.01, step_siz
         sleep(step_delay)
         
     # Send the final pulse width to ensure it lands exactly on the target.
-    final_pulse_width = 500 + (target_degrees / 0.09)
+    final_pulse_width = 500 + (target_degrees / 0.09) + (28/0.09)
     pi.set_PWM_dutycycle(SERVO_PIN, final_pulse_width)
     shared_data['servo_degrees'].value = target_degrees
 
