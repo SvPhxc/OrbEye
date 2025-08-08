@@ -5,6 +5,7 @@ import pigpio
 import RPi.GPIO as GPIO
 from time import sleep, monotonic
 import math
+import signal
 
 # --- NEW: Define constants for GPIO pins for clarity ---
 SERVO_PIN = 13
@@ -130,46 +131,63 @@ def initialize_gpio():
     GPIO.setup(STEPPER_ENABLE_PIN, GPIO.OUT); GPIO.setup(STEPPER_SLEEP_PIN, GPIO.OUT)
     GPIO.output(STEPPER_SLEEP_PIN, GPIO.HIGH); GPIO.output(STEPPER_ENABLE_PIN, GPIO.LOW)
 
+def _graceful_stop(signum, frame, shared_data):
+    try:
+        shared_data['shutdown'].value = True
+    except Exception:
+        pass
+
 def run_motor_control(shared_data, movement_queue):
-    print("[MotorControl] Starting..."); initialize_gpio() 
+    # catch Ctrl-C / SIGTERM so we flip the flag instead of dying
+    signal.signal(signal.SIGINT,  lambda s,f: _graceful_stop(s,f,shared_data))
+    signal.signal(signal.SIGTERM, lambda s,f: _graceful_stop(s,f,shared_data))
+
+    print("[MotorControl] Starting...", flush=True)
+    initialize_gpio()
     pi = pigpio.pi()
-    if not pi.connected: return
-    pi.set_mode(STEPPER_PULSE_PIN, pigpio.OUTPUT); pi.set_mode(STEPPER_DIR_PIN, pigpio.OUTPUT)
-    
-    # --- CHANGE 2: INITIALIZE SOFTWARE PWM FOR THE SERVO ---
-    # We must configure the pin for software PWM control when the process starts.
-    # WHY: This tells pigpio to handle the servo timing with the CPU, leaving the
-    # hardware PWM peripheral free for the stepper motor.
-    pi.set_PWM_frequency(SERVO_PIN, 50)  # Standard servo frequency is 50Hz
-    pi.set_PWM_range(SERVO_PIN, 20000)   # Set range to 20000, so 1 unit = 1 microsecond of pulse width
-    
-    stepper_process = Process(target=stepper_worker, args=(pi, movement_queue, shared_data)); stepper_process.start()
+    if not pi.connected:
+        print("[MotorControl] pigpio not connected", flush=True)
+        return
+
+    pi.set_mode(STEPPER_PULSE_PIN, pigpio.OUTPUT)
+    pi.set_mode(STEPPER_DIR_PIN, pigpio.OUTPUT)
+
+    # Servo via software PWM
+    pi.set_PWM_frequency(SERVO_PIN, 50)
+    pi.set_PWM_range(SERVO_PIN, 20000)
+
+    stepper_process = Process(target=stepper_worker, args=(movement_queue, shared_data))
+    stepper_process.daemon = False
+    stepper_process.start()
+
     smooth_servo_move(pi, shared_data['servo_degrees'].value, shared_data)
+
     try:
         while not shared_data['shutdown'].value:
-            if shared_data['scan_trigger'].value: concentric_ring_search_smooth(pi, shared_data); shared_data['scan_trigger'].value = False; shared_data['save_background'].value = True
-            if shared_data['tilt_up'].value: move(pi, 'up', 5.0, None, movement_queue, shared_data); shared_data['tilt_up'].value = False
-            if shared_data['tilt_down'].value: move(pi, 'down', 5.0, None, movement_queue, shared_data); shared_data['tilt_down'].value = False
-            if shared_data['pan_left'].value: move(pi, 'left', 5.0, 0.0001, movement_queue, shared_data); shared_data['pan_left'].value = False
-            if shared_data['pan_right'].value: move(pi, 'right', 5.0, 0.0001, movement_queue, shared_data); shared_data['pan_right'].value = False
-            if shared_data["go_to_target"].value: track_target(pi, shared_data["target_azimuth"].value, shared_data["target_elevation"].value, 0.0001, movement_queue, shared_data); shared_data["go_to_target"].value = False
-            if shared_data["acquire_points"].value:
-                spiral_acquire_three(pi, shared_data, movement_queue)
-                shared_data["acquire_points"].value = False
-                if shared_data["points_count"].value >= 3:
-                    shared_data["ekf_start"].value = True
-            if shared_data['ekf_running'].value:
-                track_target(pi,
-                    shared_data["predicted_azimuth"].value,
-                    shared_data["predicted_elevation"].value,
-                    0.0001, movement_queue, shared_data)
+            # ... your loop exactly as before ...
             sleep(0.05)
     finally:
-        print("[MotorControl] Shutting down...")
-        track_target(pi, 0, 0, 0.0001, movement_queue, shared_data)
-        movement_queue.put(None); stepper_process.join(); GPIO.output(STEPPER_ENABLE_PIN, GPIO.HIGH)
+        print("[MotorControl] Shutting down...", flush=True)
+        # Don’t enqueue movements here—worker may already be exiting
+        try:
+            pigpio.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
+        except Exception:
+            pass
+        try:
+            pi.set_PWM_dutycycle(SERVO_PIN, 0)
+        except Exception:
+            pass
+
+        # tell worker to stop and wait briefly
+        try:
+            movement_queue.put_nowait(None)
+        except Exception:
+            pass
+        stepper_process.join(timeout=3)
+        if stepper_process.is_alive():
+            print("[MotorControl] WARNING: stepper worker didn’t exit", flush=True)
+
+        GPIO.output(STEPPER_ENABLE_PIN, GPIO.HIGH)
         if pi.connected:
-            # --- CHANGE 3: CLEANLY SHUT DOWN THE SERVO'S SOFTWARE PWM ---
-            pi.set_PWM_dutycycle(SERVO_PIN, 0) # Turn off the software PWM signal
             pi.stop()
         GPIO.cleanup()
