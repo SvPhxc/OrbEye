@@ -41,7 +41,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         grid = gl.GLGridItem()
         self.view.addItem(grid)
 
-        self.background_plot = gl.GLScatterPlotItem(size=2, color=(0.5, 0.5, 1, 0.5))
+        self.background_plot = gl.GLScatterPlotItem(size=5, color=(0.5, 0.5, 1, 0.5))
         self.view.addItem(self.background_plot)
 
         # Satellite object
@@ -352,55 +352,40 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
 
     def toggle_background_plot(self):
-        """Loads flat background array and visualizes valid 3D points."""
+        """ --- NEW: Loads data from file and displays/hides the plot --- """
         if self.background_plot.visible():
             self.background_plot.hide()
             print("[GUI] Background visualization hidden.")
             return
-
+            
         try:
-            bg_data = np.load("background_data.npy")  # shape: (N, 4)
-
-            if bg_data.shape[1] < 4:
-                print("[GUI] Invalid background array shape:", bg_data.shape)
-                return
-
+            # Load the reshaped data [elevation, azimuth, [strength, range]]
+            bg_data = np.load("background_data.npy")
+            
             points = []
+            # Iterate through the array to convert spherical to Cartesian
+            for el_idx, az_row in enumerate(bg_data):
+                for az_idx, reading in enumerate(az_row):
+                    strength, dist_cm = reading
+                    # Plot only valid points within a reasonable range
+                    if 10 < dist_cm < 1200:
+                        # Convert to radians for math
+                        el_rad = np.radians(el_idx)
+                        az_rad = np.radians(az_idx)
+                        dist_m = dist_cm / 10.0  #Scale to meters for visualization
 
-            for row in bg_data:
-                pos = int(row[0])          # encoded as e.g., 9060 = stepper=90, servo=60
-                distance_cm = row[1]
-                strength = row[2]
-                timestamp = row[3]
-
-                if not (10 < distance_cm < 1200):
-                    continue  # skip invalid or noisy points
-
-                # Decode azimuth (stepper) and elevation (servo) from `pos`
-                pos_str = str(int(pos)).zfill(4)  # pad with zeros if needed
-                if len(pos_str) < 4:
-                    continue  # invalid pos
-
-                stepper_deg = int(pos_str[:-2])  # all digits except last 2
-                servo_deg = int(pos_str[-2:])    # last 2 digits
-
-                az_rad = np.radians(stepper_deg)
-                el_rad = np.radians(servo_deg)
-                dist_m = distance_cm / 10.0  # cm → m
-
-                # Convert spherical to Cartesian
-                x = dist_m * np.cos(el_rad) * np.cos(az_rad)
-                y = dist_m * np.cos(el_rad) * np.sin(az_rad)
-                z = dist_m * np.sin(el_rad)
-
-                points.append([x, y, z])
+                        # Spherical to Cartesian conversion
+                        x = dist_m * np.cos(el_rad) * np.cos(az_rad)
+                        y = dist_m * np.cos(el_rad) * np.sin(az_rad)
+                        z = dist_m * np.sin(el_rad)
+                        points.append([x, y, z])
 
             if points:
                 print(f"[GUI] Plotting {len(points)} background points.")
                 self.background_plot.setData(pos=np.array(points))
                 self.background_plot.show()
             else:
-                print("[GUI] No valid background points to plot.")
+                print("[GUI] No valid points found in background data file.")
 
         except FileNotFoundError:
             print("[GUI] Error: 'background_data.npy' not found. Please run a scan first.")
