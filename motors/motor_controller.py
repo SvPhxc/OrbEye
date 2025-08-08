@@ -199,7 +199,7 @@ def run_motor_control(shared_data, movement_queue):
             if shared_data['pan_right'].value: move(pi, 'right', 5.0, 0.0001, movement_queue, shared_data); shared_data['pan_right'].value = False
             if shared_data["go_to_target"].value: track_target(pi, shared_data["target_azimuth"].value, shared_data["target_elevation"].value, 0.0001, movement_queue, shared_data); shared_data["go_to_target"].value = False
             if shared_data["acquire_points"].value:
-                square_search(75, 0, 10, shared_data, movement_queue)
+                square_search(75, 0, 10, shared_data, movement_queue, pi)
                 if shared_data["points_count"].value >= 3:
                     shared_data["ekf_start"].value = True
             if shared_data['ekf_running'].value:
