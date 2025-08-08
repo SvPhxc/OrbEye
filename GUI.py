@@ -459,7 +459,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
                 length_m = 10.0               # fallback if no LiDAR yet
 
             # Scale to your scene units
-            length = length_m * self.debug_scale
+            length = max(5.0 * self.debug_scale, length_m * self.debug_scale)
+
 
             # Convert angles to a unit direction vector
             az_rad = np.radians(az % 360.0)
