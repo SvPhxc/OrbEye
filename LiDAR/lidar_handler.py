@@ -1,8 +1,7 @@
-# LiDAR/lidar_handler.py
-
 import serial
 import numpy as np
 import time
+
 
 def read_tfmini_data(serial_port):
     """Reads a single data frame from the TFmini LiDAR."""
@@ -20,14 +19,16 @@ def read_tfmini_data(serial_port):
                 else:
                     buffer.pop(0)
 
+
 def get_background_index(azimuth, elevation):
     """Calculates the base index in the 1D shared array for a given az/el."""
     az_idx = int(round(azimuth)) % 360
     el_idx = int(round(elevation))
-    
+
     if not (0 <= el_idx < 90):
         return None
     return (el_idx * 360 + az_idx) * 2
+
 
 def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
     """
@@ -44,13 +45,13 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
                         shared_data["lidar_data"][0] = distance
                         shared_data["lidar_data"][1] = strength
                         shared_data["lidar_data"][2] = time.time()
-                    
+
                     if shared_data["scan_trigger"].value:
                         with shared_data["stepper_degrees"].get_lock():
                             az = shared_data["stepper_degrees"].value
                         with shared_data["servo_degrees"].get_lock():
                             el = shared_data["servo_degrees"].value
-                        
+
                         index = get_background_index(az, el)
                         if index is not None:
                             with shared_data["background_lidar"].get_lock():
@@ -67,7 +68,7 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
                             shared_data["save_background"].value = False
 
                     validate_lidar_data(distance, strength, shared_data)
-                
+
                 time.sleep(0.005)
 
     except serial.SerialException as e:
@@ -82,7 +83,7 @@ def validate_lidar_data(distance_cm, strength, shared_data):
     # Condition 2: Strength must be greater than 1000 (much easier to achieve)
     if not (150 <= distance_cm <= 300 and strength > 3000):
         return False
-    
+
     # If the reading is valid, proceed to anomaly detection
     with shared_data["stepper_degrees"].get_lock():
         azimuth = shared_data["stepper_degrees"].value
@@ -91,7 +92,8 @@ def validate_lidar_data(distance_cm, strength, shared_data):
 
     detect_satellite_direct_index(distance_cm, strength, azimuth, elevation, shared_data)
     return True
-  
+
+
 def detect_satellite_direct_index(current_range, current_strength, azimuth, elevation, shared_data):
     """Compares current reading to background map to find anomalies."""
     index = get_background_index(azimuth, elevation)
@@ -118,15 +120,16 @@ def detect_satellite_direct_index(current_range, current_strength, azimuth, elev
             shared_data["satellite_points"][1] = elevation
             shared_data["satellite_points"][2] = current_strength
             shared_data["satellite_points"][3] = current_range
-        
+
         with shared_data["satellite_detected"].get_lock():
             # Only print if the flag was previously false to avoid spamming the console
             if not shared_data["satellite_detected"].value:
-                 print(f"SATELLITE DETECTED at Az: {azimuth:.1f}, El: {elevation:.1f}, Rng: {current_range}cm, Str: {current_strength}")
+                print(
+                    f"SATELLITE DETECTED at Az: {azimuth:.1f}, El: {elevation:.1f}, Rng: {current_range}cm, Str: {current_strength}")
             shared_data["satellite_detected"].value = True
         return True
     else:
-         # If it's not an anomaly, ensure the flag is false
+        # If it's not an anomaly, ensure the flag is false
         with shared_data["satellite_detected"].get_lock():
             shared_data["satellite_detected"].value = False
         return False
