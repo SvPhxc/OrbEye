@@ -227,6 +227,7 @@ def run_motor_control(shared_data, movement_queue):
         try:
             print("[MotorControl] Returning to home position (0,0)...", flush=True)
             track_target(pi, 0, 0, 0.0001, movement_queue, shared_data)
+            sleep(3.6)
         except Exception as e:
             print(f"[MotorControl] Could not return to home: {e}", flush=True)
         try:
