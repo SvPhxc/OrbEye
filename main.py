@@ -33,7 +33,7 @@ if __name__ == "__main__":
     predicted_azimuth = Value('d', 0.0)
     predicted_elevation = Value('d', 0.0)
     ekf_confidence = Value('d', 0.0)
-    lidar_acceptance_range = Array('d', [9.0, 11.0])  # min_m, max_m
+    lidar_acceptance_range = Array('d', [1.0, 2.0])  # min_m, max_m
     background_path = "background_data.npy"
 
     # Optional shared values for future expansion
