@@ -1,5 +1,5 @@
 # File: motors/motor_controller.py
-
+import numpy as np
 from multiprocessing import Process, Queue
 import pigpio
 import RPi.GPIO as GPIO
