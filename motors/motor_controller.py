@@ -166,6 +166,7 @@ def run_motor_control(shared_data, movement_queue):
             sleep(0.05)
     finally:
         print("[MotorControl] Shutting down...")
+        track_target(pi, 0, 0, 0.0001, movement_queue, shared_data)
         movement_queue.put(None); stepper_process.join(); GPIO.output(STEPPER_ENABLE_PIN, GPIO.HIGH)
         if pi.connected:
             # --- CHANGE 3: CLEANLY SHUT DOWN THE SERVO'S SOFTWARE PWM ---

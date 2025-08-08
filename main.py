@@ -34,6 +34,7 @@ if __name__ == "__main__":
     predicted_elevation = Value('d', 0.0)
     ekf_confidence = Value('d', 0.0)
     lidar_acceptance_range = Array('d', [1.0, 2.0])  # min_m, max_m
+    go_to_zero = Value('b', False)
     background_path = "background_data.npy"
 
     # Optional shared values for future expansion
@@ -91,6 +92,7 @@ if __name__ == "__main__":
         "predicted_elevation": predicted_elevation,
         "ekf_confidence": ekf_confidence, 
         "lidar_acceptance_range": lidar_acceptance_range,  # [min_m, max_m]  
+        "go_to_zero": go_to_zero,
     }
 
     # Start processes
