@@ -66,8 +66,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         # Timer
         self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.update_orbit)
-        self.timer.start(30)
+        self.timer.timeout.connect(self.update_laser_from_pan_tilt)
+        self.timer.start(30)  # ~33 fps is plenty
 
         # === Right: Controls ===
         controls = QtWidgets.QVBoxLayout()
@@ -296,13 +296,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
             self.view.removeItem(item)
         self.orbit_items.clear()
 
-    def plot_orbit_line(self):
-        valid_points = self.orbit_xyz[~np.isnan(self.orbit_xyz).any(axis=1)]
-        scaled_points = valid_points * self.debug_scale
-        orbit_line = gl.GLLinePlotItem(pos=scaled_points, color=(1, 1, 0, 1), width=2, antialias=True, mode='line_strip')
-        self.view.addItem(orbit_line)
-        self.orbit_items.append(orbit_line)
-
     def plot_keplerian_reference(self, inclination_deg, raan_deg, arg_perigee_deg, length=5.0):
         inc = np.radians(inclination_deg)
         raan = np.radians(raan_deg)
@@ -347,23 +340,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
                                          color=(1, 0, 1, 1), width=2)
         self.view.addItem(perigee_line)
         self.orbit_items.append(perigee_line)
-
-    def update_orbit(self):
-        if not self.orbit_enabled:
-            return
-        t = time.time() - self.start_time
-        angle = self.orbit_speed * t
-        elevation_rad = np.radians(self.elevation_deg)
-        x = self.radius * np.cos(angle) * np.cos(elevation_rad)
-        y = self.radius * np.sin(angle) * np.cos(elevation_rad)
-        z = self.radius * np.sin(elevation_rad)
-        self.satellite.setData(pos=np.array([[x, y, z]]))
-        self.laser.setData(pos=np.array([[0, 0, 0], [x, y, z]]))
-
-    def toggle_orbit(self, enabled):
-        self.orbit_enabled = enabled
-        if enabled:
-            self.start_time = time.time()
 
     def set_elevation_angle(self, value):
         self.elevation_deg = value
@@ -466,6 +442,47 @@ class TrackerWindow(QtWidgets.QMainWindow):
     def update_angle_display(self):
         self.lcd_pan.display(self.shared_data['stepper_degrees'].value)
         self.lcd_tilt.display(self.shared_data['servo_degrees'].value)
+
+    def update_laser_from_pan_tilt(self):
+        """
+        Point the laser along the current pan/tilt. 
+        Length uses live LiDAR distance when plausible, else a default.
+        """
+        try:
+            # Read current mount angles (degrees) and LiDAR in cm
+            az = float(self.shared_data['stepper_degrees'].value)  # 0..360
+            el = float(self.shared_data['servo_degrees'].value)    # 0..90
+
+            lidar = self.shared_data.get('lidar_data')
+            if lidar is not None:
+                dist_cm = float(lidar[0])
+            else:
+                dist_cm = 0.0
+
+            # Decide laser length in meters
+            if 50.0 <= dist_cm <= 2000.0:     # sane-ish reading window (0.5–20 m)
+                length_m = dist_cm / 100.0
+            else:
+                length_m = 10.0               # fallback if no LiDAR yet
+
+            # Scale to your scene units
+            length = length_m * self.debug_scale
+
+            # Convert angles to a unit direction vector
+            az_rad = np.radians(az % 360.0)
+            el_rad = np.radians(np.clip(el, 0.0, 90.0))
+            x = np.cos(el_rad) * np.cos(az_rad)
+            y = np.cos(el_rad) * np.sin(az_rad)
+            z = np.sin(el_rad)
+
+            tip = np.array([x * length, y * length, z * length], dtype=float)
+
+            # Update the line and (optionally) place the 'satellite' at the tip
+            self.laser.setData(pos=np.vstack((np.zeros(3), tip)))
+            self.satellite.setData(pos=tip.reshape(1, 3))  # keeps add_sphere() working
+
+        except Exception as e:
+            print(f"[GUI] update_laser_from_pan_tilt error: {e}")
 
     def add_sphere(self):
         md = gl.MeshData.sphere(rows=5, cols=10, radius=1)
