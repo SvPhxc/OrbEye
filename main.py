@@ -49,6 +49,9 @@ if __name__ == "__main__":
     background_lidar = Array('d', 360 * 90 * 2)  # [azimuth, elevation, [strength, range]]
     satellite_points = Array('d', 4)  # [azimuth, elevation, strength, range]
     satellite_detected = Value('b', False)  # Flag to indicate if a satellite is detected
+    acquisition_state = Value('i', 0)  # 0: SEARCHING, 1: CENTERING_P1, 2: SPIRAL_P2, 3: PREDICT_P3, 4: COMPLETE
+    initial_points = Array('d', [0.0] * 12)  # Stores 3 points (az, el, dist, time)
+    best_strength_point = Array('d', [0.0] * 3)  # Temp storage for finding peak strength (az, el, str)
 
     
     
@@ -90,7 +93,11 @@ if __name__ == "__main__":
         "predicted_azimuth": predicted_azimuth,
         "predicted_elevation": predicted_elevation,
         "ekf_confidence": ekf_confidence, 
-        "lidar_acceptance_range": lidar_acceptance_range,  # [min_m, max_m]  
+        "lidar_acceptance_range": lidar_acceptance_range,  # [min_m, max_m]
+        "initial_points": initial_points,  # Stores 3 points (az, el, dist, time)
+        "best_strength_point": best_strength_point,  # Temp storage for finding peak strength (az, el, str)
+        "acquisition_state": acquisition_state,  # 0: SEARCHING, 1: CENTERING_P1, 2: SPIRAL_P2, 3: PREDICT_P3, 4: COMPLETE
+
     }
 
     # Start processes
