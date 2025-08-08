@@ -1,6 +1,84 @@
 # Enhanced LiDAR handler integration
 # Add these functions to your lidar_handler.py
 
+import serial
+import numpy as np
+import time
+
+
+def read_tfmini_data(serial_port):
+    """Reads a single data frame from the TFmini LiDAR."""
+    buffer = bytearray()
+    while True:
+        data = serial_port.read(serial_port.in_waiting or 1)
+        if data:
+            buffer += data
+            while len(buffer) >= 9:
+                if buffer[0] == 0x59 and buffer[1] == 0x59:
+                    distance = buffer[2] + (buffer[3] << 8)
+                    strength = buffer[4] + (buffer[5] << 8)
+                    buffer = buffer[9:]
+                    return distance, strength
+                else:
+                    buffer.pop(0)
+
+
+def get_background_index(azimuth, elevation):
+    """Calculates the base index in the 1D shared array for a given az/el."""
+    az_idx = int(round(azimuth)) % 360
+    el_idx = int(round(elevation))
+
+    if not (0 <= el_idx < 90):
+        return None
+    return (el_idx * 360 + az_idx) * 2
+
+
+def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
+    """
+    Manages LiDAR data: reads it, populates background map during scans,
+    saves the map, and detects satellites against it.
+    """
+    try:
+        with serial.Serial(port, baudrate, timeout=0.1) as ser:
+            print("[LiDAR] Serial opened, reading data...")
+            while not shared_data["shutdown"].value:
+                distance, strength = read_tfmini_data(ser)
+                if distance is not None:
+                    with shared_data["lidar_data"].get_lock():
+                        shared_data["lidar_data"][0] = distance
+                        shared_data["lidar_data"][1] = strength
+                        shared_data["lidar_data"][2] = time.time()
+
+                    if shared_data["scan_trigger"].value:
+                        with shared_data["stepper_degrees"].get_lock():
+                            az = shared_data["stepper_degrees"].value
+                        with shared_data["servo_degrees"].get_lock():
+                            el = shared_data["servo_degrees"].value
+
+                        index = get_background_index(az, el)
+                        if index is not None:
+                            with shared_data["background_lidar"].get_lock():
+                                shared_data["background_lidar"][index] = strength
+                                shared_data["background_lidar"][index + 1] = distance
+
+                    if shared_data["save_background"].value:
+                        print("[LiDAR] Saving background data to file...")
+                        with shared_data["background_lidar"].get_lock():
+                            background_np = np.array(shared_data["background_lidar"]).reshape((90, 360, 2))
+                        np.save("background_data.npy", background_np)
+                        print("[LiDAR] Background data saved to 'background_data.npy'.")
+                        with shared_data["save_background"].get_lock():
+                            shared_data["save_background"].value = False
+
+                    validate_lidar_data(distance, strength, shared_data)
+
+                time.sleep(0.005)
+
+    except serial.SerialException as e:
+        print(f"[LiDAR] Serial error: {e}")
+    print("[LiDAR] Shutting down.")
+
+
 def enhanced_validate_lidar_data(distance_cm, strength, shared_data):
     """
     Enhanced validation for acquisition system with configurable parameters
