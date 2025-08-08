@@ -413,6 +413,13 @@ class TrackerWindow(QtWidgets.QMainWindow):
     def set_pan_right(self):
         self.shared_data['pan_right'].value = True
 
+    def plot_orbit_line(self):
+        valid_points = self.orbit_xyz[~np.isnan(self.orbit_xyz).any(axis=1)]
+        scaled_points = valid_points * self.debug_scale
+        orbit_line = gl.GLLinePlotItem(pos=scaled_points, color=(1, 1, 0, 1), width=2, antialias=True, mode='line_strip')
+        self.view.addItem(orbit_line)
+        self.orbit_items.append(orbit_line)
+
     def background_scan(self):
         print("[GUI] Triggering background scan")
         self.shared_data["scan_trigger"].value = True
