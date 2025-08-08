@@ -1,106 +1,129 @@
-# main.py
-
 from multiprocessing import Process, Queue, Array, Value
 from webcam.blob_tracker import run_tracking
-from motors.motor_controller import run_motor_control
+from motors.motor_controller import run_motor_control  # if used
 from LiDAR.lidar_handler import run_lidar
-from LiDAR.Kalman_Filter import run_ekf_tracker, setup_ekf_shared_data
-from drone_controller import run_drone_control
+from LiDAR.Kalman_Filter import run_ekf_tracker
+from tracking.tracker import tracking  # if used
 from GUI import run_gui
 import time
+
 
 if __name__ == "__main__":
     # Shared memory setup
     lidar_data = Array('d', 3)  # [distance, strength, timestamp]
-    shutdown_flag = Value('b', False)
-    scan_trigger = Value('b', False)
-    save_background = Value('b', False)
-    
-    # Manual motor controls
+    backgorund_data = Array('d', 4)  #background array after scan
+    shutdown_flag = Value('b', False)  # Boolean flag
+    scan_trigger = Value('b', False)  # GUI sets this to True to trigger scan
     tilt_up = Value('b', False)
     tilt_down = Value('b', False)
     pan_left = Value('b', False)
     pan_right = Value('b', False)
-    
-    # Motor/System State
-    stepper_degrees = Value('d', 0.0)
-    servo_degrees = Value('d', 90.0)
-    cumulative_error = Value('d', 0.0)
-    flipped = Value('b', False)
-    
-    # Targeting
+    flipped = Value('b', False)  
     go_to_target = Value('b', False)
+    save_background = Value('b', False)
+    background_ready = Value('b', False)
+    acquire_points = Value('b', False)   # GUI triggers this
+    ekf_start = Value('b', False)        # set True after 3 points collected
+    ekf_running = Value('b', False)      # EKF has started
+    points_buffer = Array('d', 12)       # 3 points x [az, el, dist_m, strength]
+    points_count = Value('i', 0)  # Number of points collected
+    ekf_initialized = Value('b', False)  # Flag to indicate if EKF is initialized
+    estimated_azimuth = Value('d', 0.0)
+    estimated_elevation = Value('d', 0.0)
+    predicted_azimuth = Value('d', 0.0)
+    predicted_elevation = Value('d', 0.0)
+    ekf_confidence = Value('d', 0.0)
+    lidar_acceptance_range = Array('d', [1.0, 2.0])  # min_m, max_m
+    background_path = "background_data.npy"
+
+    # Optional shared values for future expansion
+    direction = Value('i', -1)
+    target = Value('i', -1)
+    commanding = Value('i', -1)
+    stepper_degrees = Value('d', 0.0)  # For stepper motor position
+    cumulative_error = Value('d', 0.0)  # For PID control
+    servo_degrees = Value('d', 90.0)  # For servo position
     target_azimuth = Value('d', 0.0)
     target_elevation = Value('d', 0.0)
-    
-    # LiDAR Background & Detection
-    # Stores [strength, range] for each point. Azimuth: 0-359, Elevation: 0-89
-    background_lidar = Array('d', 360 * 90 * 2) 
+    # Background LiDAR data for satellite detection
+    background_lidar = Array('d', 360 * 90 * 2)  # [azimuth, elevation, [strength, range]]
     satellite_points = Array('d', 4)  # [azimuth, elevation, strength, range]
-    satellite_detected = Value('b', False)
+    satellite_detected = Value('b', False)  # Flag to indicate if a satellite is detected
+
     
-    # --- NEW: Flag to enable/disable autonomous drone following ---
-    follow_drone_enabled = Value('b', False)
+    
 
     # Build shared_data dictionary
     shared_data = {
         "lidar_data": lidar_data,
+        "background_data": backgorund_data,
         "shutdown": shutdown_flag,
-        "scan_trigger": scan_trigger,
-        "save_background": save_background,
+        "direction": direction,
+        "target": target,
+        "commanding": commanding,
+        "scan_trigger": scan_trigger,  # GUI sets this to True to trigger scan
+        "stepper_degrees": stepper_degrees,
+        "cumulative_error": cumulative_error,  # For PID
+        "servo_degrees": servo_degrees,  # For servo position
         "tilt_up": tilt_up,
         "tilt_down": tilt_down,
         "pan_left": pan_left,
         "pan_right": pan_right,
-        "stepper_degrees": stepper_degrees,
-        "servo_degrees": servo_degrees,
-        "cumulative_error": cumulative_error,
-        "flipped": flipped,
-        "go_to_target": go_to_target,
-        "target_azimuth": target_azimuth,
-        "target_elevation": target_elevation,
-        "background_lidar": background_lidar,
-        "satellite_points": satellite_points,
-        "satellite_detected": satellite_detected,
-        "follow_drone_enabled": follow_drone_enabled, # NEW
+        "flipped": flipped,  # For GUI to know if the camera is flipped
+        "go_to_target": go_to_target,  # For GUI to trigger go to target
+        "target_azimuth": target_azimuth,  # For target azimuth
+        "target_elevation": target_elevation,  # For target elevation
+        "background_lidar": background_lidar,  # Shared background LiDAR data
+        "satellite_points": satellite_points,  # Shared array for satellite points
+        "satellite_detected": satellite_detected,  # Flag for satellite detection
+        "save_background": save_background,  # Flag to save background data
+        "background_ready": background_ready,       
+        "background_path": background_path,
+        "acquire_points": acquire_points,
+        "ekf_start": ekf_start,
+        "ekf_running": ekf_running,
+        "points_buffer": points_buffer,
+        "points_count": points_count,
+        "ekf_initialized": ekf_initialized,
+        "estimated_azimuth": estimated_azimuth,
+        "estimated_elevation": estimated_elevation,
+        "predicted_azimuth": predicted_azimuth,
+        "predicted_elevation": predicted_elevation,
+        "ekf_confidence": ekf_confidence, 
+        "lidar_acceptance_range": lidar_acceptance_range,  # [min_m, max_m]  
     }
 
-    # Add EKF specific shared data
-    shared_data = setup_ekf_shared_data(shared_data)
-    
-    # Process setup
-    movement_queue = Queue()
-    p_motor = Process(target=run_motor_control, args=(shared_data, movement_queue))
-    p_gui = Process(target=run_gui, args=(shared_data, movement_queue))
-    p_lidar = Process(target=run_lidar, args=(shared_data,))
-    p_ekf = Process(target=run_ekf_tracker, args=(shared_data,))
-    p_drone_controller = Process(target=run_drone_control, args=(shared_data,))
-
     # Start processes
-    p_motor.start()
-    p_gui.start()
-    p_lidar.start()
-    p_ekf.start()
-    p_drone_controller.start()
+    # p1 = Process(target=run_tracking, args=(shared_data,))
+    movement_queue = Queue()
+    p2 = Process(target=run_motor_control, args=(shared_data, movement_queue))
+    p3 = Process(target=run_gui, args=(shared_data, movement_queue))
+    p4 = Process(target=run_lidar, args=(shared_data,))
+    p5 = Process(target=run_ekf_tracker, args=(shared_data,))
+
+    # p1.start()
+    p2.start()
+    p3.start()
+    p4.start()
+    p5.start()
 
     try:
-        # The main process now simply waits for the GUI to exit or a manual interrupt
-        p_gui.join()
-        print("GUI closed, initiating shutdown...")
-        shutdown_flag.value = True
-
+        while not shutdown_flag.value:
+            time.sleep(0.05)
     except KeyboardInterrupt:
-        print("Ctrl+C pressed, initiating shutdown...")
+        print("Ctrl+C pressed")
         shutdown_flag.value = True
 
     print("Terminating processes...")
-    # Give processes a moment to shut down cleanly
-    time.sleep(2)
+    # p1.terminate()
+    p2.terminate()
+    p3.terminate()
+    p4.terminate()
+    p5.terminate()
 
-    # Terminate any stubborn processes
-    if p_motor.is_alive(): p_motor.terminate()
-    if p_lidar.is_alive(): p_lidar.terminate()
-    if p_ekf.is_alive(): p_ekf.terminate()
-    if p_drone_controller.is_alive(): p_drone_controller.terminate()
-    
+    # p1.join()
+    p2.join()
+    p3.join()
+    p4.join()
+    p5.join()
     print("Program exited cleanly")
