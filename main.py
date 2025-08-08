@@ -66,10 +66,6 @@ if __name__ == "__main__":
     background_lidar = Array('d', 360 * 90 * 2)  # shape (90,360,2) flattened
     satellite_points = Array('d', 4)
     satellite_detected = Value('b', False)
-    acquisition_state = Value('i', 0)  # 0:IDLE, 1:START, 2:PHASE1, etc.
-    # [0]=internal_timer, [1]=internal_counter, [2]=center_az, [3]=center_el
-    acquisition_internal_state = Array('d', 4)
-
 
     shared_data = {
         "lidar_data": lidar_data,
@@ -109,8 +105,6 @@ if __name__ == "__main__":
         "ekf_confidence": ekf_confidence,
         "lidar_acceptance_range": lidar_acceptance_range,
         "go_to_zero": go_to_zero,
-        "acquisition_state": acquisition_state,
-        "acquisition_internal_state": acquisition_internal_state,
     }
 
     # ===== Start processes (non-daemon; default) =====
