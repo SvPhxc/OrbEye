@@ -16,28 +16,68 @@ STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 
 # (stepper_worker is unchanged)
-def stepper_worker(pi, movement_queue, shared_data):
+def stepper_worker(movement_queue, shared_data):
     print("[WORKER] Stepper worker started.")
+    pi = pigpio.pi()                  # <-- create our own client
+    if not pi.connected:
+        print("[WORKER] pigpio not connected.")
+        return
+
     pulse_wave_id = -1
     try:
         us_delay = 500
-        pi.wave_add_generic([pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, us_delay), pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, us_delay)])
+        pi.set_mode(STEPPER_PULSE_PIN, pigpio.OUTPUT)
+        pi.set_mode(STEPPER_DIR_PIN, pigpio.OUTPUT)
+
+        pi.wave_add_generic([
+            pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, us_delay),
+            pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, us_delay)
+        ])
         pulse_wave_id = pi.wave_create()
+
         while not shared_data['shutdown'].value:
-            try: command = movement_queue.get(timeout=0.1); _ = command if command is not None else (_ for _ in ()).throw(Exception())
-            except Exception: continue
-            direction, degrees_to_move, _ = command; ideal_microsteps = degrees_to_move / MICROSTEP_ANGLE
-            total_microsteps_to_consider = ideal_microsteps + shared_data['cumulative_error'].value; actual_microsteps_to_take = round(total_microsteps_to_consider)
-            shared_data['cumulative_error'].value = total_microsteps_to_consider - actual_microsteps_to_take
-            if actual_microsteps_to_take == 0: continue
-            pi.write(STEPPER_DIR_PIN, 0 if direction == 'left' else 1); repeats_lsb = actual_microsteps_to_take % 256; repeats_msb = actual_microsteps_to_take // 256
-            chain = [255, 0, pulse_wave_id, 255, 1, repeats_lsb, repeats_msb]; pi.wave_chain(chain)
-            while pi.wave_tx_busy(): sleep(0.01)
-            current_pos = shared_data['stepper_degrees'].value; actual_degrees_this_move = actual_microsteps_to_take * MICROSTEP_ANGLE
-            new_pos = (current_pos - actual_degrees_this_move) if direction == 'left' else (current_pos + actual_degrees_this_move)
+            try:
+                command = movement_queue.get(timeout=0.1)
+            except Exception:
+                continue
+            if command is None:
+                break
+
+            direction, degrees_to_move, _ = command
+            ideal_microsteps = degrees_to_move / MICROSTEP_ANGLE
+            total = ideal_microsteps + shared_data['cumulative_error'].value
+            actual_steps = round(total)
+            shared_data['cumulative_error'].value = total - actual_steps
+            if actual_steps == 0:
+                continue
+
+            pi.write(STEPPER_DIR_PIN, 0 if direction == 'left' else 1)
+            repeats_lsb = actual_steps % 256
+            repeats_msb = actual_steps // 256
+            chain = [255, 0, pulse_wave_id, 255, 1, repeats_lsb, repeats_msb]
+            pi.wave_chain(chain)
+
+            while pi.wave_tx_busy():
+                if shared_data['shutdown'].value:
+                    break
+                sleep(0.01)
+
+            # update shared az
+            current_pos = shared_data['stepper_degrees'].value
+            actual_deg = actual_steps * MICROSTEP_ANGLE
+            new_pos = (current_pos - actual_deg) if direction == 'left' else (current_pos + actual_deg)
             shared_data['stepper_degrees'].value = new_pos % 360
+
     finally:
-        if pulse_wave_id != -1 and pi.connected: pi.wave_delete(pulse_wave_id)
+        try:
+            pi.wave_tx_stop()
+        except: pass
+        try:
+            if pulse_wave_id != -1:
+                pi.wave_delete(pulse_wave_id)
+        except: pass
+        if pi.connected:
+            pi.stop()
         print("[WORKER] Stepper worker shutting down.")
 
 

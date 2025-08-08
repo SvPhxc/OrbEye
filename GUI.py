@@ -480,6 +480,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     def Pshutdown(self):
         print("Shutting down GUI...")
+        self.shared_data["go_to_zero"].value = True
         QtWidgets.QApplication.quit()
         self.shared_data["shutdown"].value = True
 
