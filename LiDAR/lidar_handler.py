@@ -66,8 +66,10 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
                 if shared_data.get("background_ready", Value('b', False)).value and (time.time() - bg_loaded_ts > 1.0):
                     bg_index = build_bg_index(shared_data["background_path"])
                     bg_loaded_ts = time.time()
-                    # Optional: print how many cells were indexed
                     print(f"[TFmini] Background index built: {len(bg_index)} cells")
+                    # ✅ prevent rebuild loop
+                    with shared_data["background_ready"].get_lock():
+                        shared_data["background_ready"].value = False
 
                 # ---- Read the latest LiDAR sample + current mount angles ----
                 with lidar_sh.get_lock():
@@ -134,10 +136,20 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
 
 
 def save_background(background_array, lidar_data, stepper, servo):
-    pos = int(str(round(stepper)) + str(round(servo)))
+    az = int(round(stepper)) % 360
+    el = int(round(servo))
+    if not (0 <= el < 90):
+        return background_array  # skip out-of-scan elevations
+
+    # Grid index: one unique cell per (el, az)
+    pos = el * 360 + az
+
+    # Keep your column order: [pos, distance, strength, timestamp]
     new_row = np.array([[pos, lidar_data[0], lidar_data[1], lidar_data[2]]])
+
+    # NOTE: np.append reallocates; acceptable for quick patch
     background_array = np.append(background_array, new_row, axis=0)
-    print([pos, lidar_data[0], lidar_data[1], lidar_data[2]])
+    # print([pos, lidar_data[0], lidar_data[1], lidar_data[2]])
     return background_array
 
 def pos_to_index(shared_data):
@@ -183,22 +195,52 @@ def detect_satellite_direct_index(current_strength, current_range_cm, az_deg, el
         return True
 
 def decode_pos(pos_int):
-    s = str(int(pos_int)).zfill(4)
-    az = int(s[:-2]) % 360
-    el = int(s[-2:])  # 0..99 (you scan 0..90)
+    pos = int(pos_int)
+    az = pos % 360
+    el = pos // 360
     return az, el
 
 def build_bg_index(path):
-    """Return a dict[(az,el)] = (strength, distance_cm)."""
+    """
+    Load background_data.npy (rows: [pos, distance_cm, strength, timestamp])
+    and return a dict[(az, el)] = (strength, distance_cm) using the *new*
+    grid index where pos = el*360 + az.
+    """
+    import numpy as np
+    idx = {}
+
     try:
         bg = np.load(path)
-    except Exception:
-        return {}
-    idx = {}
+    except Exception as e:
+        print(f"[TFmini] Could not load background file '{path}': {e}")
+        return idx
+
+    # Accept both 1D (flattened) or 2D (rows) just in case
+    if bg.ndim == 1 and bg.size % 4 == 0:
+        bg = bg.reshape((-1, 4))
+
     for row in bg:
-        az, el = decode_pos(row[0])
+        if len(row) < 3:
+            continue
+
+        pos = int(row[0])
         dist_cm = float(row[1])
         strength = float(row[2])
-        if 10 < dist_cm < 2000:   # cheap sanity filter
-            idx[(az, el)] = (strength, dist_cm)
+
+        # --- decode using the new scheme ---
+        az = pos % 360
+        el = pos // 360
+
+        # basic sanity filters (tweak as you like)
+        if not (0 <= az < 360 and 0 <= el < 90):
+            continue
+        if not (10.0 <= dist_cm <= 2000.0):
+            continue
+        if not np.isfinite(dist_cm) or not np.isfinite(strength):
+            continue
+
+        # If duplicates happen, keep the last one (or replace with an average)
+        idx[(az, el)] = (strength, dist_cm)
+
+    print(f"[TFmini] Background index built: {len(idx)} cells")
     return idx
