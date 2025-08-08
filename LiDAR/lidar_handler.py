@@ -10,8 +10,8 @@ def enhanced_validate_lidar_data(distance_cm, strength, shared_data):
         return False
 
     # Use configurable distance range from GUI
-    min_range_m = shared_data.get("lidar_acceptance_range", [6.0, 12.0])[0]
-    max_range_m = shared_data.get("lidar_acceptance_range", [6.0, 12.0])[1]
+    min_range_m = shared_data.get("lidar_acceptance_range", [0.5, 12.0])[0]
+    max_range_m = shared_data.get("lidar_acceptance_range", [0.5, 12.0])[1]
 
     min_range_cm = min_range_m * 100
     max_range_cm = max_range_m * 100
