@@ -136,13 +136,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_add_sphere.clicked.connect(self.add_sphere)
         controls.addWidget(self.btn_add_sphere)
 
-        # Toggle Orbit Button
-        self.btn_toggle_orbit = QtWidgets.QPushButton("Toggle Orbit")
-        self.btn_toggle_orbit.setCheckable(True)
-        self.btn_toggle_orbit.setChecked(True)
-        self.btn_toggle_orbit.toggled.connect(self.toggle_orbit)
-        controls.addWidget(self.btn_toggle_orbit)
-
         # Toggle Background-Scan Button
         self.btn_background = QtWidgets.QPushButton("Background Scan")
         self.btn_background.clicked.connect(self.background_scan)

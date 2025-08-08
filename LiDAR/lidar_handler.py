@@ -1,6 +1,7 @@
 import serial
 import numpy as np
 import time
+from multiprocessing import Value
 
 def read_tfmini_data(serial_port):
     buffer = bytearray()
