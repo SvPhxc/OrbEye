@@ -15,7 +15,6 @@ STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 
-# (stepper_worker is unchanged)
 def stepper_worker(movement_queue, shared_data):
     print("[WORKER] Stepper worker started.")
     pi = pigpio.pi()                  # <-- create our own client
@@ -111,6 +110,7 @@ def move(pi, direction, degrees, delay, movement_queue, shared_data):
     elif direction in ['up', 'down']:
         target_degrees = shared_data['servo_degrees'].value + (degrees if direction == 'up' else -degrees)
         smooth_servo_move(pi, target_degrees, shared_data)
+
 def track_target(pi, target_azimuth, target_elevation, delay, movement_queue, shared_data):
     current_pan = shared_data["stepper_degrees"].value; current_tilt = shared_data["servo_degrees"].value; adjusted_azimuth = target_azimuth % 360; adjusted_elevation = max(0, min(180, target_elevation))
     delta_pan = (adjusted_azimuth - current_pan + 540) % 360 - 180
@@ -143,39 +143,123 @@ def concentric_ring_search_smooth(pi, shared_data):
         pan_direction *= -1
     print("\n--- HIGH-FIDELITY SEARCH FINISHED ---"); smooth_servo_move(pi, 90.0, shared_data); return True
 
-def spiral_acquire_three(pi, shared_data, movement_queue):
-    """Tight outward spiral, stop once 3 validated points are captured by LiDAR process."""
-    center_az = shared_data['stepper_degrees'].value
-    center_el = shared_data['servo_degrees'].value
+def _mod360(x):
+    return x % 360.0
 
-    radius = 0.5   # degrees
-    turns = 2
-    step = 0.5
-    direction = 1  # keep current pan direction
-    shared_data["points_count"].value = 0
+def _frange(start, stop, step):
+    """Forward range in degrees, inclusive of stop, monotonically increasing modulo 360."""
+    vals = []
+    cur = start
+    # number of steps along the forward arc from start to stop (wrapping allowed)
+    total = ((_mod360(stop - start) / step) if step > 0 else 0) + 1
+    n_steps = max(1, int(math.floor(total + 1e-9)))
+    for i in range(n_steps):
+        vals.append(_mod360(start + i * step))
+        # stop if we reached or slightly passed the end (tolerate float error)
+        if _mod360(vals[-1] - stop) < 1e-6 or i == n_steps - 1:
+            break
+    if vals[-1] != _mod360(stop):
+        vals.append(_mod360(stop))
+    return vals
 
-    for t in np.arange(0.0, turns*360.0, step):
-        if shared_data['shutdown'].value: break
-        if shared_data["points_count"].value >= 3: break
+def _build_arc_waypoints(center_azimuth, delta_az, step_deg):
+    """
+    Build a list of azimuth waypoints along the arc centered at center_azimuth and
+    spanning delta_az (total width). Always goes from start (center - delta/2) forward
+    to end (center + delta/2), handling wrap-around at 0/360.
+    """
+    delta_az = max(0.0, min(360.0, float(delta_az)))
+    step_deg = abs(float(step_deg)) if step_deg != 0 else 1.0
+    if delta_az < 1e-6:
+        return [_mod360(center_azimuth)]
+    start = _mod360(center_azimuth - delta_az / 2.0)
+    end   = _mod360(center_azimuth + delta_az / 2.0)
 
-        # simple Archimedean spiral
-        r = radius + 0.01*t
-        az = center_az + direction * r * math.cos(math.radians(t))
-        el = max(0, min(90, center_el + r * math.sin(math.radians(t))))
+    # Move forward (increasing modulo 360) from start to end
+    waypoints = _frange(start, end, step_deg)
+    return waypoints
 
-        track_target(pi, az, el, 0.0001, movement_queue, shared_data)
-        sleep(0.03)
+def half_circle_search(
+    pi,
+    center_azimuth,
+    delta_az,
+    elevation,
+    step_deg,
+    dwell_s,
+    movement_queue,
+    shared_data,
+    delay_per_move=0.01,
+):
+    """
+    Sweep along a half-arc (or any arc width you pass via delta_az) centered at `center_azimuth`,
+    at fixed `elevation`. Keeps going back-and-forth until shared_data["aquire_points"] is False.
+
+    Args:
+        pi: pigpio handle or your motor controller handle
+        center_azimuth (float): center heading for the arc (deg, 0..360)
+        delta_az (float): total arc width (deg). For a half-circle use 180. Smaller is fine.
+        elevation (float): fixed elevation to hold (deg, clamped to [0,180] by track_target)
+        step_deg (float): azimuth step between waypoints (deg, > 0)
+        dwell_s (float): time to dwell at each waypoint (seconds)
+        movement_queue: your queue for motion commands
+        shared_data (dict-like): must contain "aquire_points", "stepper_degrees", "servo_degrees"
+        delay_per_move (float): passed to `track_target` as `delay`
+    """
+    # Precompute the baseline arc (forward direction)
+    forward = _build_arc_waypoints(center_azimuth, delta_az, step_deg)
+    if len(forward) < 2:
+        forward = [forward[0], forward[0]]
+
+    backward = list(reversed(forward))
+
+    def _should_continue():
+        # supports raw bool or multiprocessing.Value
+        v = shared_data.get("aquire_points", True)
+        try:
+            return bool(v.value)
+        except AttributeError:
+            return bool(v)
+
+    try:
+        # Loop forever until aquire_points is cleared
+        while _should_continue():
+            for path in (forward, backward):
+                for az in path:
+                    if not _should_continue():
+                        break
+                    # Move to waypoint using your provided function
+                    track_target(
+                        pi=pi,
+                        target_azimuth=az,
+                        target_elevation=elevation,
+                        delay=delay_per_move,
+                        movement_queue=movement_queue,
+                        shared_data=shared_data,
+                    )
+                    if dwell_s > 0:
+                        # Short, interruptible dwell
+                        t_end = time.time() + dwell_s
+                        while time.time() < t_end and _should_continue():
+                            time.sleep(min(0.02, dwell_s))
+                if not _should_continue():
+                    break
+    except KeyboardInterrupt:
+        # Graceful stop on Ctrl+C if you're running from a script
+        pass
 
 def initialize_gpio():
     GPIO.setwarnings(False); GPIO.setmode(GPIO.BCM)
     GPIO.setup(STEPPER_ENABLE_PIN, GPIO.OUT); GPIO.setup(STEPPER_SLEEP_PIN, GPIO.OUT)
     GPIO.output(STEPPER_SLEEP_PIN, GPIO.HIGH); GPIO.output(STEPPER_ENABLE_PIN, GPIO.LOW)
 
+
+
 def _graceful_stop(signum, frame, shared_data):
     try:
         shared_data['shutdown'].value = True
     except Exception:
         pass
+
 
 def run_motor_control(shared_data, movement_queue):
     # catch Ctrl-C / SIGTERM so we flip the flag instead of dying
@@ -211,8 +295,7 @@ def run_motor_control(shared_data, movement_queue):
             if shared_data['pan_right'].value: move(pi, 'right', 5.0, 0.0001, movement_queue, shared_data); shared_data['pan_right'].value = False
             if shared_data["go_to_target"].value: track_target(pi, shared_data["target_azimuth"].value, shared_data["target_elevation"].value, 0.0001, movement_queue, shared_data); shared_data["go_to_target"].value = False
             if shared_data["acquire_points"].value:
-                spiral_acquire_three(pi, shared_data, movement_queue)
-                shared_data["acquire_points"].value = False
+                half_circle_search(pi, center_azimuth=75, delta_az=30, elevation=0, step_deg=1, dwell_s=0, movement_queue=movement_queue, shared_data=shared_data, delay_per_move=0.01)
                 if shared_data["points_count"].value >= 3:
                     shared_data["ekf_start"].value = True
             if shared_data['ekf_running'].value:
@@ -226,8 +309,6 @@ def run_motor_control(shared_data, movement_queue):
         # Don’t enqueue movements here—worker may already be exiting
         try:
             print("[MotorControl] Returning to home position (0,0)...", flush=True)
-            track_target(pi, 0, 0, 0.0001, movement_queue, shared_data)
-            sleep(3.6)
         except Exception as e:
             print(f"[MotorControl] Could not return to home: {e}", flush=True)
         try:
