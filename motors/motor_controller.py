@@ -164,11 +164,31 @@ def run_motor_control(shared_data, movement_queue):
 
     try:
         while not shared_data['shutdown'].value:
-            # ... your loop exactly as before ...
+            if shared_data['scan_trigger'].value: concentric_ring_search_smooth(pi, shared_data); shared_data['scan_trigger'].value = False; shared_data['save_background'].value = True
+            if shared_data['tilt_up'].value: move(pi, 'up', 5.0, None, movement_queue, shared_data); shared_data['tilt_up'].value = False
+            if shared_data['tilt_down'].value: move(pi, 'down', 5.0, None, movement_queue, shared_data); shared_data['tilt_down'].value = False
+            if shared_data['pan_left'].value: move(pi, 'left', 5.0, 0.0001, movement_queue, shared_data); shared_data['pan_left'].value = False
+            if shared_data['pan_right'].value: move(pi, 'right', 5.0, 0.0001, movement_queue, shared_data); shared_data['pan_right'].value = False
+            if shared_data["go_to_target"].value: track_target(pi, shared_data["target_azimuth"].value, shared_data["target_elevation"].value, 0.0001, movement_queue, shared_data); shared_data["go_to_target"].value = False
+            if shared_data["acquire_points"].value:
+                spiral_acquire_three(pi, shared_data, movement_queue)
+                shared_data["acquire_points"].value = False
+                if shared_data["points_count"].value >= 3:
+                    shared_data["ekf_start"].value = True
+            if shared_data['ekf_running'].value:
+                track_target(pi,
+                    shared_data["predicted_azimuth"].value,
+                    shared_data["predicted_elevation"].value,
+                    0.0001, movement_queue, shared_data)
             sleep(0.05)
     finally:
         print("[MotorControl] Shutting down...", flush=True)
         # Don’t enqueue movements here—worker may already be exiting
+        try:
+            print("[MotorControl] Returning to home position (0,0)...", flush=True)
+            track_target(pi, 0, 0, 0.0001, movement_queue, shared_data)
+        except Exception as e:
+            print(f"[MotorControl] Could not return to home: {e}", flush=True)
         try:
             pigpio.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
         except Exception:
