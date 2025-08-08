@@ -25,15 +25,21 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
     TFmini process for Raspberry Pi UART.
     Publishes [distance, strength, timestamp] to shared_data["lidar_data"]
     """
-
+    bg_index = {}
+    bg_loaded_ts = 0
     background_array = np.empty((0,4))  # Placeholder for background data
 
+    distance_cm = lidar_data[0]
+    strength = lidar_data[1]
+    az = shared_data["stepper_degrees"].value
+    el = shared_data["servo_degrees"].value
 
     try:
         with serial.Serial(port, baudrate, timeout=1) as ser:
             print("[TFmini] Serial opened, reading data...")
             while not shared_data["shutdown"].value:
                 distance, strength = read_tfmini_data(ser)
+
                 if distance is not None and strength is not None:
                     lidar_data = shared_data["lidar_data"]
                     lidar_data[0] = distance
@@ -42,16 +48,43 @@ def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
                     #print("Wrote to shared_data:", list(lidar_data))
                 time.sleep(0.01)
 
+                if (shared_data["acquire_points"].value or shared_data["ekf_running"].value) and validate_lidar_data(distance_cm, strength, shared_data):
+                        detect_satellite_direct_index(strength, distance_cm, az, el, shared_data, bg_index)
+
                 if shared_data["scan_trigger"].value:
                     stepper = shared_data["stepper_degrees"].value 
                     servo = shared_data["servo_degrees"].value
                     background_array = save_background(background_array, lidar_data, stepper, servo)
 
+
+                if shared_data["acquire_points"].value and shared_data["satellite_detected"].value:
+                    # read latest satellite_points and write into points_buffer
+                    az = shared_data["satellite_points"][0]
+                    el = shared_data["satellite_points"][1]
+                    strength = shared_data["satellite_points"][2]
+                    dist_m = shared_data["satellite_points"][3] / 100.0  # cm -> m
+
+                    with shared_data["points_count"].get_lock():
+                        k = shared_data["points_count"].value
+                        if k < 3:
+                            base = 4*k
+                            pb = shared_data["points_buffer"]
+                            pb[base+0] = az
+                            pb[base+1] = el
+                            pb[base+2] = dist_m
+                            pb[base+3] = strength
+                            shared_data["points_count"].value = k + 1
+
+                    shared_data["satellite_detected"].value = False
+
+                if shared_data["background_ready"].value and (time.time() - bg_loaded_ts > 1.0):
+                    bg_index = build_bg_index(shared_data["background_path"])
+                    bg_loaded_ts = time.time()
+
                 if shared_data["save_background"].value:
-                    np.save("background_data.npy", background_array)
-                    print(background_array)
-                    print("Background data saved to background_data.npy")
-                    #shared_data["background_data"] = background_array
+                    np.save(shared_data["background_path"], background_array)
+                    shared_data["background_ready"].value = True
+                    print(f"Background data saved to {shared_data['background_path']}, rows={len(background_array)}")
                     shared_data["save_background"].value = False
     except serial.SerialException as e:
         print(f"[TFmini] Serial error: {e}")
@@ -76,75 +109,54 @@ def append_lidar_data(np_array, shared_data):
     np_array[index] = [strength, distance, timestamp]
     
 #pass lidar_data.distance and lidar_data.strength from the shared memory
-def validate_lidar_data(distance_cm, strength,shared_data):
-    """
-    Validates LiDAR data based on distance and signal strength.
-    
-    Args:
-        distance_cm (int/float): Distance in centimeters (or special error codes)
-        strength (int): Signal strength value between 0-65535
-    
-    Returns:
-        bool: True if data is valid, False otherwise
-        Call detect_satellite_direct_index if valid
-    """
-    
-    # Check for special error conditions first
-    if distance_cm == -1 or strength < 100:
-        print("Reading is unreliable - strength is < 100")
-
+def validate_lidar_data(distance_cm, strength, shared_data):
+    if distance_cm in (-1, -2, -4) or strength < 100:
         return False
-    
-    elif distance_cm == -2 or strength == 65535:
-        print("Signal strength saturation")
+    if distance_cm < 300 or distance_cm > 1200:   # 3–12 m for your EKF
         return False
-    
-    elif distance_cm == -4:
-        print("Ambient light saturation")
+    if strength < 5000:   # your 50,000 was too high for TFmini; start modest
         return False
-    #have this in an array
-    # Check for valid distance range (3-10 meters = 300-1000 cm)
-    if distance_cm < 300 or distance_cm > 1000:
-        print(f"Distance {distance_cm}cm is outside valid range (300-1000cm / 3-10m)")
-        return False
-    
-    # Check for minimum strength requirement
-    if strength < 50000:
-        print(f"Signal strength {strength} is below minimum threshold (50,000)")
-        return False
-    # If all checks pass
-    print(f"Valid reading: {distance_cm}cm, strength: {strength}")
-    azimuth = shared_data["stepper_degrees"]
-    elevation = shared_data["servo_degrees"]
-    detect_satellite_direct_index(distance_cm, strength, azimuth, elevation, shared_data)
     return True
   
-#To be called when the reading is valid
-def detect_satellite_direct_index(current_strength, current_range, azimuth, elevation,shared_data):
-    background_lidar = shared_data["background_lidar"]
-    # Convert angles to array indices
-    az_idx = int(azimuth)
-    el_idx = int(elevation)
-    
-    # Direct lookup - O(1)!
-    background_strength, background_range = background_lidar[az_idx][el_idx]
-    
-    # Simple comparison
-    strength_diff = abs(current_strength - background_strength)
-    range_diff = abs(current_range - background_range)
-    
-    # Check tolerances
-    if strength_diff <= 5000 and range_diff <= 50:
-        shared_data["satellite_detected"].value = False  # Background object
-        return False  # Background object
-    else:
-        shared_data["satellite_points"][0] = az_idx
-        shared_data["satellite_points"][1] = el_idx 
-        shared_data["satellite_points"][2] = current_strength
-        shared_data["satellite_points"][3] = current_range
-        #saved the new points in this array later to be passed to kalman filter
-        shared_data["satellite_detected"].value = True
-        
-        print(f"Satellite detected at azimuth: {azimuth}, elevation: {elevation}, strength: {current_strength}, range: {current_range}")
-        return True   # Potential satellite
 
+def detect_satellite_direct_index(current_strength, current_range_cm, az_deg, el_deg, shared_data, bg_index):
+    az = int(round(az_deg)) % 360
+    el = int(round(el_deg))
+    b = bg_index.get((az, el))
+    if not b:
+        return False  # no background ref here yet
+
+    bg_strength, bg_range_cm = b
+    strength_diff = abs(current_strength - bg_strength)
+    range_diff = abs(current_range_cm - bg_range_cm)
+
+    if strength_diff <= 5000 and range_diff <= 50:
+        shared_data["satellite_detected"].value = False
+        return False
+    else:
+        # write the *latest* point (we’ll collect 3 separately)
+        sp = shared_data["satellite_points"]
+        sp[0], sp[1], sp[2], sp[3] = az, el, current_strength, current_range_cm
+        shared_data["satellite_detected"].value = True
+        return True
+
+def decode_pos(pos_int):
+    s = str(int(pos_int)).zfill(4)
+    az = int(s[:-2]) % 360
+    el = int(s[-2:])  # 0..99 (you scan 0..90)
+    return az, el
+
+def build_bg_index(path):
+    """Return a dict[(az,el)] = (strength, distance_cm)."""
+    try:
+        bg = np.load(path)
+    except Exception:
+        return {}
+    idx = {}
+    for row in bg:
+        az, el = decode_pos(row[0])
+        dist_cm = float(row[1])
+        strength = float(row[2])
+        if 10 < dist_cm < 2000:   # cheap sanity filter
+            idx[(az, el)] = (strength, dist_cm)
+    return idx

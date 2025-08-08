@@ -102,6 +102,29 @@ def concentric_ring_search_smooth(pi, shared_data):
         pan_direction *= -1
     print("\n--- HIGH-FIDELITY SEARCH FINISHED ---"); smooth_servo_move(pi, 90.0, shared_data); return True
 
+def spiral_acquire_three(pi, shared_data, movement_queue):
+    """Tight outward spiral, stop once 3 validated points are captured by LiDAR process."""
+    center_az = shared_data['stepper_degrees'].value
+    center_el = shared_data['servo_degrees'].value
+
+    radius = 0.5   # degrees
+    turns = 2
+    step = 0.5
+    direction = 1  # keep current pan direction
+    shared_data["points_count"].value = 0
+
+    for t in np.arange(0.0, turns*360.0, step):
+        if shared_data['shutdown'].value: break
+        if shared_data["points_count"].value >= 3: break
+
+        # simple Archimedean spiral
+        r = radius + 0.01*t
+        az = center_az + direction * r * math.cos(math.radians(t))
+        el = max(0, min(90, center_el + r * math.sin(math.radians(t))))
+
+        track_target(pi, az, el, 0.0001, movement_queue, shared_data)
+        sleep(0.03)
+
 def initialize_gpio():
     GPIO.setwarnings(False); GPIO.setmode(GPIO.BCM)
     GPIO.setup(STEPPER_ENABLE_PIN, GPIO.OUT); GPIO.setup(STEPPER_SLEEP_PIN, GPIO.OUT)
@@ -130,6 +153,16 @@ def run_motor_control(shared_data, movement_queue):
             if shared_data['pan_left'].value: move(pi, 'left', 5.0, 0.0001, movement_queue, shared_data); shared_data['pan_left'].value = False
             if shared_data['pan_right'].value: move(pi, 'right', 5.0, 0.0001, movement_queue, shared_data); shared_data['pan_right'].value = False
             if shared_data["go_to_target"].value: track_target(pi, shared_data["target_azimuth"].value, shared_data["target_elevation"].value, 0.0001, movement_queue, shared_data); shared_data["go_to_target"].value = False
+            if shared_data["acquire_points"].value:
+                spiral_acquire_three(pi, shared_data, movement_queue)
+                shared_data["acquire_points"].value = False
+                if shared_data["points_count"].value >= 3:
+                    shared_data["ekf_start"].value = True
+            if shared_data['ekf_running'].value:
+                track_target(pi,
+                    shared_data["predicted_azimuth"].value,
+                    shared_data["predicted_elevation"].value,
+                    0.0001, movement_queue, shared_data)
             sleep(0.05)
     finally:
         print("[MotorControl] Shutting down...")

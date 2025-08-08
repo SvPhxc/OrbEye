@@ -162,131 +162,143 @@ class CloseRangeDroneTrackerEKF(ExtendedKalmanFilter):
 
 def run_ekf_tracker(shared_data):
     """
-    Main EKF tracking process that reads shared sensor data and provides 
-    position estimates and predictions.
+    EKF tracking loop:
+      - Waits for ekf_start + at least 2 acquired points
+      - Initializes EKF from the first two points (position + velocity)
+      - Then runs predict() every cycle and update() whenever a fresh, valid LiDAR sample arrives
+      - Publishes estimated_* and predicted_* angles + ekf_confidence to shared_data
     """
-    print("EKF Tracker: Starting drone tracking process...")
-    
-    # Initialize EKF
+    print("[EKF] Starting tracker...")
     ekf = CloseRangeDroneTrackerEKF(std_acc=0.04, distance_constraint=True)
-    
-    # Tracking state
-    initialization_buffer = []
-    INIT_BUFFER_SIZE = 2
+
+    # State for init & measurements
+    waiting_for_init = True
     last_measurement_time = None
     measurement_count = 0
-    
-    # Add new shared variables for EKF outputs
-    ekf_initialized = shared_data.get('ekf_initialized', Value('b', False))
-    estimated_azimuth = shared_data.get('estimated_azimuth', Value('d', 0.0))
-    estimated_elevation = shared_data.get('estimated_elevation', Value('d', 0.0))
-    predicted_azimuth = shared_data.get('predicted_azimuth', Value('d', 0.0))
-    predicted_elevation = shared_data.get('predicted_elevation', Value('d', 0.0))
-    ekf_confidence = shared_data.get('ekf_confidence', Value('d', 0.0))
-    
-    print("EKF Tracker: Waiting for sensor data...")
-    
+
+    # Handy refs to shared Values (created in main via setup_ekf_shared_data)
+    ekf_initialized     = shared_data['ekf_initialized']
+    estimated_azimuth   = shared_data['estimated_azimuth']
+    estimated_elevation = shared_data['estimated_elevation']
+    predicted_azimuth   = shared_data['predicted_azimuth']
+    predicted_elevation = shared_data['predicted_elevation']
+    ekf_confidence      = shared_data['ekf_confidence']
+
+    # Optional control flags you added
+    ekf_running   = shared_data['ekf_running']      # bool: track predictions?
+    ekf_start     = shared_data['ekf_start']        # bool: set True after spiral acquisition
+    points_count  = shared_data['points_count']     # int: how many valid points captured (0..3)
+    points_buffer = shared_data['points_buffer']    # 12 doubles: [az,el,dist_m,str]*3
+
     while not shared_data["shutdown"].value:
         try:
-            # Read current sensor data
-            current_time = time.time()
-            
-            # Get measurements from shared data
+            now = time.time()
+
+            # ---------------------------
+            # 1) Handle EKF initialization
+            # ---------------------------
+            if waiting_for_init and ekf_start.value:
+                k = points_count.value
+                if k >= 2:
+                    pb = points_buffer  # layout: [az0, el0, dist0_m, str0, az1, el1, dist1_m, str1, az2, el2, dist2_m, str2]
+
+                    # First two points → init buffer
+                    z1 = np.array([np.deg2rad(pb[0]), np.deg2rad(pb[1]), pb[2]])
+                    z2 = np.array([np.deg2rad(pb[4]), np.deg2rad(pb[5]), pb[6]])
+                    initialization_buffer = [
+                        {'z': z1, 'time': now,         'strength': pb[3]},
+                        {'z': z2, 'time': now + 0.10,  'strength': pb[7]},
+                    ]
+
+                    init_ekf(ekf, initialization_buffer)
+                    ekf.initialized = True
+                    ekf.last_time = now
+                    with ekf_initialized.get_lock():
+                        ekf_initialized.value = True
+                    with ekf_running.get_lock():
+                        ekf_running.value = True  # start following predictions (your motor loop decides how to act)
+
+                    waiting_for_init = False
+                    print("[EKF] Initialized from acquired points.")
+                    # Optional: immediately use 3rd point as first update if present
+                    if k >= 3:
+                        z3 = np.array([np.deg2rad(pb[8]), np.deg2rad(pb[9]), pb[10]])
+                        R3 = create_measurement_noise_matrix(pb[11], measurement_count)
+                        ekf.update_with_angle_wrapping(z3, ekf.HJacobian, ekf.h, R3)
+                        measurement_count += 1
+                        last_measurement_time = now + 0.20
+                    continue  # next loop
+
+            # If not initialized yet, just idle
+            if not ekf.initialized:
+                time.sleep(0.02)
+                continue
+
+            # ---------------------------
+            # 2) Normal EKF tracking loop
+            # ---------------------------
+            # Time update
+            dt = now - (ekf.last_time if ekf.last_time is not None else now)
+            if dt <= 0.0:
+                dt = 1e-3
+
+            ekf.update_matrices(dt)
+            ekf.predict()
+
+            # Try to read a fresh LiDAR sample
             with shared_data["lidar_data"].get_lock():
-                lidar_distance = shared_data["lidar_data"][0]
-                lidar_strength = shared_data["lidar_data"][1] 
-                lidar_timestamp = shared_data["lidar_data"][2]
-            
+                lidar_distance_cm = shared_data["lidar_data"][0]
+                lidar_strength    = shared_data["lidar_data"][1]
+                lidar_ts          = shared_data["lidar_data"][2]
+
+            # Current sensor pointing (for az/el)
             with shared_data["stepper_degrees"].get_lock():
-                current_azimuth = shared_data["stepper_degrees"].value
-                
+                current_az_deg = shared_data["stepper_degrees"].value
             with shared_data["servo_degrees"].get_lock():
-                current_elevation = shared_data["servo_degrees"].value
-            
-            # Check if we have valid new measurements
-            if (lidar_distance > 0 and 6.0 <= lidar_distance <= 12.0 and 
-                lidar_strength > 0.1 and
-                (last_measurement_time is None or lidar_timestamp > last_measurement_time)):
-                
-                last_measurement_time = lidar_timestamp
+                current_el_deg = shared_data["servo_degrees"].value
+
+            # Only update if we have a *new* and *plausible* measurement
+            has_new = (last_measurement_time is None) or (lidar_ts > last_measurement_time)
+            valid_range = (shared_data["lidar_acceptance_range"][0] <= lidar_distance_cm*100 <= shared_data["lidar_acceptance_range"][1] )  
+            valid_strength = (lidar_strength >= 5000)             # conservative TFmini gate
+
+            if has_new and valid_range and valid_strength:
+                z = np.array([
+                    np.deg2rad(current_az_deg % 360.0),
+                    np.deg2rad(max(0.0, min(90.0, current_el_deg))),
+                    lidar_distance_cm / 100.0  # m
+                ])
+                R = create_measurement_noise_matrix(lidar_strength, measurement_count)
+                ekf.update_with_angle_wrapping(z, ekf.HJacobian, ekf.h, R)
+
+                last_measurement_time = lidar_ts
                 measurement_count += 1
-                
-                # Convert measurements to proper format
-                az_rad = np.deg2rad(current_azimuth)
-                el_rad = np.deg2rad(current_elevation)
-                
-                # Create measurement vector
-                z = np.array([az_rad, el_rad, lidar_distance])
-                
-                if not ekf.initialized:
-                    # Collect initialization data
-                    measurement_data = {
-                        'z': z,
-                        'time': current_time,
-                        'strength': lidar_strength
-                    }
-                    initialization_buffer.append(measurement_data)
-                    
-                    if len(initialization_buffer) >= INIT_BUFFER_SIZE:
-                        # Initialize EKF with first two measurements
-                        init_ekf(ekf, initialization_buffer)
-                        ekf.initialized = True
-                        ekf.last_time = current_time
-                        
-                        with ekf_initialized.get_lock():
-                            ekf_initialized.value = True
-                            
-                        print(f"EKF Tracker: Initialized after {measurement_count} measurements")
-                else:
-                    # Normal EKF operation
-                    dt = current_time - ekf.last_time
-                    if dt > 0:
-                        # Update EKF matrices
-                        ekf.update_matrices(dt)
-                        
-                        # Create dynamic measurement noise based on signal strength
-                        R = create_measurement_noise_matrix(lidar_strength, measurement_count)
-                        
-                        # Predict and update
-                        ekf.predict()
-                        ekf.update_with_angle_wrapping(z, ekf.HJacobian, ekf.h, R)
-                        
-                        # Get current estimates
-                        est_az, est_el = state_to_angles(ekf.x)
-                        
-                        # Get prediction for next time step
-                        pred_az, pred_el = get_next_prediction(ekf, dt)
-                        
-                        # Calculate confidence based on covariance trace
-                        confidence = calculate_confidence(ekf.P)
-                        
-                        # Update shared variables
-                        with estimated_azimuth.get_lock():
-                            estimated_azimuth.value = est_az
-                        with estimated_elevation.get_lock():
-                            estimated_elevation.value = est_el
-                        with predicted_azimuth.get_lock():
-                            predicted_azimuth.value = pred_az
-                        with predicted_elevation.get_lock():
-                            predicted_elevation.value = pred_el
-                        with ekf_confidence.get_lock():
-                            ekf_confidence.value = confidence
-                        
-                        ekf.last_time = current_time
-                        
-                        # Optional: Print periodic status
-                        if measurement_count % 20 == 0:
-                            print(f"EKF: Az={est_az:.2f}°, El={est_el:.2f}°, "
-                                f"Pred: Az={pred_az:.2f}°, El={pred_el:.2f}°, "
-                                f"Conf={confidence:.3f}")
-            
+
+            # Publish outputs (estimates + one-step prediction)
+            est_az_deg, est_el_deg = state_to_angles(ekf.x)
+            pred_az_deg, pred_el_deg = get_next_prediction(ekf, max(dt, 0.02))
+            conf = calculate_confidence(ekf.P)
+
+            with estimated_azimuth.get_lock():
+                estimated_azimuth.value = float(est_az_deg)
+            with estimated_elevation.get_lock():
+                estimated_elevation.value = float(est_el_deg)
+            with predicted_azimuth.get_lock():
+                predicted_azimuth.value = float(pred_az_deg)
+            with predicted_elevation.get_lock():
+                predicted_elevation.value = float(pred_el_deg)
+            with ekf_confidence.get_lock():
+                ekf_confidence.value = float(conf)
+
+            ekf.last_time = now
+            time.sleep(0.01)  # ~50 Hz loop
+
         except Exception as e:
-            print(f"EKF Tracker Error: {e}")
-            time.sleep(0.01)
-        
-        time.sleep(0.02)  # 50Hz update rate
-    
-    print("EKF Tracker: Shutting down...")
+            print(f"[EKF] Error: {e}")
+            time.sleep(0.05)
+
+    print("[EKF] Shutting down...")
+
 
 def init_ekf(ekf, initialization_buffer):
     """Initialize EKF state using first two measurements."""
@@ -342,14 +354,4 @@ def calculate_confidence(P):
     confidence = 1.0 / (1.0 + position_uncertainty)
     return min(max(confidence, 0.0), 1.0)
 
-# Updated main function for integration
-def setup_ekf_shared_data(shared_data):
-    """Add EKF-specific shared variables to the shared_data dictionary."""
-    shared_data['ekf_initialized'] = Value('b', False)
-    shared_data['estimated_azimuth'] = Value('d', 0.0)
-    shared_data['estimated_elevation'] = Value('d', 0.0) 
-    shared_data['predicted_azimuth'] = Value('d', 0.0)
-    shared_data['predicted_elevation'] = Value('d', 0.0)
-    shared_data['ekf_confidence'] = Value('d', 0.0)
-    return shared_data
 

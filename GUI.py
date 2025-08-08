@@ -97,10 +97,18 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_show_background.clicked.connect(self.toggle_background_plot)
         target_controls.addWidget(self.btn_show_background)
 
-        # Follow Drone Button
-        self.btn_followDrone = QtWidgets.QPushButton("Follow Drone")
-        self.btn_followDrone.clicked.connect(self.on_go_clicked)
-        target_controls.addWidget(self.btn_followDrone)
+        self.btn_acquire = QtWidgets.QPushButton("Acquire (3 pts)")
+        self.btn_acquire.clicked.connect(self.accuire_points)
+        controls.addWidget(self.btn_acquire)
+
+        self.btn_stop_ekf = QtWidgets.QPushButton("Stop EKF")
+        self.btn_stop_ekf.clicked.connect(self.stopEKF)
+        controls.addWidget(self.btn_stop_ekf)
+
+        self.chk_track_pred = QtWidgets.QCheckBox("Track Prediction")
+        self.chk_track_pred.setChecked(True)
+        self.chk_track_pred.toggled.connect(self.on_track_pred_toggled)
+        controls.addWidget(self.chk_track_pred)
 
         # Spacer to push widgets to the top
         target_controls.addStretch()
@@ -232,6 +240,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         controls.addStretch()
 
         
+    
 
     def fetch_and_plot_satellite(self):
         name = self.sat_name_input.text().strip()
@@ -271,6 +280,16 @@ class TrackerWindow(QtWidgets.QMainWindow):
                                     color=(0, 1, 1, 1), width=2)
         self.view.addItem(sofia_line)
         self.orbit_items.append(sofia_line)
+
+    def accuire_points(self):
+        self.shared_data["acquire_points"].value = True
+
+    def stopEKF(self):
+        self.shared_data["ekf_running"].value = False
+
+    def on_track_pred_toggled(self, enabled):
+        # optional: mirror this into shared_data if you want to disable tracking without stopping EKF
+        self.shared_data["ekf_running"].value = bool(enabled)
 
     def remove_orbit(self):
         for item in self.orbit_items:
