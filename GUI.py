@@ -364,21 +364,21 @@ class TrackerWindow(QtWidgets.QMainWindow):
             
             points = []
             # Iterate through the array to convert spherical to Cartesian
-            for el_idx, az_row in enumerate(bg_data):
-                for az_idx, reading in enumerate(az_row):
-                    strength, dist_cm = reading
-                    # Plot only valid points within a reasonable range
-                    if 10 < dist_cm < 1200:
-                        # Convert to radians for math
-                        el_rad = np.radians(el_idx)
-                        az_rad = np.radians(az_idx)
-                        dist_m = dist_cm / 10.0  #Scale to meters for visualization
+            for rading in bg_data:
 
-                        # Spherical to Cartesian conversion
-                        x = dist_m * np.cos(el_rad) * np.cos(az_rad)
-                        y = - dist_m * np.cos(el_rad) * np.sin(az_rad)
-                        z = dist_m * np.sin(el_rad)
-                        points.append([x, y, z])
+                pos, dist_cm, strength = reading[0]
+                # Plot only valid points within a reasonable range
+                if 10 < dist_cm < 1600:
+                    # Convert to radians for math
+                     az = int(pos) % 360
+                     el = int(pos) // 360
+                     dist_m = dist_cm / 10.0  #Scale to meters for visualization
+
+                     # Spherical to Cartesian conversion
+                     x = dist_m * np.cos(el_rad) * np.cos(az_rad)
+                     y = - dist_m * np.cos(el_rad) * np.sin(az_rad)
+                     z = dist_m * np.sin(el_rad)
+                     points.append([x, y, z])
 
             if points:
                 print(f"[GUI] Plotting {len(points)} background points.")
