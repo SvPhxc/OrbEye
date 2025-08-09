@@ -377,8 +377,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
                      dist_m = dist_cm / 10.0  #Scale to meters for visualization
 
                      # Spherical to Cartesian conversion
-                     x = - dist_m * np.cos(el_rad) * np.cos(az_rad)
-                     y = - dist_m * np.cos(el_rad) * np.sin(az_rad)
+                     x =  dist_m * np.cos(el_rad) * np.cos(az_rad)
+                     y =  dist_m * np.cos(el_rad) * np.sin(az_rad)
                      z = dist_m * np.sin(el_rad)
                      points.append([x, y, z])
 
