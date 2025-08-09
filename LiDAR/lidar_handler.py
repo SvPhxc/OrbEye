@@ -252,11 +252,11 @@ def detect_satellite_direct_index(current_strength, current_range_cm, az_deg, el
             detection_score += 1.0
 
     # Criterion 4: Strength threshold
-    if current_strength < 5000:
+    if current_strength < 100:
         detection_score *= 0.5
 
     # Final decision
-    detection_threshold = 4.0
+    detection_threshold = 3.0
     is_detected = detection_score >= detection_threshold
 
     if is_detected:
