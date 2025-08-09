@@ -6,6 +6,7 @@ import RPi.GPIO as GPIO
 from time import sleep, monotonic
 import math
 import signal
+from enhanced_acquisition import enhanced_spiral_acquire_three
 
 # --- NEW: Define constants for GPIO pins for clarity ---
 SERVO_PIN = 13
@@ -165,6 +166,78 @@ def _graceful_stop(signum, frame, shared_data):
         pass
 
 
+def spiral_acquire_three(pi, shared_data, movement_queue):
+    """
+    Enhanced 3-point acquisition strategy that:
+    1. Finds first point with highest strength by scanning around TLE prediction
+    2. Uses spiral search to find second point and estimate drone velocity
+    3. Predicts drone position for third point based on movement pattern
+    """
+    return enhanced_spiral_acquire_three(pi, shared_data, movement_queue)
+
+
+# Also add this TLE-based initial search function
+def tle_guided_initial_search(pi, shared_data, movement_queue, tle_data=None):
+    """
+    Use TLE data to guide initial search area for drone detection.
+    This should be called before the 3-point acquisition if TLE data is available.
+    """
+    if not tle_data:
+        print("[TLE] No TLE data provided, using current position")
+        return
+
+    try:
+        # This is a placeholder - you'll need to integrate with your TLE processing
+        # from datahandler import get_current_satellite_position
+
+        # predicted_az, predicted_el = get_current_satellite_position(tle_data)
+        # For now, use a simple search pattern
+
+        print("[TLE] Performing TLE-guided initial search...")
+
+        # Get current position as starting point
+        current_az = shared_data["stepper_degrees"].value
+        current_el = shared_data["servo_degrees"].value
+
+        # Search in expanding squares around current position
+        search_radius = 10.0  # degrees
+        step_size = 2.0  # degrees
+
+        best_strength = 0
+        best_position = None
+
+        for radius in np.arange(step_size, search_radius, step_size):
+            for angle in np.arange(0, 360, 30):  # 12 positions per ring
+                if shared_data['shutdown'].value:
+                    return
+
+                search_az = current_az + radius * np.cos(np.radians(angle))
+                search_el = max(0, min(90, current_el + radius * np.sin(np.radians(angle))))
+
+                track_target(pi, search_az, search_el, 0.0001, movement_queue, shared_data)
+                time.sleep(0.1)  # Dwell time
+
+                # Check LiDAR reading
+                with shared_data["lidar_data"].get_lock():
+                    distance_cm = shared_data["lidar_data"][0]
+                    strength = shared_data["lidar_data"][1]
+
+                # Check if this looks like a satellite
+                if 300 <= distance_cm <= 1200 and strength > best_strength:
+                    best_strength = strength
+                    best_position = (search_az, search_el)
+                    print(f"[TLE] Found candidate at ({search_az:.1f}°, {search_el:.1f}°) "
+                          f"with strength {strength}")
+
+        # Move to best position found
+        if best_position:
+            track_target(pi, best_position[0], best_position[1], 0.0001, movement_queue, shared_data)
+            print(f"[TLE] Positioned at best candidate location")
+
+    except Exception as e:
+        print(f"[TLE] Error in TLE-guided search: {e}")
+
+
 def run_motor_control(shared_data, movement_queue):
     # catch Ctrl-C / SIGTERM so we flip the flag instead of dying
     signal.signal(signal.SIGINT,  lambda s,f: _graceful_stop(s,f,shared_data))
@@ -199,10 +272,18 @@ def run_motor_control(shared_data, movement_queue):
             if shared_data['pan_right'].value: move(pi, 'right', 5.0, 0.0001, movement_queue, shared_data); shared_data['pan_right'].value = False
             if shared_data["go_to_target"].value: track_target(pi, shared_data["target_azimuth"].value, shared_data["target_elevation"].value, 0.0001, movement_queue, shared_data); shared_data["go_to_target"].value = False
             if shared_data["acquire_points"].value:
-                square_search(75, 0, 10, shared_data, movement_queue, pi)
+                # Optional: perform TLE-guided initial search first
+                # tle_guided_initial_search(pi, shared_data, movement_queue)
+
+                # Run enhanced 3-point acquisition
+                success = spiral_acquire_three(pi, shared_data, movement_queue)
                 shared_data["acquire_points"].value = False
-                if shared_data["points_count"].value >= 3:
+
+                if success and shared_data["points_count"].value >= 3:
                     shared_data["ekf_start"].value = True
+                    print("[MotorControl] EKF initialization ready")
+                else:
+                    print("[MotorControl] 3-point acquisition failed")
             if shared_data['ekf_running'].value:
                 track_target(pi,
                     shared_data["predicted_azimuth"].value,

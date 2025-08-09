@@ -5,7 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="35c70f19-7828-4c72-ae95-c5846c6a2230" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/GUI.py" beforeDir="false" afterPath="$PROJECT_DIR$/GUI.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/LiDAR/lidar_handler.py" beforeDir="false" afterPath="$PROJECT_DIR$/LiDAR/lidar_handler.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -17,7 +17,7 @@
   </component>
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
-    "git-widget-placeholder": "main",
+    "git-widget-placeholder": "Vibing-with-Claude",
     "node.js.selected.package.tslint": "(autodetect)"
   }
 }]]></component>
