@@ -1,3 +1,14 @@
+"""
+Enhanced 3-Point Acquisition Strategy for Drone Tracking Initialization
+
+This module enhances the existing spiral_acquire_three function without changing names.
+"""
+
+import numpy as np
+import math
+import time
+from collections import deque
+
 def enhanced_spiral_acquire_three(pi, shared_data, movement_queue):
     """
     Enhanced version that replaces the existing spiral_acquire_three function.
