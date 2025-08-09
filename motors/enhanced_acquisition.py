@@ -30,7 +30,7 @@ def enhanced_spiral_acquire_three(pi, shared_data, movement_queue):
     acquired_points = []
 
     # Search parameters
-    min_strength_threshold = 8000
+    min_strength_threshold = 2000
     spiral_radius_start = 1.0
     spiral_radius_max = 8.0
     spiral_step = 0.3
@@ -205,7 +205,7 @@ def check_current_detection(shared_data):
     current_el = shared_data["servo_degrees"].value
 
     # Check if within expected drone range
-    if not (300 <= distance_cm <= 1200):
+    if not (100 <= distance_cm <= 1200):
         return None
 
     if strength < 1000:
