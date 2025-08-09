@@ -17,41 +17,66 @@ STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 
 #maybe add a function to take it to the inital defined position first
-scan_path= calculate_scan_path.calculate_scan_path(delta_azimuth=5, distance_meters=2,initial_pan_angle=0, initial_tilt_angle=45)
 
-def start_arc_search(scan_path, shared_data, pi, movement_queue):
-    commands = calculate_scan_path.execute_scan_sequence(scan_path)
+def start_arc_search(shared_data, pi, movement_queue,
+                     delta_azimuth=50, distance_meters=2,
+                     initial_pan_angle=0, initial_tilt_angle=0,
+                     pause_at_ends=0.2):
+    """
+    Ping-pong scan along an arc until shared_data['acquire_points'].value is False.
+    """
+    # Go to start position
+    track_target(pi, initial_pan_angle, initial_tilt_angle, 0.0001, movement_queue, shared_data)
 
-    for direction, degrees in commands:
-        # Read current positions LIVE from shared memory
-        current_pan  = shared_data['stepper_degrees'].value
-        current_tilt = shared_data['servo_degrees'].value
+    # Build forward commands from path
+    scan_path = calculate_scan_path.calculate_scan_path(
+        delta_azimuth, distance_meters, initial_pan_angle, initial_tilt_angle
+    )
+    forward = calculate_scan_path.execute_scan_sequence(scan_path)
 
-        if direction == "right":
-            target_pan, target_tilt = (current_pan + degrees, current_tilt)
-        elif direction == "left":
-            target_pan, target_tilt = (current_pan - degrees, current_tilt)
-        elif direction == "up":
-            target_pan, target_tilt = (current_pan, current_tilt + degrees)
-        elif direction == "down":
-            target_pan, target_tilt = (current_pan, current_tilt - degrees)
-        else:
-            continue
+    # Build reverse commands
+    dir_inv = {'left': 'right', 'right': 'left', 'up': 'down', 'down': 'up'}
+    backward = [(dir_inv[d], deg) for (d, deg) in reversed(forward)]
 
-        # 1) Do tilt first (blocking), clamped
-        smooth_servo_move(pi, max(0, min(180, target_tilt)), shared_data)
+    def run_sequence(commands):
+        for direction, degrees in commands:
+            if not shared_data['acquire_points'].value or shared_data['shutdown'].value:
+                return False
 
-        # 2) Then pan via worker (queued), wait for completion
-        if direction in ['left','right']:
-            move(pi, direction, abs(degrees), 0.0001, movement_queue, shared_data)
-            # wait for worker to finish this segment
-            while shared_data['stepper_busy'].value and not shared_data['shutdown'].value:
-                sleep(0.01)
+            # Read current live positions
+            current_pan  = shared_data['stepper_degrees'].value
+            current_tilt = shared_data['servo_degrees'].value
 
-        # Optional: final tolerance check (±2°)
-        pan_err  = abs((shared_data['stepper_degrees'].value - (target_pan % 360) + 540) % 360 - 180)
-        tilt_err = abs(shared_data['servo_degrees'].value - target_tilt)
-        # print or log errors here if needed
+            # Compute targets
+            if direction == "right":
+                target_pan, target_tilt = (current_pan + degrees, current_tilt)
+            elif direction == "left":
+                target_pan, target_tilt = (current_pan - degrees, current_tilt)
+            elif direction == "up":
+                target_pan, target_tilt = (current_pan, current_tilt + degrees)
+            elif direction == "down":
+                target_pan, target_tilt = (current_pan, current_tilt - degrees)
+            else:
+                continue
+
+            # 1) Tilt first
+            if direction in ['up', 'down']:
+                smooth_servo_move(pi, max(0, min(180, target_tilt)), shared_data)
+
+            # 2) Pan via worker
+            elif direction in ['left', 'right']:
+                move(pi, direction, abs(degrees), 0.0001, movement_queue, shared_data)
+                while shared_data['stepper_busy'].value and not shared_data['shutdown'].value:
+                    sleep(0.01)
+
+        return True
+
+    # Loop until acquire_points is False
+    while shared_data['acquire_points'].value and not shared_data['shutdown'].value:
+        if not run_sequence(forward): break
+        if pause_at_ends: sleep(pause_at_ends)
+        if not run_sequence(backward): break
+        if pause_at_ends: sleep(pause_at_ends)
 
 
 def stepper_worker(movement_queue, shared_data):
@@ -265,7 +290,7 @@ def run_motor_control(shared_data, movement_queue):
             if shared_data["go_to_target"].value: track_target(pi, shared_data["target_azimuth"].value, shared_data["target_elevation"].value, 0.0001, movement_queue, shared_data); shared_data["go_to_target"].value = False
             if shared_data["acquire_points"].value:
                 #square_search(75, 0, 10, shared_data, movement_queue, pi)
-                start_arc_search(scan_path, shared_data, pi, movement_queue)
+                start_arc_search(shared_data, pi, movement_queue, 50, 2, 0, 0)
                 shared_data["acquire_points"].value = False
                 if shared_data["points_count"].value >= 3:
                     shared_data["ekf_start"].value = True
