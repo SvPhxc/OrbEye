@@ -227,7 +227,7 @@ def detect_satellite_direct_index(current_strength, current_range_cm, az_deg, el
     bg_strength, bg_range_cm = b
 
     # Multi-criteria detection scoring
-    detection_score = 0.0
+    detection_score = 1.0
 
     # Criterion 1: Strength difference
     strength_diff = abs(current_strength - bg_strength)
@@ -256,7 +256,7 @@ def detect_satellite_direct_index(current_strength, current_range_cm, az_deg, el
         detection_score *= 0.5
 
     # Final decision
-    detection_threshold = 3.0
+    detection_threshold = 2.0
     is_detected = detection_score >= detection_threshold
 
     if is_detected:
