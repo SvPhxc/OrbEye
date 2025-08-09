@@ -1,0 +1,54 @@
+[
+  {
+    "id": "document",
+    "version": "1.0",
+    "clock": {
+      "interval": "2025-08-07T00:00:00Z/2025-08-07T01:00:00Z",
+      "currentTime": "2025-08-07T00:00:00Z",
+      "multiplier": 60,
+      "step": "SYSTEM_CLOCK_MULTIPLIER"
+    }
+  },
+  {
+    "id": "satellite1",
+    "name": "Test Satellite",
+    "availability": "2025-08-07T00:00:00Z/2025-08-07T01:00:00Z",
+    "position": {
+      "interpolationAlgorithm": "LAGRANGE",
+      "interpolationDegree": 5,
+      "referenceFrame": "INERTIAL",
+      "epoch": "2025-08-07T00:00:00Z",
+      "cartesian": [
+        0, 7000000, 0, 0,
+        600, 6500000, 1000000, 500000,
+        1200, 6000000, 2000000, 1000000,
+        1800, 5500000, 3000000, 1500000,
+        2400, 5000000, 4000000, 2000000,
+        3000, 4500000, 5000000, 2500000
+      ]
+    },
+    "point": {
+      "color": {
+        "rgba": [255, 0, 0, 255]
+      },
+      "outlineColor": {
+        "rgba": [0, 0, 0, 255]
+      },
+      "outlineWidth": 1,
+      "pixelSize": 10
+    },
+    "path": {
+      "material": {
+        "solidColor": {
+          "color": {
+            "rgba": [255, 255, 0, 255]
+          }
+        }
+      },
+      "width": 2,
+      "leadTime": 300,
+      "trailTime": 300,
+      "resolution": 120
+    }
+  }
+]

@@ -4,6 +4,7 @@ from multiprocessing import Process, Queue
 import pigpio
 import RPi.GPIO as GPIO
 from time import sleep, monotonic
+import LiDAR.calculate_scan_path_test as calculate_scan_path
 import math
 import signal
 
@@ -14,6 +15,51 @@ STEPPER_DIR_PIN = 3
 STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
+
+#maybe add a function to take it to the inital defined position first
+scan_path= calculate_scan_path.calculate_scan_path(delta_azimuth=5, distance_meters=2,initial_pan_angle=0, initial_tilt_angle=45)
+
+def start_arc_search(scan_path,shared_data):
+    commands = calculate_scan_path.execute_scan_sequence(scan_path)
+    # Track expected positions
+    expected_pan = shared_data["stepper_degrees"]   # Value('d', ...)
+    expected_tilt = shared_data["servo_degrees"]
+    
+    for direction, degrees in commands:
+        # Calculate what the new position should be after this move
+        if direction == "right":
+            target_pan = expected_pan + degrees
+            target_tilt = expected_tilt
+        elif direction == "left":
+            target_pan = expected_pan - degrees
+            target_tilt = expected_tilt
+        elif direction == "up":
+            target_pan = expected_pan
+            target_tilt = expected_tilt + degrees
+        elif direction == "down":
+            target_pan = expected_pan
+            target_tilt = expected_tilt - degrees
+        
+        # Send the movement command
+        move(direction, degrees)
+        
+        # Wait until motors reach target position
+        while True:
+            # Check if both motors have reached their targets (with tolerance)
+            pan_reached = abs(expected_pan- target_pan) <= 2  # ±2° tolerance
+            tilt_reached = abs(expected_tilt - target_tilt) <= 2   # ±2° tolerance
+            
+            if pan_reached and tilt_reached:
+                # Both motors are in position, update expected values
+                expected_pan = target_pan
+                expected_tilt = target_tilt
+                break  # Move to next command
+            
+            # Small delay before checking again
+            time.sleep(0.1)
+    
+    print("All movements completed!")
+
 
 def stepper_worker(movement_queue, shared_data):
     print("[WORKER] Stepper worker started.")
@@ -238,3 +284,4 @@ def run_motor_control(shared_data, movement_queue):
         if pi.connected:
             pi.stop()
         GPIO.cleanup()
+        
