@@ -174,9 +174,9 @@ def validate_lidar_data(distance_cm, strength, shared_data):
     # Your existing basic checks
     if distance_cm in (-1, -2, -4) or strength < 100:
         return False
-    if distance_cm < 300 or distance_cm > 1200:
+    if distance_cm < 100 or distance_cm > 300:
         return False
-    if strength < 5000:  # Keeping your existing threshold
+    if strength <2100:  # Keeping your existing threshold
         return False
 
     # Additional stability check (optional - can be disabled)
@@ -233,10 +233,10 @@ def detect_satellite_direct_index(current_strength, current_range_cm, az_deg, el
     strength_diff = abs(current_strength - bg_strength)
     strength_ratio = current_strength / max(bg_strength, 1000)
 
-    if strength_diff > 3000:
+    if strength_diff > 200:
         detection_score += min(strength_diff / 1000.0, 5.0)
 
-    if strength_ratio > 1.5:
+    if strength_ratio > 1.1:
         detection_score += min(strength_ratio, 3.0)
 
     # Criterion 2: Range difference
@@ -246,7 +246,7 @@ def detect_satellite_direct_index(current_strength, current_range_cm, az_deg, el
         detection_score += min(range_diff / 100.0, 3.0)
 
     # Criterion 3: Expected drone characteristics
-    if 300 <= current_range_cm <= 1200:
+    if 100 <= current_range_cm <= 300:
         detection_score += 2.0
         if 500 <= current_range_cm <= 800:
             detection_score += 1.0
