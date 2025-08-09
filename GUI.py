@@ -364,14 +364,16 @@ class TrackerWindow(QtWidgets.QMainWindow):
             
             points = []
             # Iterate through the array to convert spherical to Cartesian
-            for rading in bg_data:
+            for reading in bg_data:
 
-                pos, dist_cm, strength = reading[0]
+                pos, dist_cm = reading[0], reading[1]
                 # Plot only valid points within a reasonable range
                 if 10 < dist_cm < 1600:
                     # Convert to radians for math
                      az = int(pos) % 360
                      el = int(pos) // 360
+                     az_rad = np.radians(az)
+                     el_rad = np.radians(el)
                      dist_m = dist_cm / 10.0  #Scale to meters for visualization
 
                      # Spherical to Cartesian conversion
