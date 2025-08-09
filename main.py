@@ -53,6 +53,7 @@ if __name__ == "__main__":
     ekf_confidence = Value('d', 0.0)
     lidar_acceptance_range = Array('d', [1.0, 2.0])  # min_m, max_m
     go_to_zero = Value('b', False)
+    stepper_busy = Value('b', False)
     background_path = "background_data.npy"
 
     direction = Value('i', -1)
@@ -105,6 +106,7 @@ if __name__ == "__main__":
         "ekf_confidence": ekf_confidence,
         "lidar_acceptance_range": lidar_acceptance_range,
         "go_to_zero": go_to_zero,
+        "stepper_busy": stepper_busy,
     }
 
     # ===== Start processes (non-daemon; default) =====

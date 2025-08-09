@@ -19,47 +19,39 @@ MICROSTEP_ANGLE = 0.05625
 #maybe add a function to take it to the inital defined position first
 scan_path= calculate_scan_path.calculate_scan_path(delta_azimuth=5, distance_meters=2,initial_pan_angle=0, initial_tilt_angle=45)
 
-def start_arc_search(scan_path,shared_data,pi, movement_queue):
+def start_arc_search(scan_path, shared_data, pi, movement_queue):
     commands = calculate_scan_path.execute_scan_sequence(scan_path)
-    # Track expected positions
-    expected_pan = shared_data["stepper_degrees"].value  # Value('d', ...)
-    expected_tilt = shared_data["servo_degrees"].value
-    
+
     for direction, degrees in commands:
-        # Calculate what the new position should be after this move
-        degrees_to_move = int(degrees)
+        # Read current positions LIVE from shared memory
+        current_pan  = shared_data['stepper_degrees'].value
+        current_tilt = shared_data['servo_degrees'].value
+
         if direction == "right":
-            target_pan = expected_pan + degrees_to_move
-            target_tilt = expected_tilt
+            target_pan, target_tilt = (current_pan + degrees, current_tilt)
         elif direction == "left":
-            target_pan = expected_pan - degrees_to_move
-            target_tilt = expected_tilt
+            target_pan, target_tilt = (current_pan - degrees, current_tilt)
         elif direction == "up":
-            target_pan = expected_pan
-            target_tilt = expected_tilt + degrees_to_move
+            target_pan, target_tilt = (current_pan, current_tilt + degrees)
         elif direction == "down":
-            target_pan = expected_pan
-            target_tilt = expected_tilt - degrees_to_move
-        
-        # Send the movement command
-        move(pi, direction, degrees, 0.001, movement_queue, shared_data)
-        
-        # Wait until motors reach target position
-        while True:
-            # Check if both motors have reached their targets (with tolerance)
-            pan_reached = abs(expected_pan- target_pan) <= 2  # ±2° tolerance
-            tilt_reached = abs(expected_tilt - target_tilt) <= 2   # ±2° tolerance
-            
-            if pan_reached and tilt_reached:
-                # Both motors are in position, update expected values
-                expected_pan = target_pan
-                expected_tilt = target_tilt
-                break  # Move to next command
-            
-            # Small delay before checking again
-            sleep(0.1)
-    
-    print("All movements completed!")
+            target_pan, target_tilt = (current_pan, current_tilt - degrees)
+        else:
+            continue
+
+        # 1) Do tilt first (blocking), clamped
+        smooth_servo_move(pi, max(0, min(180, target_tilt)), shared_data)
+
+        # 2) Then pan via worker (queued), wait for completion
+        if direction in ['left','right']:
+            move(pi, direction, abs(degrees), 0.0001, movement_queue, shared_data)
+            # wait for worker to finish this segment
+            while shared_data['stepper_busy'].value and not shared_data['shutdown'].value:
+                sleep(0.01)
+
+        # Optional: final tolerance check (±2°)
+        pan_err  = abs((shared_data['stepper_degrees'].value - (target_pan % 360) + 540) % 360 - 180)
+        tilt_err = abs(shared_data['servo_degrees'].value - target_tilt)
+        # print or log errors here if needed
 
 
 def stepper_worker(movement_queue, shared_data):
@@ -90,6 +82,7 @@ def stepper_worker(movement_queue, shared_data):
                 break
 
             direction, degrees_to_move, _ = command
+
             ideal_microsteps = degrees_to_move / MICROSTEP_ANGLE
             total = ideal_microsteps + shared_data['cumulative_error'].value
             actual_steps = round(total)
@@ -97,7 +90,10 @@ def stepper_worker(movement_queue, shared_data):
             if actual_steps == 0:
                 continue
 
+            shared_data['stepper_busy'].value = True  # <--- NEW
             pi.write(STEPPER_DIR_PIN, 0 if direction == 'left' else 1)
+
+            # drive the chain
             repeats_lsb = actual_steps % 256
             repeats_msb = actual_steps // 256
             chain = [255, 0, pulse_wave_id, 255, 1, repeats_lsb, repeats_msb]
@@ -108,11 +104,13 @@ def stepper_worker(movement_queue, shared_data):
                     break
                 sleep(0.01)
 
-            # update shared az
+            # update pos
             current_pos = shared_data['stepper_degrees'].value
             actual_deg = actual_steps * MICROSTEP_ANGLE
             new_pos = (current_pos - actual_deg) if direction == 'left' else (current_pos + actual_deg)
             shared_data['stepper_degrees'].value = new_pos % 360
+
+            shared_data['stepper_busy'].value = False  # <--- NEW
 
     finally:
         try:
@@ -190,20 +188,40 @@ def concentric_ring_search_smooth(pi, shared_data):
         pan_direction *= -1
     print("\n--- HIGH-FIDELITY SEARCH FINISHED ---"); smooth_servo_move(pi, 90.0, shared_data); return True
 
-def square_search(Az, El, delta_Az, shared_data, movement_queue, pi):
-    track_target(pi, Az, El, 0.0001, movement_queue, shared_data)
-    track_target(pi, Az - delta_Az, El, 0.0001, movement_queue, shared_data)
-    track_target(pi, Az - delta_Az, El+10, 0.0001, movement_queue, shared_data)
-    track_target(pi, Az, El+10, 0.0001, movement_queue, shared_data)
-    track_target(pi, Az + delta_Az, El+10, 0.0001, movement_queue, shared_data)
-    track_target(pi, Az + delta_Az, El, 0.0001, movement_queue, shared_data)
 
+def square_search(Az, El, delta_Az, shared_data, movement_queue, pi):
+    # Go to start
+    track_target(pi, Az, El, 0.0001, movement_queue, shared_data)
+    _wait_stepper_done(shared_data)
+
+    # left edge
+    track_target(pi, Az - delta_Az, El, 0.0001, movement_queue, shared_data)
+    _wait_stepper_done(shared_data)
+
+    # up
+    track_target(pi, Az - delta_Az, El + 10, 0.0001, movement_queue, shared_data)
+    _wait_stepper_done(shared_data)
+
+    # right
+    track_target(pi, Az, El + 10, 0.0001, movement_queue, shared_data)
+    _wait_stepper_done(shared_data)
+
+    # right edge
+    track_target(pi, Az + delta_Az, El + 10, 0.0001, movement_queue, shared_data)
+    _wait_stepper_done(shared_data)
+
+    # back down
+    track_target(pi, Az + delta_Az, El, 0.0001, movement_queue, shared_data)
+    _wait_stepper_done(shared_data)
+    
 def initialize_gpio():
     GPIO.setwarnings(False); GPIO.setmode(GPIO.BCM)
     GPIO.setup(STEPPER_ENABLE_PIN, GPIO.OUT); GPIO.setup(STEPPER_SLEEP_PIN, GPIO.OUT)
     GPIO.output(STEPPER_SLEEP_PIN, GPIO.HIGH); GPIO.output(STEPPER_ENABLE_PIN, GPIO.LOW)
 
-
+def _wait_stepper_done(shared_data):
+    while shared_data['stepper_busy'].value and not shared_data['shutdown'].value:
+        sleep(0.01)
 
 def _graceful_stop(signum, frame, shared_data):
     try:
