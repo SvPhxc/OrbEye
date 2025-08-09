@@ -32,8 +32,8 @@ def enhanced_spiral_acquire_three(pi, shared_data, movement_queue):
     # Search parameters
     min_strength_threshold = 2000
     spiral_radius_start = 1.0
-    spiral_radius_max = 14.0
-    spiral_step = 3
+    spiral_radius_max = 8.0
+    spiral_step = 2
     scan_dwell_time = 0.05
 
     try:
