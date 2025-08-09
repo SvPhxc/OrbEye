@@ -1,14 +1,3 @@
-"""
-Enhanced 3-Point Acquisition Strategy for Drone Tracking Initialization
-
-This module enhances the existing spiral_acquire_three function without changing names.
-"""
-
-import numpy as np
-import math
-import time
-from collections import deque
-
 def enhanced_spiral_acquire_three(pi, shared_data, movement_queue):
     """
     Enhanced version that replaces the existing spiral_acquire_three function.
@@ -74,6 +63,9 @@ def enhanced_spiral_acquire_three(pi, shared_data, movement_queue):
         # Optimize first point locally
         best_point = optimize_point_locally(pi, shared_data, movement_queue, best_point)
         acquired_points.append(best_point)
+        shared_data["points_count"].value = 1
+        print(f"[3PT] Acquired Point 1: {best_point['strength']} @ ({best_point['az']:.1f}°, {best_point['el']:.1f}°)")
+
 
         # Phase 2: Spiral search for second point
         print("[3PT] Phase 2: Spiral search for second point...")
@@ -85,7 +77,7 @@ def enhanced_spiral_acquire_three(pi, shared_data, movement_queue):
         angle = 0.0
         radius = spiral_radius_start
 
-        while radius < spiral_radius_max and not shared_data['shutdown'].value:
+        while radius < spiral_radius_max and not shared_data['shutdown'].value and len(spiral_detections) < 5:
             spiral_az = center_az + radius * math.cos(math.radians(angle))
             spiral_el = max(0, min(90, center_el + radius * math.sin(math.radians(angle))))
 
@@ -94,22 +86,26 @@ def enhanced_spiral_acquire_three(pi, shared_data, movement_queue):
 
             detection = check_current_detection(shared_data)
             if detection and detection['strength'] > min_strength_threshold:
-                detection['timestamp'] = time.time()
-                detection['spiral_angle'] = angle
-                detection['spiral_radius'] = radius
-                spiral_detections.append(detection)
-
-                print(f"[3PT] Spiral detection: {detection['strength']} @ "
-                      f"({detection['az']:.1f}°, {detection['el']:.1f}°)")
+                # Ensure point is distinct from the first one
+                dist_from_p1 = math.sqrt((detection['az'] - best_point['az'])**2 + (detection['el'] - best_point['el'])**2)
+                if dist_from_p1 > 1.0: # Only consider points at least 1 degree away
+                    detection['timestamp'] = time.time()
+                    spiral_detections.append(detection)
+                    print(f"[3PT] Spiral candidate: {detection['strength']} @ "
+                          f"({detection['az']:.1f}°, {detection['el']:.1f}°)")
 
             angle += 15.0
             radius += spiral_step * (angle / 360.0)
 
         # Select best second point
+        point2 = None
         if len(spiral_detections) >= 1:
             point2 = select_best_second_point(spiral_detections, best_point)
             if point2:
                 acquired_points.append(point2)
+                shared_data["points_count"].value = 2
+                print(f"[3PT] Acquired Point 2: {point2['strength']} @ ({point2['az']:.1f}°, {point2['el']:.1f}°)")
+
             else:
                 print("[3PT] Failed to find suitable second point")
                 return False
@@ -122,7 +118,7 @@ def enhanced_spiral_acquire_three(pi, shared_data, movement_queue):
 
         # Calculate velocity from first two points
         dt = point2['timestamp'] - best_point['timestamp']
-        if dt <= 0:
+        if dt <= 1e-3: # Avoid division by zero or near-zero
             dt = 0.1
 
         vel_az = (point2['az'] - best_point['az']) / dt
@@ -131,31 +127,42 @@ def enhanced_spiral_acquire_three(pi, shared_data, movement_queue):
         # Handle azimuth wraparound
         if abs(vel_az) > 180:
             vel_az = vel_az - 360 * np.sign(vel_az)
+            
+        # --- NEW: Clip the velocity to a reasonable range to prevent outliers ---
+        MAX_VEL_DEG_S = 100.0 # Sanity limit: 100 degrees per second
+        vel_az = np.clip(vel_az, -MAX_VEL_DEG_S, MAX_VEL_DEG_S)
+        vel_el = np.clip(vel_el, -MAX_VEL_DEG_S, MAX_VEL_DEG_S)
 
-        print(f"[3PT] Estimated velocity: {vel_az:.2f}°/s az, {vel_el:.2f}°/s el")
+        print(f"[3PT] Estimated (clipped) velocity: {vel_az:.2f}°/s az, {vel_el:.2f}°/s el")
 
-        # Predict future positions
+        # Predict future position
         prediction_time = 0.5
         predicted_az = point2['az'] + vel_az * prediction_time
         predicted_el = max(0, min(90, point2['el'] + vel_el * prediction_time))
 
-        # Search around predicted position
-        search_positions = [
-            (predicted_az, predicted_el),
-            (predicted_az + vel_az * 0.3, predicted_el + vel_el * 0.3),
-            (predicted_az + vel_az * 0.7, predicted_el + vel_el * 0.7),
-            (predicted_az - 1.0, predicted_el),
-            (predicted_az + 1.0, predicted_el),
-            (predicted_az, max(0, predicted_el - 1.0)),
-            (predicted_az, min(90, predicted_el + 1.0)),
-        ]
+        print(f"[3PT] Predicted position: ({predicted_az:.1f}°, {predicted_el:.1f}°)")
+
+        # --- NEW: Use a robust, fixed-size box search instead of a velocity-scaled pattern ---
+        search_positions = []
+        search_box_radius = 4.0  # Search an 8x8 degree box
+        search_step = 2.0        # With a 2 degree step size
+
+        # Start at the predicted point
+        search_positions.append((predicted_az, predicted_el))
+        
+        # Create a grid around the predicted point
+        for r in np.arange(search_step, search_box_radius + 1e-6, search_step):
+            for angle_deg in np.arange(0, 360, 45):
+                d_az = r * math.cos(math.radians(angle_deg))
+                d_el = r * math.sin(math.radians(angle_deg))
+                search_positions.append((predicted_az + d_az, predicted_el + d_el))
 
         best_point3 = None
-
-        for pred_az, pred_el in search_positions:
+        for i, (pred_az, pred_el) in enumerate(search_positions):
             if shared_data['shutdown'].value:
                 break
-
+            
+            print(f"[3PT] Searching for P3 at ({pred_az:.1f}, {pred_el:.1f}) [Step {i+1}/{len(search_positions)}]")
             track_target(pi, pred_az, pred_el, 0.0001, movement_queue, shared_data)
             time.sleep(scan_dwell_time * 2)
 
@@ -164,19 +171,22 @@ def enhanced_spiral_acquire_three(pi, shared_data, movement_queue):
                 detection['timestamp'] = time.time()
                 if not best_point3 or detection['strength'] > best_point3['strength']:
                     best_point3 = detection.copy()
-                    print(f"[3PT] Predictive detection: {best_point3['strength']} @ "
+                    print(f"[3PT] Predictive candidate: {best_point3['strength']} @ "
                           f"({best_point3['az']:.1f}°, {best_point3['el']:.1f}°)")
+                    # Optimization: If we find a strong signal, we can stop searching
+                    if best_point3['strength'] > min_strength_threshold * 1.5:
+                        break 
 
         if best_point3:
             best_point3 = optimize_point_locally(pi, shared_data, movement_queue, best_point3)
             acquired_points.append(best_point3)
+            print(f"[3PT] Acquired Point 3: {best_point3['strength']} @ ({best_point3['az']:.1f}°, {best_point3['el']:.1f}°)")
         else:
-            print("[3PT] Failed to find third point")
+            print("[3PT] Failed to find third point with predictive search")
             return False
 
-        # Store final points in shared memory using your existing format
+        # Store final points in shared memory
         points_buffer = shared_data["points_buffer"]
-
         for i, point in enumerate(acquired_points[:3]):
             base_idx = i * 4
             points_buffer[base_idx + 0] = point['az']
@@ -185,7 +195,6 @@ def enhanced_spiral_acquire_three(pi, shared_data, movement_queue):
             points_buffer[base_idx + 3] = point['strength']
 
         shared_data["points_count"].value = len(acquired_points)
-
         print(f"[3PT] Successfully acquired {len(acquired_points)} points with strengths: " +
               ", ".join([str(int(p['strength'])) for p in acquired_points]))
 
@@ -194,78 +203,3 @@ def enhanced_spiral_acquire_three(pi, shared_data, movement_queue):
     except Exception as e:
         print(f"[3PT] Error during acquisition: {e}")
         return False
-
-def check_current_detection(shared_data):
-    """Check if current LiDAR reading indicates a valid detection"""
-    with shared_data["lidar_data"].get_lock():
-        distance_cm = shared_data["lidar_data"][0]
-        strength = shared_data["lidar_data"][1]
-
-    current_az = shared_data["stepper_degrees"].value
-    current_el = shared_data["servo_degrees"].value
-
-    # Check if within expected drone range
-    if not (100 <= distance_cm <= 1200):
-        return None
-
-    if strength < 1000:
-        return None
-
-    return {
-        'az': current_az,
-        'el': current_el,
-        'distance_m': distance_cm / 100.0,
-        'strength': strength
-    }
-
-def optimize_point_locally(pi, shared_data, movement_queue, rough_point, search_radius=1.0):
-    """Fine-tune a point by searching around it"""
-    from motors.motor_controller import track_target
-
-    best_point = rough_point.copy()
-    center_az = rough_point['az']
-    center_el = rough_point['el']
-
-    for daz in np.arange(-search_radius, search_radius + 0.1, 0.2):
-        for del_el in np.arange(-search_radius, search_radius + 0.1, 0.2):
-            if shared_data['shutdown'].value:
-                break
-
-            test_az = center_az + daz
-            test_el = max(0, min(90, center_el + del_el))
-
-            track_target(pi, test_az, test_el, 0.0001, movement_queue, shared_data)
-            time.sleep(0.03)
-
-            detection = check_current_detection(shared_data)
-            if detection and detection['strength'] > best_point['strength']:
-                best_point = detection.copy()
-                best_point['timestamp'] = time.time()
-
-    return best_point
-
-def select_best_second_point(detections, point1):
-    """Select best second point considering strength and separation"""
-    if not detections:
-        return None
-
-    best_detection = None
-    best_score = -1
-
-    for detection in detections:
-        dist = math.sqrt((detection['az'] - point1['az'])**2 +
-                        (detection['el'] - point1['el'])**2)
-
-        time_sep = abs(detection['timestamp'] - point1['timestamp'])
-
-        score = detection['strength']
-        if dist > 2.0:
-            score += 1000
-        if time_sep > 0.2:
-            score += 500
-
-        if score > best_score:
-            best_score = score
-            best_detection = detection
-
-    return best_detection
