@@ -22,8 +22,8 @@ scan_path= calculate_scan_path.calculate_scan_path(delta_azimuth=5, distance_met
 def start_arc_search(scan_path,shared_data,pi, movement_queue):
     commands = calculate_scan_path.execute_scan_sequence(scan_path)
     # Track expected positions
-    expected_pan = int(shared_data["stepper_degrees"] )  # Value('d', ...)
-    expected_tilt = int(shared_data["servo_degrees"])
+    expected_pan = shared_data["stepper_degrees"].value  # Value('d', ...)
+    expected_tilt = shared_data["servo_degrees"].value
     
     for direction, degrees in commands:
         # Calculate what the new position should be after this move
