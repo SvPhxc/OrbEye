@@ -150,6 +150,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.slider_elevation.valueChanged.connect(self.set_elevation_angle)
         controls.addWidget(self.slider_elevation)
 
+
         # LCD for elevation angle
         self.lcd_elevation = QtWidgets.QLCDNumber()
         self.lcd_elevation.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
@@ -192,7 +193,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         self.lidar_timer = QtCore.QTimer()
         self.lidar_timer.timeout.connect(self.update_lidar_display)
-        self.lidar_timer.start(10)
+        self.lidar_timer.start(10)  
 
         self.angle_timer = QtCore.QTimer()
         self.angle_timer.timeout.connect(self.update_angle_display)
@@ -220,6 +221,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         dpad_layout.addItem(QtWidgets.QSpacerItem(0, 0), 2, 0)
         dpad_layout.addItem(QtWidgets.QSpacerItem(0, 0), 2, 2)
 
+
         # Add to main control panel
         controls.addLayout(dpad_layout)
 
@@ -229,6 +231,9 @@ class TrackerWindow(QtWidgets.QMainWindow):
         btn_right.clicked.connect(self.set_pan_right)
 
         controls.addStretch()
+
+        
+    
 
     def fetch_and_plot_satellite(self):
         name = self.sat_name_input.text().strip()
@@ -265,7 +270,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         # Plot line to Sofia
         sofia_pos = get_sofia_eci(time_utc=Time.now())  # current ECI position
         sofia_line = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], sofia_pos * self.debug_scale]),
-                                       color=(0, 1, 1, 1), width=2)
+                                    color=(0, 1, 1, 1), width=2)
         self.view.addItem(sofia_line)
         self.orbit_items.append(sofia_line)
 
@@ -315,13 +320,13 @@ class TrackerWindow(QtWidgets.QMainWindow):
         perigee_dir = np.array([np.cos(argp), np.sin(argp), 0])
         R_raan = np.array([
             [np.cos(raan), -np.sin(raan), 0],
-            [np.sin(raan), np.cos(raan), 0],
+            [np.sin(raan),  np.cos(raan), 0],
             [0, 0, 1]
         ])
         R_inc = np.array([
             [1, 0, 0],
             [0, np.cos(inc), -np.sin(inc)],
-            [0, np.sin(inc), np.cos(inc)]
+            [0, np.sin(inc),  np.cos(inc)]
         ])
         perigee_world = R_raan @ (R_inc @ perigee_dir) * length
         perigee_line = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], perigee_world]),
@@ -332,7 +337,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
     def set_elevation_angle(self, value):
         self.elevation_deg = value
         self.lcd_elevation.display(value)
-
+    
     def on_go_clicked(self):
         try:
             az = float(self.az_input.text())
@@ -345,34 +350,37 @@ class TrackerWindow(QtWidgets.QMainWindow):
         except ValueError:
             print("Invalid input: please enter numeric values")
 
+
     def toggle_background_plot(self):
         """ --- NEW: Loads data from file and displays/hides the plot --- """
         if self.background_plot.visible():
             self.background_plot.hide()
             print("[GUI] Background visualization hidden.")
             return
-
+            
         try:
             # Load the reshaped data [elevation, azimuth, [strength, range]]
             bg_data = np.load("background_data.npy")
-
+            
             points = []
             # Iterate through the array to convert spherical to Cartesian
-            for el_idx, az_row in enumerate(bg_data):
-                for az_idx, reading in enumerate(az_row):
-                    strength, dist_cm = reading
-                    # Plot only valid points within a reasonable range
-                    if 10 < dist_cm < 1200:
-                        # Convert to radians for math
-                        el_rad = np.radians(el_idx)
-                        az_rad = np.radians(az_idx)
-                        dist_m = dist_cm / 10.0  # Scale to meters for visualization
+            for reading in bg_data:
 
-                        # Spherical to Cartesian conversion
-                        x = dist_m * np.cos(el_rad) * np.cos(az_rad)
-                        y = - dist_m * np.cos(el_rad) * np.sin(az_rad)
-                        z = dist_m * np.sin(el_rad)
-                        points.append([x, y, z])
+                pos, dist_cm = reading[0], reading[1]
+                # Plot only valid points within a reasonable range
+                if 10 < dist_cm < 1600:
+                    # Convert to radians for math
+                     az = int(pos) % 360
+                     el = int(pos) // 360
+                     az_rad = np.radians(az)
+                     el_rad = np.radians(el)
+                     dist_m = dist_cm / 10.0  #Scale to meters for visualization
+
+                     # Spherical to Cartesian conversion
+                     x = dist_m * np.cos(el_rad) * np.cos(az_rad)
+                     y = - dist_m * np.cos(el_rad) * np.sin(az_rad)
+                     z = dist_m * np.sin(el_rad)
+                     points.append([x, y, z])
 
             if points:
                 print(f"[GUI] Plotting {len(points)} background points.")
@@ -385,7 +393,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
             print("[GUI] Error: 'background_data.npy' not found. Please run a scan first.")
         except Exception as e:
             print(f"[GUI] Error loading background data: {e}")
-
+            
     def update_lidar_display(self):
         lidar_data = self.shared_data.get("lidar_data")
         if lidar_data is not None:
@@ -393,7 +401,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
             strength = lidar_data[1]
             self.lcd_range.display(distance)
             self.lcd_strength.display(strength)
-            # print(f"[GUI] LiDAR: {distance} cm | Strength: {strength}")
+            #print(f"[GUI] LiDAR: {distance} cm | Strength: {strength}")
 
     def set_tilt_up(self):
         self.shared_data['tilt_up'].value = True
@@ -410,28 +418,27 @@ class TrackerWindow(QtWidgets.QMainWindow):
     def plot_orbit_line(self):
         valid_points = self.orbit_xyz[~np.isnan(self.orbit_xyz).any(axis=1)]
         scaled_points = valid_points * self.debug_scale
-        orbit_line = gl.GLLinePlotItem(pos=scaled_points, color=(1, 1, 0, 1), width=2, antialias=True,
-                                       mode='line_strip')
+        orbit_line = gl.GLLinePlotItem(pos=scaled_points, color=(1, 1, 0, 1), width=2, antialias=True, mode='line_strip')
         self.view.addItem(orbit_line)
         self.orbit_items.append(orbit_line)
 
     def background_scan(self):
         print("[GUI] Triggering background scan")
         self.shared_data["scan_trigger"].value = True
-
+    
     def update_angle_display(self):
         self.lcd_pan.display(self.shared_data['stepper_degrees'].value)
         self.lcd_tilt.display(self.shared_data['servo_degrees'].value)
 
     def update_laser_from_pan_tilt(self):
         """
-        Point the laser along the current pan/tilt.
+        Point the laser along the current pan/tilt. 
         Length uses live LiDAR distance when plausible, else a default.
         """
         try:
             # Read current mount angles (degrees) and LiDAR in cm
             az = float(self.shared_data['stepper_degrees'].value)  # 0..360
-            el = float(self.shared_data['servo_degrees'].value)  # 0..90
+            el = float(self.shared_data['servo_degrees'].value)    # 0..90
 
             lidar = self.shared_data.get('lidar_data')
             if lidar is not None:
@@ -440,13 +447,14 @@ class TrackerWindow(QtWidgets.QMainWindow):
                 dist_cm = 0.0
 
             # Decide laser length in meters
-            if 50.0 <= dist_cm <= 2000.0:  # sane-ish reading window (0.5–20 m)
+            if 50.0 <= dist_cm <= 2000.0:     # sane-ish reading window (0.5–20 m)
                 length_m = dist_cm / 100.0
             else:
-                length_m = 10.0  # fallback if no LiDAR yet
+                length_m = 10.0               # fallback if no LiDAR yet
 
             # Scale to your scene units
             length = max(5.0 * self.debug_scale, length_m * self.debug_scale) * 10
+
 
             # Convert angles to a unit direction vector
             az_rad = np.radians(az % 360.0)
@@ -488,15 +496,15 @@ class TrackerWindow(QtWidgets.QMainWindow):
         QtWidgets.QApplication.quit()
         self.shared_data["shutdown"].value = True
 
-
 if __name__ == "__main__":
     '''app = QtWidgets.QApplication(sys.argv)
     window = TrackerWindow()
     window.show()
     sys.exit(app.exec_())'''
 
-_shared_data = None  # global
 
+
+_shared_data = None  # global
 
 def run_gui(shared, movement_queue):
     global _shared_data
@@ -507,3 +515,4 @@ def run_gui(shared, movement_queue):
     window = TrackerWindow(_shared_data, movement_queue)
     window.show()
     sys.exit(app.exec_())
+
