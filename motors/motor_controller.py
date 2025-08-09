@@ -19,7 +19,7 @@ MICROSTEP_ANGLE = 0.05625
 #maybe add a function to take it to the inital defined position first
 scan_path= calculate_scan_path.calculate_scan_path(delta_azimuth=5, distance_meters=2,initial_pan_angle=0, initial_tilt_angle=45)
 
-def start_arc_search(scan_path,shared_data):
+def start_arc_search(scan_path,shared_data,pi, movement_queue):
     commands = calculate_scan_path.execute_scan_sequence(scan_path)
     # Track expected positions
     expected_pan = shared_data["stepper_degrees"]   # Value('d', ...)
@@ -41,7 +41,7 @@ def start_arc_search(scan_path,shared_data):
             target_tilt = expected_tilt - degrees
         
         # Send the movement command
-        move(direction, degrees)
+        move(pi, direction, degrees, 0.001, movement_queue, shared_data)
         
         # Wait until motors reach target position
         while True:
@@ -246,7 +246,7 @@ def run_motor_control(shared_data, movement_queue):
             if shared_data["go_to_target"].value: track_target(pi, shared_data["target_azimuth"].value, shared_data["target_elevation"].value, 0.0001, movement_queue, shared_data); shared_data["go_to_target"].value = False
             if shared_data["acquire_points"].value:
                 #square_search(75, 0, 10, shared_data, movement_queue, pi)
-                start_arc_search(scan_path, shared_data)
+                start_arc_search(scan_path, shared_data, pi, movement_queue)
                 shared_data["acquire_points"].value = False
                 if shared_data["points_count"].value >= 3:
                     shared_data["ekf_start"].value = True
