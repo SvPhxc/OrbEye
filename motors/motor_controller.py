@@ -6,7 +6,7 @@ import RPi.GPIO as GPIO
 from time import sleep, monotonic
 import math
 import signal
-from enhanced_acquisition import enhanced_spiral_acquire_three
+from motors.enhanced_acquisition import enhanced_spiral_acquire_three
 
 # --- NEW: Define constants for GPIO pins for clarity ---
 SERVO_PIN = 13
