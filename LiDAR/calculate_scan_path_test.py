@@ -94,20 +94,90 @@ def print_scan_info(delta_azimuth, distance_meters, initial_pan_angle, initial_t
         print(f"  Point {i+1}: Pan={pan:.1f}°, Tilt={tilt:.1f}°")
     print()
 
+def execute_scan_sequence(scan_path):
+    """
+    Processes scan path sequentially and returns movement commands.
+    
+    Args:
+        scan_path (list): List of (pan_angle, tilt_angle) tuples
+        
+    Returns:
+        list: List of tuples (direction, degrees) where direction is string and degrees is int
+    """
+    
+    if len(scan_path) < 2:
+        return []
+    
+    commands = []
+    
+    # Process each step sequentially like a while loop
+    step_index = 0
+    while step_index < len(scan_path) - 1:
+        prev_pan, prev_tilt = scan_path[step_index]
+        curr_pan, curr_tilt = scan_path[step_index + 1]
+        
+        # Calculate pan movement
+        pan_change = curr_pan - prev_pan
+        if pan_change > 0:
+            commands.append(("right", round(abs(pan_change))))
+        elif pan_change < 0:
+            commands.append(("left", round(abs(pan_change))))
+        
+        # Calculate tilt movement  
+        tilt_change = curr_tilt - prev_tilt
+        if tilt_change > 0:
+            commands.append(("up", round(abs(tilt_change))))
+        elif tilt_change < 0:
+            commands.append(("down", round(abs(tilt_change))))
+            
+        step_index += 1
+    
+    return commands
 
-# Example usage and testing
-if __name__ == "__main__":
-    # Test cases demonstrating the inverse relationship
-    test_cases = [
-        (90, 2, 0, 45),    # Close distance - maximum points
-        (90, 7, 0, 45),    # Medium distance - fewer points  
-        (90, 12, 0, 45),   # Far distance - minimum points
-        (45, 5, -20, 30),  # Different parameters
-    ]
+def start_arc_search(scan_path):
+    commands = execute_scan_sequence(scan_path)
     
-    print("Motion Scanning Path Calculator - Semi-Circular Arc")
-    print("="*60)
+    # Track expected positions
+    expected_pan = stepper_degrees    # Current pan position
+    expected_tilt = servo_degrees     # Current tilt position
     
-    for delta_az, dist, init_pan, init_tilt in test_cases:
-        print_scan_info(delta_az, dist, init_pan, init_tilt)
-        print("-" * 30)
+    for direction, degrees in commands:
+        # Calculate what the new position should be after this move
+        if direction == "right":
+            target_pan = expected_pan + degrees
+            target_tilt = expected_tilt
+        elif direction == "left":
+            target_pan = expected_pan - degrees
+            target_tilt = expected_tilt
+        elif direction == "up":
+            target_pan = expected_pan
+            target_tilt = expected_tilt + degrees
+        elif direction == "down":
+            target_pan = expected_pan
+            target_tilt = expected_tilt - degrees
+        
+        # Send the movement command
+        move(direction, degrees)
+        
+        # Wait until motors reach target position
+        while True:
+            # Check if both motors have reached their targets (with tolerance)
+            pan_reached = abs(stepper_degrees - target_pan) <= 2  # ±2° tolerance
+            tilt_reached = abs(servo_degrees - target_tilt) <= 2   # ±2° tolerance
+            
+            if pan_reached and tilt_reached:
+                # Both motors are in position, update expected values
+                expected_pan = target_pan
+                expected_tilt = target_tilt
+                break  # Move to next command
+            
+            # Small delay before checking again
+            time.sleep(0.1)
+    
+    print("All movements completed!")
+    
+    if __name__ == "__main__":
+        # Example usage
+        scan_path = calculate_scan_path(90, 5, 0, 30)
+        print_scan_info(90, 5, 0, 30)
+        start_arc_search(scan_path)
