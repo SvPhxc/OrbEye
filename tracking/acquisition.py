@@ -129,4 +129,106 @@ def run_acquisition_sequence(pi, shared_data, movement_queue, tle_data, track_ta
         print("[ACQUIRE] Failed to re-acquire target for second point.")
         return False
 
-    point2 = _refine_target(pi, shared_data, movement_queue, point2_detection['az'], point2_detection['el'], track_ta
+    point2 = _refine_target(pi, shared_data, movement_queue, point2_detection['az'], point2_detection['el'],
+                            track_target_func)
+    if not point2 or (point2['timestamp'] - point1['timestamp'] < 0.2):
+        print("[ACQUIRE] Failed to acquire a distinct second point.")
+        return False
+    acquired_points.append(point2)
+
+    # --- PHASE 3: Predictive Acquisition of Point 3 ---
+    print("\n[ACQUIRE] Phase 3: Predicting position for third point...")
+    dt = point2['timestamp'] - point1['timestamp']
+    delta_az = (point2['az'] - point1['az'] + 540) % 360 - 180
+    vel_az = delta_az / dt
+    vel_el = (point2['el'] - point1['el']) / dt
+    print(f"[ACQUIRE] Estimated Velocity: {vel_az:.2f}°/s Az, {vel_el:.2f}°/s El")
+
+    predicted_az_p3 = (point2['az'] + vel_az * PREDICTION_TIME_S) % 360
+    predicted_el_p3 = max(0, min(90, point2['el'] + vel_el * PREDICTION_TIME_S))
+
+    print(f"[ACQUIRE] Moving to predicted location: ({predicted_az_p3:.1f}°, {predicted_el_p3:.1f}°)")
+    track_target_func(pi, predicted_az_p3, predicted_el_p3, 0.0001, movement_queue, shared_data)
+
+    point3_detection = None
+    wait_start_time = time.time()
+    while time.time() - wait_start_time < 2.0:
+        point3_detection = _get_and_consume_detection(shared_data)
+        if point3_detection:
+            print("[ACQUIRE] Third coarse detection acquired at predicted location.")
+            break
+        time.sleep(0.01)
+
+    if not point3_detection:
+        print("[ACQUIRE] No detection at predicted location. Attempting refinement anyway.")
+        point3 = _refine_target(pi, shared_data, movement_queue, predicted_az_p3, predicted_el_p3, track_target_func)
+    else:
+        point3 = _refine_target(pi, shared_data, movement_queue, point3_detection['az'], point3_detection['el'],
+                                track_target_func)
+
+    if not point3:
+        print("[ACQUIRE] Failed to acquire third point.")
+        return False
+    acquired_points.append(point3)
+
+    # --- PHASE 4: Handoff to EKF ---
+    print("\n[ACQUIRE] Success! Populating buffer with 3 points for EKF.")
+    points_buffer = shared_data["points_buffer"]
+    with shared_data["points_count"].get_lock():
+        for i, point in enumerate(acquired_points):
+            base_idx = i * 5
+            points_buffer[base_idx + 0] = point['az']
+            points_buffer[base_idx + 1] = point['el']
+            points_buffer[base_idx + 2] = point['distance_m']
+            points_buffer[base_idx + 3] = point['strength']
+            points_buffer[base_idx + 4] = point['timestamp']
+            print(
+                f"  Point {i + 1}: Az={point['az']:.1f}, El={point['el']:.1f}, Dist={point['distance_m']:.2f}m, Time={point['timestamp']:.2f}")
+
+        shared_data["points_count"].value = len(acquired_points)
+
+    return True
+
+
+def run_manual_acquisition_sequence(pi, shared_data, movement_queue, track_target_func):
+    """
+    A simplified acquisition sequence for debug mode (e.g., tracking a hand).
+    It assumes the user is already pointing the LiDAR at the target.
+    """
+    print("\n--- STARTING MANUAL ACQUISITION SEQUENCE (DEBUG MODE) ---")
+    acquired_points = []
+
+    current_az = shared_data['stepper_degrees'].value
+    current_el = shared_data['servo_degrees'].value
+
+    print("[ACQUIRE-DBG] Acquiring first point...")
+    point1 = _refine_target(pi, shared_data, movement_queue, current_az, current_el, track_target_func)
+    if not point1: return False
+    acquired_points.append(point1)
+
+    print("[ACQUIRE-DBG] Acquiring second point after a short delay...")
+    time.sleep(0.7)  # A longer delay for slower hand movements
+    point2 = _refine_target(pi, shared_data, movement_queue, point1['az'], point1['el'], track_target_func)
+    if not point2 or (point2['timestamp'] - point1['timestamp'] < 0.2): return False
+    acquired_points.append(point2)
+
+    print("[ACQUIRE-DBG] Acquiring third point...")
+    time.sleep(0.7)
+    point3 = _refine_target(pi, shared_data, movement_queue, point2['az'], point2['el'], track_target_func)
+    if not point3: return False
+    acquired_points.append(point3)
+
+    # --- Handoff to EKF ---
+    print("\n[ACQUIRE-DBG] Success! Populating buffer with 3 points for EKF.")
+    points_buffer = shared_data["points_buffer"]
+    with shared_data["points_count"].get_lock():
+        for i, point in enumerate(acquired_points):
+            base_idx = i * 5
+            points_buffer[base_idx + 0] = point['az']
+            points_buffer[base_idx + 1] = point['el']
+            points_buffer[base_idx + 2] = point['distance_m']
+            points_buffer[base_idx + 3] = point['strength']
+            points_buffer[base_idx + 4] = point['timestamp']
+        shared_data["points_count"].value = len(acquired_points)
+
+    return True
