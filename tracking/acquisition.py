@@ -2,6 +2,7 @@ import numpy as np
 import math
 import time
 from astropy.time import Time
+from motors.motor_utils import track_target # CORRECTED IMPORT
 from tracking.tle_utils import get_tle_prediction
 
 # --- Constants for the acquisition process ---
