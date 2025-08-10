@@ -5,6 +5,7 @@
 # It imports low-level utilities from `motor_utils` and high-level logic
 # from `tracking`, acting as the central orchestrator.
 # ==============================================================================
+from tracking.tle_tracker import acquire_target_from_tle, track_target_with_ekf
 
 from multiprocessing import Process, Queue
 import pigpio
@@ -48,24 +49,38 @@ def run_motor_control(shared_data, movement_queue):
         while not shared_data['shutdown'].value:
             if shared_data["acquire_points"].value:
                 success = False
-                if shared_data["debug_mode"].value:
-                    success = run_manual_acquisition_sequence(pi, shared_data, movement_queue)
-                else:
+                try:
+                    tle_data = None
                     try:
-                        tle_data = parse_tle_file("temp.tle")[0] if "temp.tle" else None
-                        success = run_acquisition_sequence(pi, shared_data, movement_queue, tle_data)
-                    except Exception as e:
-                        print(f"[MotorControl] Could not run TLE acquisition: {e}")
+                        # try to load temp.tle if present
+                        tle_list = parse_tle_file("temp.tle") if os.path.exists("temp.tle") else None
+                        if tle_list:
+                            tle_data = tle_list[0]
+                    except Exception:
+                        tle_data = None
 
-                shared_data["acquire_points"].value = False
-                if success:
+                    # Use new TLE-guided acquisition (function adapts if debug_mode is True)
+                    success = acquire_target_from_tle(pi, shared_data, movement_queue, tle_data)
+                except Exception as e:
+                    print(f"[MotorControl] Could not run acquisition: {e}")
+                # acquire_target_from_tle is responsible for clearing shared_data['acquire_points']
+                if not success:
+                    shared_data["acquire_points"].value = False
+                    print("[MotorControl] Acquisition sequence failed.")
+                else:
+                    # signal EKF process to initialize
                     shared_data["ekf_start"].value = True
                     print("[MotorControl] Handoff to EKF process initiated.")
-                else:
-                    print("[MotorControl] Acquisition sequence failed.")
 
             elif shared_data['ekf_running'].value:
-                active_track_target(pi, shared_data, movement_queue)
+
+        # Use TLETracker's EKF-guided fast tracker
+
+            ok = track_target_with_ekf(pi, shared_data, movement_queue)
+
+        # If tracking fails multiple times, consider fallback (optional)
+
+        # (we keep it simple here; run_ekf_tracker will update ekf_running as needed)
 
             else:  # Manual control mode
                 if shared_data['tilt_up'].value: move(pi, 'up', 1.0, None, movement_queue, shared_data); shared_data[
