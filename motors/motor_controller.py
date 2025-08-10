@@ -76,7 +76,7 @@ def run_motor_control(shared_data, movement_queue):
 
         # Use TLETracker's EKF-guided fast tracker
 
-            ok = track_target_with_ekf(pi, shared_data, movement_queue)
+                ok = track_target_with_ekf(pi, shared_data, movement_queue)
 
         # If tracking fails multiple times, consider fallback (optional)
 
