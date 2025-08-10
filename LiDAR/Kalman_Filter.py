@@ -5,11 +5,10 @@
 # It operates as a separate process and communicates with other parts of the
 # system via shared memory.
 #
-# Key Features:
-# - A robust state machine that handles Initialization, Running, and Stopped states.
-# - Adapts its parameters for "Drone Mode" or "Debug Mode" (hand tracking).
-# - Logs measurement and estimate history while running.
-# - On request, calls the plotting module to visualize the track after completion.
+# Key Fixes:
+# - EKF tuning parameters (especially Measurement Noise R) are now different
+#   for Debug Mode to provide smoother tracking of close, erratic targets.
+# - The main loop is a robust state machine handling all operational states.
 # ==============================================================================
 
 import numpy as np
@@ -20,7 +19,6 @@ import time
 import copy
 import traceback
 
-# --- New import for post-track analysis ---
 from analysis.plotter import plot_ekf_vs_measured
 
 
@@ -36,7 +34,7 @@ def spherical_to_cartesian(az_rad, el_rad, dist):
 def cartesian_to_spherical(x, y, z):
     """Converts Cartesian coordinates to spherical (azimuth, elevation, distance)."""
     dist = np.sqrt(x ** 2 + y ** 2 + z ** 2)
-    if dist == 0:
+    if dist < 1e-6:  # Avoid division by zero for points at the origin
         return 0, 0, 0
     az = np.arctan2(y, x)
     el = np.arcsin(z / dist)
@@ -71,9 +69,8 @@ class CloseRangeDroneTrackerEKF(ExtendedKalmanFilter):
         self.std_acc = std_acc
         self.distance_constraint = distance_constraint
 
-        # Initialize covariance matrix P
-        self.P = np.eye(6) * 10.0  # Start with moderate uncertainty
-        self.P[3:, 3:] *= 2.0  # More uncertainty in velocity
+        self.P = np.eye(6) * 10.0
+        self.P[3:, 3:] *= 2.0
 
         self.initialized = False
         self.last_time = None
@@ -87,9 +84,9 @@ class CloseRangeDroneTrackerEKF(ExtendedKalmanFilter):
                            [0, 0, 0, 0, 1, 0],
                            [0, 0, 0, 0, 0, 1]])
 
-        q_pos = Q_discrete_white_noise(dim=3, dt=dt, var=self.std_acc ** 2, block_size=1)
-        q_vel = np.eye(3) * (self.std_acc * dt) ** 2
-        self.Q = block_diag(q_pos, q_vel)
+        # Process noise Q - models uncertainty in the drone's/hand's motion
+        q = Q_discrete_white_noise(dim=3, dt=dt, var=self.std_acc ** 2)
+        self.Q = block_diag(q, q)
 
     def h(self, x):
         """Measurement function: maps state space [x,y,z,...] to measurement space [az, el, dist]."""
@@ -104,11 +101,11 @@ class CloseRangeDroneTrackerEKF(ExtendedKalmanFilter):
         eps = 1e-6
         x_sq_y_sq = x0 ** 2 + x1 ** 2
         dist_sq = x_sq_y_sq + x2 ** 2
-        dist = np.sqrt(dist_sq)
 
-        if x_sq_y_sq < eps or dist < eps:  # Avoid division by zero
+        if x_sq_y_sq < eps or dist_sq < eps:
             return H
 
+        dist = np.sqrt(dist_sq)
         sqrt_x_sq_y_sq = np.sqrt(x_sq_y_sq)
 
         H[0, 0] = -x1 / x_sq_y_sq
@@ -125,26 +122,22 @@ class CloseRangeDroneTrackerEKF(ExtendedKalmanFilter):
         return H
 
     def predict(self):
-        """Predict step with optional distance constraint."""
+        """Predict step with optional distance constraint for drone mode."""
         super().predict()
 
         if self.distance_constraint:
             current_dist = np.linalg.norm(self.x[0:3])
             if current_dist > 12.0:
-                scale = 12.0 / current_dist
-                self.x[0:3] *= scale
+                self.x[0:3] *= (12.0 / current_dist)
             elif current_dist < 3.0:
-                scale = 3.0 / current_dist
-                self.x[0:3] *= scale
+                self.x[0:3] *= (3.0 / current_dist)
 
     def update_with_angle_wrapping(self, z, HJacobian, Hx, R):
         """Custom update step with proper angle wrapping for azimuth."""
-        # Calculate innovation (residual)
         hx = Hx(self.x)
         y = z - hx
-        y[0] = angle_difference(z[0], hx[0])  # Wrap azimuth residual
+        y[0] = angle_difference(z[0], hx[0])
 
-        # Standard EKF update equations
         H = HJacobian(self.x)
         PHT = self.P @ H.T
         S = H @ PHT + R
@@ -152,7 +145,7 @@ class CloseRangeDroneTrackerEKF(ExtendedKalmanFilter):
         try:
             K = PHT @ np.linalg.inv(S)
         except np.linalg.LinAlgError:
-            K = PHT @ np.linalg.pinv(S)  # Fallback if S is singular
+            K = PHT @ np.linalg.pinv(S)
 
         self.x = self.x + K @ y
         I_KH = np.eye(self.dim_x) - K @ H
@@ -175,16 +168,23 @@ def init_ekf(ekf, initial_points):
     ekf.x = np.array([x2, y2, z2, vx, vy, vz])
 
 
-def create_measurement_noise_matrix(strength, measurement_count):
-    """Creates the R (measurement noise) matrix, adapting to signal strength."""
-    # Base noise variance (squared standard deviation)
-    base_angular_var = (np.deg2rad(0.5)) ** 2
-    base_dist_var = (0.05) ** 2  # 5cm std dev
+def create_measurement_noise_matrix(strength, measurement_count, debug_mode):
+    """
+    Creates the R (measurement noise) matrix, adapting to the operational mode.
+    """
+    if debug_mode:
+        # --- DEBUG MODE (Hand Tracking): High angular noise, low distance noise ---
+        # Trust distance measurement highly, but be skeptical of the jittery angles.
+        angular_var = (np.deg2rad(4.0)) ** 2  # Assume 4 deg standard deviation for angles
+        dist_var = (0.05) ** 2  # Assume 5cm standard deviation for distance
+    else:
+        # --- DRONE MODE: Noise based on signal strength ---
+        base_angular_var = (np.deg2rad(0.5)) ** 2
+        base_dist_var = (0.05) ** 2
 
-    # Noise decreases with stronger signal (higher confidence)
-    strength_factor = max(1.0, strength / 1000.0)
-    angular_var = base_angular_var / strength_factor
-    dist_var = base_dist_var / strength_factor
+        strength_factor = max(1.0, strength / 1000.0)
+        angular_var = base_angular_var / strength_factor
+        dist_var = base_dist_var / strength_factor
 
     return np.diag([angular_var, angular_var, dist_var])
 
@@ -207,29 +207,25 @@ def calculate_confidence(P):
 # endregion
 
 def run_ekf_tracker(shared_data):
-    """
-    Main EKF tracking loop with a robust state machine.
-    """
+    """Main EKF tracking loop with a robust state machine."""
     print("[EKF] Starting tracker process...")
     ekf = None
-
     history_measurements, history_estimates = [], []
 
-    # Local references for cleaner code
     ekf_start, ekf_running = shared_data['ekf_start'], shared_data['ekf_running']
     points_count, points_buffer = shared_data['points_count'], shared_data['points_buffer']
     shutdown, generate_plot = shared_data['shutdown'], shared_data['generate_plot_on_stop']
 
     while not shutdown.value:
         try:
-            # STATE 1: UNINITIALIZED - Waiting for acquisition to complete
+            # STATE 1: UNINITIALIZED
             if ekf is None or not ekf.initialized:
                 if ekf_start.value and points_count.value >= 2:
                     print("[EKF] Initialization signal received.")
 
                     if shared_data["debug_mode"].value:
                         print("[EKF] Configuring for DEBUG MODE (Hand Tracking).")
-                        ekf = CloseRangeDroneTrackerEKF(std_acc=0.5, distance_constraint=False)
+                        ekf = CloseRangeDroneTrackerEKF(std_acc=0.7, distance_constraint=False)
                     else:
                         print("[EKF] Configuring for DRONE MODE.")
                         ekf = CloseRangeDroneTrackerEKF(std_acc=0.04, distance_constraint=True)
@@ -254,7 +250,7 @@ def run_ekf_tracker(shared_data):
                     time.sleep(0.1)
                     continue
 
-            # STATE 2: INITIALIZED - Either running or stopped
+            # STATE 2: INITIALIZED
             now = time.time()
             if ekf_running.value:
                 dt = now - (ekf.last_time if ekf.last_time is not None else now)
@@ -274,7 +270,8 @@ def run_ekf_tracker(shared_data):
 
                 if has_new and valid_range and valid_strength:
                     z = np.array([np.deg2rad(az), np.deg2rad(el), dist_cm / 100.0])
-                    R = create_measurement_noise_matrix(strength, len(history_measurements))
+                    R = create_measurement_noise_matrix(strength, len(history_measurements),
+                                                        shared_data["debug_mode"].value)
                     ekf.update_with_angle_wrapping(z, ekf.HJacobian, ekf.h, R)
                     history_measurements.append({'z': z, 'time': ts})
 
@@ -295,7 +292,7 @@ def run_ekf_tracker(shared_data):
                 ekf.initialized = False
                 shared_data['ekf_initialized'].value = False
 
-            time.sleep(0.01)  # ~100Hz loop
+            time.sleep(0.01)
         except Exception as e:
             print(f"[EKF] CRITICAL ERROR in tracking loop: {e}")
             traceback.print_exc()
