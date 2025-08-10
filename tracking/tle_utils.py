@@ -2,6 +2,8 @@
 
 import time
 from astropy.time import Time
+import numpy as np
+
 # TODO: Import a real TLE library like skyfield or pyorbital
 # from skyfield.api import load, EarthSatellite
 
