@@ -3,7 +3,7 @@ from webcam.blob_tracker import run_tracking
 from motors.motor_controller import run_motor_control
 from LiDAR.lidar_handler import run_lidar
 from LiDAR.Kalman_Filter import run_ekf_tracker
-from tracking.tracker import tracking
+import tracking.tracker 
 from GUI import run_gui
 import time, os, signal, sys
 
