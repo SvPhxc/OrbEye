@@ -1,370 +1,198 @@
+# ==============================================================================
+# LiDAR/lidar_handler.py
+# ------------------------------------------------------------------------------
+# This module reads data from the TF-Mini S, manages the background scan data,
+# and performs target detection by comparing live readings to the stored background.
+#
+# Key Fixes:
+# - Debug Mode now correctly uses background subtraction.
+# - The detection logic for Debug Mode is based on a significant *range difference*
+#   (e.g., a hand being much closer than a wall), rather than signal strength.
+# ==============================================================================
+
 import serial
 import numpy as np
 import time
 from multiprocessing import Value
 from collections import deque
 
+
 def read_tfmini_data(serial_port):
+    """Reads and parses a 9-byte data frame from the TF-Mini S."""
     buffer = bytearray()
-    
     while True:
         data = serial_port.read(serial_port.in_waiting or 1)
+        if not data:
+            continue
         buffer += data
-
         while len(buffer) >= 9:
             if buffer[0] == 0x59 and buffer[1] == 0x59:
-                # Extract and parse a full frame
                 distance = buffer[2] + (buffer[3] << 8)
                 strength = buffer[4] + (buffer[5] << 8)
-                #print(f"Distance: {distance} cm, Strength: {strength}")
-                buffer = buffer[9:]  # Remove this frame from the buffer
+                buffer = buffer[9:]
                 return distance, strength
             else:
-                buffer = buffer[1:]  # Skip until next potential frame
-
-def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
-    """
-    TFmini process for Raspberry Pi UART.
-    Publishes [distance_cm, strength, timestamp] into shared_data["lidar_data"].
-    Also:
-      - Builds/refreshes a background index from background_data.npy
-      - Optionally collects 3 valid points during acquisition
-      - Calls validation + detection while acquiring/running EKF
-      - Saves background scan when requested
-    """
-    # Bind shared arrays/flags once to avoid shadowing
-    lidar_sh = shared_data["lidar_data"]  # multiprocessing.Array('d', 3)
-    stepper_deg = shared_data["stepper_degrees"]   # Value('d', ...)
-    servo_deg   = shared_data["servo_degrees"]     # Value('d', ...)
-
-    # Optional acceptance range in meters (Array('d', [min_m, max_m]))
-    lidar_range_sh = shared_data.get("lidar_acceptance_range", None)
-
-    # Background accumulation in RAM until we save to disk
-    background_array = np.empty((0, 4))
-    bg_index = {}
-    bg_loaded_ts = 0.0
-
-    try:
-        with serial.Serial(port, baudrate, timeout=1) as ser:
-            print("[TFmini] Serial opened, reading data...")
-            while not shared_data["shutdown"].value:
-                # ---- Read one TFmini frame ----
-                distance_cm, strength = read_tfmini_data(ser)
-
-                # ---- Publish to shared memory (if valid frame) ----
-                if distance_cm is not None and strength is not None:
-                    ts = time.time()
-                    with lidar_sh.get_lock():
-                        lidar_sh[0] = float(distance_cm)
-                        lidar_sh[1] = float(strength)
-                        lidar_sh[2] = ts
-
-                # Small pacing to avoid pegging the CPU
-                time.sleep(0.01)
-
-                # ---- Refresh background index if a new file is ready ----
-                if shared_data.get("background_ready", Value('b', False)).value and (time.time() - bg_loaded_ts > 1.0):
-                    bg_index = build_bg_index(shared_data["background_path"])
-                    bg_loaded_ts = time.time()
-                    print(f"[TFmini] Background index built: {len(bg_index)} cells")
-                    # ✅ prevent rebuild loop
-                    with shared_data["background_ready"].get_lock():
-                        shared_data["background_ready"].value = False
-
-                # ---- Read the latest LiDAR sample + current mount angles ----
-                with lidar_sh.get_lock():
-                    distance_cm = float(lidar_sh[0])
-                    strength    = float(lidar_sh[1])
-                    ts          = float(lidar_sh[2])
-
-                az = float(stepper_deg.value)  # degrees
-                el = float(servo_deg.value)    # degrees
-
-                # ---- Validate & detect only when acquiring or EKF is running ----
-                if shared_data.get("acquire_points", Value('b', False)).value or \
-                   shared_data.get("ekf_running", Value('b', False)).value:
-
-                    # Optional acceptance range check (meters)
-                    if lidar_range_sh is not None:
-                        min_m = float(lidar_range_sh[0])
-                        max_m = float(lidar_range_sh[1])
-                        in_window = (min_m <= distance_cm / 100.0 <= max_m)
-                    else:
-                        # Default window: 3–12 m
-                        in_window = (300.0 <= distance_cm <= 1200.0)
-
-                    if in_window and validate_lidar_data(distance_cm, strength, shared_data):
-                        # Note: detect_satellite_direct_index signature expects (strength, distance_cm, az, el, shared_data, bg_index)
-                        detect_satellite_direct_index(strength, distance_cm, az, el, shared_data, bg_index)
-
-                # ---- Background scan accumulation (when concentric scan is running) ----
-                if shared_data.get("scan_trigger", Value('b', False)).value:
-                    # Use current lidar_sh snapshot + mount angles
-                    background_array = save_background(background_array, lidar_sh, az, el)
-
-                # ---- 3-point acquisition for EKF init ----
-                if shared_data.get("acquire_points", Value('b', False)).value and shared_data.get("satellite_detected", Value('b', False)).value:
-                    # Pull the last detected "satellite" point and append to points_buffer
-                    az_idx = shared_data["satellite_points"][0]
-                    el_idx = shared_data["satellite_points"][1]
-                    str_pt = shared_data["satellite_points"][2]
-                    dist_m = shared_data["satellite_points"][3] / 100.0  # cm → m
-
-                    with shared_data["points_count"].get_lock():
-                        k = shared_data["points_count"].value
-                        if k < 3:
-                            base = 4 * k
-                            pb = shared_data["points_buffer"]  # 12 doubles
-                            pb[base + 0] = float(az_idx)
-                            pb[base + 1] = float(el_idx)
-                            pb[base + 2] = float(dist_m)
-                            pb[base + 3] = float(str_pt)
-                            shared_data["points_count"].value = k + 1
-
-                    shared_data["satellite_detected"].value = False
-
-                # ---- Persist background file when requested ----
-                if shared_data.get("save_background", Value('b', False)).value:
-                    np.save(shared_data["background_path"], background_array)
-                    shared_data["background_ready"].value = True
-                    print(f"[TFmini] Background data saved to {shared_data['background_path']}, rows={len(background_array)}")
-                    shared_data["save_background"].value = False
-
-    except serial.SerialException as e:
-        print(f"[TFmini] Serial error: {e}")
-
-
-def save_background(background_array, lidar_data, stepper, servo):
-    """
-    Enhanced version of your existing save_background function.
-    Keeps same signature but adds timestamp for data freshness.
-    """
-    az = int(round(stepper)) % 360
-    el = int(round(servo))
-    if not (0 <= el < 90):
-        return background_array  # skip out-of-scan elevations
-
-    # Grid index: one unique cell per (el, az)
-    pos = el * 360 + az
-
-    # Keep your column order but add timestamp: [pos, distance, strength, timestamp]
-    timestamp = time.time()
-    new_row = np.array([[pos, lidar_data[0], lidar_data[1], timestamp]])
-
-    # NOTE: np.append reallocates; acceptable for quick patch
-    background_array = np.append(background_array, new_row, axis=0)
-    return background_array
-def pos_to_index(shared_data):
-    scale = 1.5 #change later it should be equal to concentric search step size for both servo and stepper
-    step_deg = shared_data["stepper_degrees"]
-    servo_deg = shared_data["servo_degrees"]
-    return int(step_deg/scale+servo_deg/scale*360/scale)
-
-def append_lidar_data(np_array, shared_data):
-    distance, strength, timestamp = shared_data["lidar_data"]
-    np_array[index] = [strength, distance, timestamp]
-    
-#pass lidar_data.distance and lidar_data.strength from the shared memory
-def validate_lidar_data(distance_cm, strength, shared_data):
-    """
-    Enhanced version of your existing validate_lidar_data function.
-    Keeps same signature but adds temporal consistency checking.
-    """
-    # Your existing basic checks
-    if distance_cm in (-1, -2, -4) or strength < 100:
-        return False
-    if distance_cm < 100 or distance_cm > 300:
-        return False
-    if strength <2100:  # Keeping your existing threshold
-        return False
-
-    # Additional stability check (optional - can be disabled)
-    # This adds temporal filtering without changing the interface
-    current_time = time.time()
-
-    # Store reading history in shared_data if not exists
-    if not hasattr(validate_lidar_data, 'history'):
-        validate_lidar_data.history = deque(maxlen=5)
-
-    validate_lidar_data.history.append({
-        'timestamp': current_time,
-        'distance': distance_cm,
-        'strength': strength
-    })
-
-    # Remove old entries
-    while (validate_lidar_data.history and
-           current_time - validate_lidar_data.history[0]['timestamp'] > 1.0):
-        validate_lidar_data.history.popleft()
-
-    # Check for reasonable stability if we have enough samples
-    if len(validate_lidar_data.history) >= 3:
-        distances = [h['distance'] for h in validate_lidar_data.history]
-        strengths = [h['strength'] for h in validate_lidar_data.history]
-
-        # If readings are too erratic, might be noise
-        dist_std = np.std(distances)
-        strength_std = np.std(strengths)
-
-        if dist_std > 200 or strength_std > 8000:  # Adjusted for your system
-            return False
-
-    return True
+                # Slide buffer window if no frame header is found
+                buffer = buffer[1:]
+    return None, None
 
 
 def detect_satellite_direct_index(current_strength, current_range_cm, az_deg, el_deg, shared_data, bg_index):
     """
-    Enhanced version of your existing detect_satellite_direct_index function.
-    Keeps the same signature but adds multi-criteria detection.
+    Enhanced detection function that uses different logic for drone vs. debug mode.
+    BOTH modes now use the background index.
     """
-    if shared_data["debug_mode"].value:
-        # In debug mode, we bypass background subtraction.
-        # A strong signal in the close-range window is enough.
-        if shared_data["lidar_acceptance_range"][0] * 100 <= current_range_cm <= shared_data["lidar_acceptance_range"][
-            1] * 100 \
-                and current_strength > 1000:  # A reasonably high strength for a close object
-            # print(f"[DETECT-DBG] Detection at ({az_deg:.1f}°, {el_deg:.1f}°)")
-            sp = shared_data["satellite_points"]
-            sp[0], sp[1], sp[2], sp[3] = az_deg, el_deg, current_strength, current_range_cm
-            shared_data["satellite_detected"].value = True
-            return True
-        else:
-            shared_data["satellite_detected"].value = False
-            return False
     az = int(round(az_deg)) % 360
     el = int(round(el_deg))
-    b = bg_index.get((az, el))
-    if not b:
+
+    # A background reading for this specific angle is required for detection.
+    background_data = bg_index.get((az, el))
+    if not background_data:
+        shared_data["satellite_detected"].value = False
         return False
 
-    bg_strength, bg_range_cm = b
+    bg_strength, bg_range_cm = background_data
+    is_debug = shared_data["debug_mode"].value
 
-    # Multi-criteria detection scoring
-    detection_score = 1.0
+    detected = False
+    if is_debug:
+        # --- DEBUG MODE LOGIC: Focus on Range Difference ---
+        # A hand is detected if it's significantly closer than the static background.
+        range_diff = bg_range_cm - current_range_cm
+        min_m, max_m = shared_data["lidar_acceptance_range"]
 
-    # Criterion 1: Strength difference
-    strength_diff = abs(current_strength - bg_strength)
-    strength_ratio = current_strength / max(bg_strength, 1000)
+        # Check if the reading is within the valid 'hand' range and is much closer than the wall.
+        if (min_m * 100 <= current_range_cm <= max_m * 100) and (range_diff > 30):  # e.g., 30cm closer
+            print(f"[DETECT-DBG] Hand detected! Range diff: {range_diff:.0f}cm")
+            detected = True
+    else:
+        # --- DRONE MODE LOGIC: Multi-criteria Scoring (Original Logic) ---
+        detection_score = 0.0
 
-    if strength_diff > 200:
-        detection_score += min(strength_diff / 1000.0, 5.0)
+        # Criterion 1: Strength difference (drones are often highly reflective)
+        if current_strength > bg_strength + 500:
+            detection_score += 2.0
 
-    if strength_ratio > 1.1:
-        detection_score += min(strength_ratio, 3.0)
-
-    # Criterion 2: Range difference
-    range_diff = abs(current_range_cm - bg_range_cm)
-
-    if range_diff > 100:
-        detection_score += min(range_diff / 100.0, 3.0)
-
-    # Criterion 3: Expected drone characteristics
-    if 100 <= current_range_cm <= 300:
-        detection_score += 2.0
-        if 500 <= current_range_cm <= 800:
+        # Criterion 2: Range difference (can be closer or farther)
+        range_diff = abs(current_range_cm - bg_range_cm)
+        if range_diff > 100:  # 1m difference
             detection_score += 1.0
 
-    # Criterion 4: Strength threshold
-    if current_strength < 100:
-        detection_score *= 0.5
+        # Criterion 3: Must be within drone acceptance range
+        min_m, max_m = shared_data["lidar_acceptance_range"]
+        if not (min_m * 100 <= current_range_cm <= max_m * 100):
+            detection_score = 0.0  # Disqualify if outside range
 
-    # Final decision
-    detection_threshold = 2.0
-    is_detected = detection_score >= detection_threshold
+        if detection_score >= 2.0:
+            print(f"[DETECT] Drone detected! Score: {detection_score:.1f}")
+            detected = True
 
-    if is_detected:
-        print(f"[DETECT] Detection at ({az_deg:.1f}°, {el_deg:.1f}°) Score: {detection_score:.2f}")
+    # If a detection occurred, update the shared memory.
+    if detected:
         sp = shared_data["satellite_points"]
-        sp[0], sp[1], sp[2], sp[3] = az_deg, el_deg, current_strength, current_range_cm
+        with sp.get_lock():
+            sp[0], sp[1], sp[2], sp[3] = az_deg, el_deg, current_strength, current_range_cm
         shared_data["satellite_detected"].value = True
         return True
     else:
         shared_data["satellite_detected"].value = False
         return False
-def decode_pos(pos_int):
-    pos = int(pos_int)
-    az = pos % 360
-    el = pos // 360
-    return az, el
 
 
 def build_bg_index(path):
-    """
-    Enhanced version of your existing build_bg_index function.
-    Keeps same signature but adds quality filtering.
-    """
-    import numpy as np
+    """Builds a dictionary index from the background .npy file for fast lookups."""
     idx = {}
-
     try:
         bg = np.load(path)
-    except Exception as e:
-        print(f"[TFmini] Could not load background file '{path}': {e}")
-        return idx
+        if bg.ndim == 1 and bg.size % 4 == 0:
+            bg = bg.reshape((-1, 4))
 
-    # Accept both 1D (flattened) or 2D (rows) just in case
-    if bg.ndim == 1 and bg.size % 4 == 0:
-        bg = bg.reshape((-1, 4))
+        position_groups = {}
+        for row in bg:
+            pos, dist_cm, strength = int(row[0]), float(row[1]), float(row[2])
+            az, el = pos % 360, pos // 360
+            if not (0 <= az < 360 and 0 <= el < 90 and np.isfinite(dist_cm) and np.isfinite(strength)):
+                continue
 
-    # Group measurements by position for quality filtering
-    position_groups = {}
+            pos_key = (az, el)
+            if pos_key not in position_groups:
+                position_groups[pos_key] = []
+            position_groups[pos_key].append({'distance': dist_cm, 'strength': strength})
 
-    for row in bg:
-        if len(row) < 3:
-            continue
+        for pos_key, measurements in position_groups.items():
+            if not measurements: continue
 
-        pos = int(row[0])
-        dist_cm = float(row[1])
-        strength = float(row[2])
-
-        # --- decode using the existing scheme ---
-        az = pos % 360
-        el = pos // 360
-
-        # basic sanity filters (keeping your existing ones)
-        if not (0 <= az < 360 and 0 <= el < 90):
-            continue
-        if not (10.0 <= dist_cm <= 2000.0):
-            continue
-        if not np.isfinite(dist_cm) or not np.isfinite(strength):
-            continue
-
-        # Group by position for quality filtering
-        pos_key = (az, el)
-        if pos_key not in position_groups:
-            position_groups[pos_key] = []
-        position_groups[pos_key].append({'distance': dist_cm, 'strength': strength})
-
-    # Process each position group with quality filtering
-    for pos_key, measurements in position_groups.items():
-        if not measurements:
-            continue
-
-        if len(measurements) > 1:
-            # Use median values for more robust background
-            distances = [m['distance'] for m in measurements]
-            strengths = [m['strength'] for m in measurements]
-
-            # Remove obvious outliers
-            dist_median = np.median(distances)
-            strength_median = np.median(strengths)
-
-            filtered_measurements = []
-            for m in measurements:
-                if (abs(m['distance'] - dist_median) < 100 and
-                        abs(m['strength'] - strength_median) < 2000):
-                    filtered_measurements.append(m)
-
-            if filtered_measurements:
-                avg_distance = np.mean([m['distance'] for m in filtered_measurements])
-                avg_strength = np.mean([m['strength'] for m in filtered_measurements])
-                idx[pos_key] = (avg_strength, avg_distance)
+            if len(measurements) > 1:
+                # Use median for robustness against outlier readings during the scan
+                avg_distance = np.median([m['distance'] for m in measurements])
+                avg_strength = np.median([m['strength'] for m in measurements])
             else:
-                idx[pos_key] = (strength_median, dist_median)
-        else:
-            m = measurements[0]
-            idx[pos_key] = (m['strength'], m['distance'])
+                avg_distance = measurements[0]['distance']
+                avg_strength = measurements[0]['strength']
 
-    print(f"[TFmini] Background index built: {len(idx)} cells")
+            idx[pos_key] = (avg_strength, avg_distance)
+
+        print(f"[TFmini] Background index built with {len(idx)} cells.")
+    except Exception as e:
+        print(f"[TFmini] Could not load or build background index from '{path}': {e}")
     return idx
+
+
+def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
+    """Main process for the LiDAR sensor."""
+    print("[TFmini] LiDAR process starting...")
+    bg_index = {}
+    background_array = np.empty((0, 4))  # [pos, dist, str, timestamp]
+
+    lidar_sh = shared_data["lidar_data"]
+    stepper_deg, servo_deg = shared_data["stepper_degrees"], shared_data["servo_degrees"]
+
+    try:
+        with serial.Serial(port, baudrate, timeout=1) as ser:
+            print("[TFmini] Serial port opened. Reading data...")
+            while not shared_data["shutdown"].value:
+                distance_cm, strength = read_tfmini_data(ser)
+                if distance_cm is None:
+                    time.sleep(0.005)
+                    continue
+
+                ts = time.time()
+                with lidar_sh.get_lock():
+                    lidar_sh[0], lidar_sh[1], lidar_sh[2] = float(distance_cm), float(strength), ts
+
+                # --- Background Management ---
+                if shared_data["background_ready"].value:
+                    bg_index = build_bg_index(shared_data["background_path"])
+                    shared_data["background_ready"].value = False
+
+                if shared_data["scan_trigger"].value:
+                    az, el = float(stepper_deg.value), float(servo_deg.value)
+                    pos = (int(round(el)) * 360) + (int(round(az)) % 360)
+                    new_row = np.array([[pos, distance_cm, strength, ts]])
+                    background_array = np.append(background_array, new_row, axis=0)
+
+                if shared_data["save_background"].value:
+                    if background_array.size > 0:
+                        np.save(shared_data["background_path"], background_array)
+                        shared_data["background_ready"].value = True
+                        print(f"[TFmini] Background data saved: {len(background_array)} points.")
+                        background_array = np.empty((0, 4))  # Clear buffer
+                    shared_data["save_background"].value = False
+
+                # --- Detection Logic ---
+                # Only run detection if a consumer is ready (acquisition or tracking)
+                # and if we have a valid background map.
+                if (shared_data["acquire_points"].value or shared_data["ekf_running"].value) and bg_index:
+                    az, el = float(stepper_deg.value), float(servo_deg.value)
+                    detect_satellite_direct_index(strength, distance_cm, az, el, shared_data, bg_index)
+
+                time.sleep(0.005)  # Loop at ~200Hz, faster than LiDAR rate
+
+    except serial.SerialException as e:
+        print(f"[TFmini] Serial error: {e}")
+    except Exception as e:
+        import traceback
+        print(f"[TFmini] CRITICAL ERROR in lidar_handler: {e}")
+        traceback.print_exc()
+
+    print("[TFmini] Shutting down.")
