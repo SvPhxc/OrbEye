@@ -7,6 +7,7 @@ from scipy.linalg import block_diag
 import time
 import copy
 from multiprocessing import Process, Array, Value
+from analysis.plotter import plot_ekf_vs_measured
 
 # Helper Functions
 def spherical_to_cartesian(az_rad, el_rad, dist):
@@ -169,9 +170,19 @@ def run_ekf_tracker(shared_data):
       - Publishes estimated_* and predicted_* angles + ekf_confidence to shared_data
     """
     print("[EKF] Starting tracker...")
-    ekf = CloseRangeDroneTrackerEKF(std_acc=0.04, distance_constraint=True)
+    if shared_data["debug_mode"].value:
+        print("[EKF] Configuring for DEBUG MODE (Hand Tracking).")
+        # Higher process noise to follow erratic movements, no distance constraint
+        ekf = CloseRangeDroneTrackerEKF(std_acc=0.5, distance_constraint=False)
+    else:
+        print("[EKF] Configuring for DRONE MODE.")
+        # Original parameters for orbital tracking
+        ekf = CloseRangeDroneTrackerEKF(std_acc=0.04, distance_constraint=True)
 
     # State for init & measurements
+    history_measurements = []
+    history_estimates = []
+
     waiting_for_init = True
     last_measurement_time = None
     measurement_count = 0
@@ -191,6 +202,24 @@ def run_ekf_tracker(shared_data):
     points_buffer = shared_data['points_buffer']    # 12 doubles: [az,el,dist_m,str]*3
 
     while not shared_data["shutdown"].value:
+        # --- NEW: Check if we should stop and plot ---
+        if not shared_data['ekf_running'].value and ekf.initialized:
+            if shared_data['generate_plot_on_stop'].value:
+                print("[EKF] EKF stopped. Generating final plot...")
+                plot_ekf_vs_measured(history_measurements, history_estimates)
+                shared_data['generate_plot_on_stop'].value = False  # Reset flag
+
+            # Reset EKF state for next run
+            ekf.initialized = False
+            history_measurements.clear()
+            history_estimates.clear()
+            print("[EKF] Tracker is now idle.")
+
+        # If not running, just sleep
+        if not shared_data['ekf_running'].value:
+            time.sleep(0.1)
+            continue
+
         try:
             now = time.time()
 
@@ -227,6 +256,7 @@ def run_ekf_tracker(shared_data):
                         ekf.update_with_angle_wrapping(z3, ekf.HJacobian, ekf.h, R3)
                         measurement_count += 1
                         last_measurement_time = now + 0.20
+
                     continue  # next loop
 
             # If not initialized yet, just idle
@@ -273,6 +303,16 @@ def run_ekf_tracker(shared_data):
 
                 last_measurement_time = lidar_ts
                 measurement_count += 1
+                ekf.update_with_angle_wrapping(z, ekf.HJacobian, ekf.h, R)
+
+                # --- NEW: Log the measurement and the resulting state ---
+                history_measurements.append({'z': z, 'time': lidar_ts})
+                history_estimates.append(ekf.x.copy())  # Log the corrected state
+
+                last_measurement_time = lidar_ts
+            else:
+                if ekf.initialized:
+                    history_estimates.append(ekf.x.copy())
 
             # Publish outputs (estimates + one-step prediction)
             est_az_deg, est_el_deg = state_to_angles(ekf.x)

@@ -43,7 +43,7 @@ if __name__ == "__main__":
     acquire_points = Value('b', False)
     ekf_start = Value('b', False)
     ekf_running = Value('b', False)
-    points_buffer = Array('d', 12)
+    points_buffer = Array('d', 15)
     points_count = Value('i', 0)
     ekf_initialized = Value('b', False)
     estimated_azimuth = Value('d', 0.0)
@@ -66,6 +66,9 @@ if __name__ == "__main__":
     background_lidar = Array('d', 360 * 90 * 2)  # shape (90,360,2) flattened
     satellite_points = Array('d', 4)
     satellite_detected = Value('b', False)
+
+    debug_mode = Value('b', False)
+    generate_plot_on_stop = Value('b', False)
 
     shared_data = {
         "lidar_data": lidar_data,
@@ -105,6 +108,8 @@ if __name__ == "__main__":
         "ekf_confidence": ekf_confidence,
         "lidar_acceptance_range": lidar_acceptance_range,
         "go_to_zero": go_to_zero,
+        "debug_mode": debug_mode,
+        "generate_plot_on_stop": generate_plot_on_stop,
     }
 
     # ===== Start processes (non-daemon; default) =====

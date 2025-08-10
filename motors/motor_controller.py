@@ -7,6 +7,8 @@ from time import sleep, monotonic
 import math
 import signal
 from motors.enhanced_acquisition import enhanced_spiral_acquire_three
+from tracking.acquisition import run_acquisition_sequence
+from tracking.tle_utils import parse_tle_file
 
 # --- NEW: Define constants for GPIO pins for clarity ---
 SERVO_PIN = 13
@@ -166,14 +168,7 @@ def _graceful_stop(signum, frame, shared_data):
         pass
 
 
-def spiral_acquire_three(pi, shared_data, movement_queue):
-    """
-    Enhanced 3-point acquisition strategy that:
-    1. Finds first point with highest strength by scanning around TLE prediction
-    2. Uses spiral search to find second point and estimate drone velocity
-    3. Predicts drone position for third point based on movement pattern
-    """
-    return enhanced_spiral_acquire_three(pi, shared_data, movement_queue)
+
 
 
 # Also add this TLE-based initial search function
@@ -272,24 +267,37 @@ def run_motor_control(shared_data, movement_queue):
             if shared_data['pan_right'].value: move(pi, 'right', 5.0, 0.0001, movement_queue, shared_data); shared_data['pan_right'].value = False
             if shared_data["go_to_target"].value: track_target(pi, shared_data["target_azimuth"].value, shared_data["target_elevation"].value, 0.0001, movement_queue, shared_data); shared_data["go_to_target"].value = False
             if shared_data["acquire_points"].value:
-                # Optional: perform TLE-guided initial search first
-                # tle_guided_initial_search(pi, shared_data, movement_queue)
+                print("[MotorControl] Acquisition triggered.")
 
-                # Run enhanced 3-point acquisition
-                success = spiral_acquire_three(pi, shared_data, movement_queue)
-                shared_data["acquire_points"].value = False
-
-                if success and shared_data["points_count"].value >= 3:
-                    shared_data["ekf_start"].value = True
-                    print("[MotorControl] EKF initialization ready")
+                # --- This block is the new core logic ---
+                if shared_data["debug_mode"].value:
+                    # Run the simple manual acquisition
+                    success = run_manual_acquisition_sequence(pi, shared_data, movement_queue)
                 else:
-                    print("[MotorControl] 3-point acquisition failed")
+                    # Run the full TLE-guided acquisition for drones
+                    try:
+                        tle_list = parse_tle_file("temp.tle")
+                        tle_data = tle_list[0] if tle_list else None
+                    except FileNotFoundError:
+                        tle_data = None
+                    success = run_acquisition_sequence(pi, shared_data, movement_queue, tle_data)
+
+                shared_data["acquire_points"].value = False
+                if success:
+                    shared_data["ekf_start"].value = True
+                    print("[MotorControl] Handoff to EKF process initiated.")
+                else:
+                    print("[MotorControl] Acquisition sequence failed.")
+
+                # This tracking logic remains the same. It follows the EKF's predictions.
             if shared_data['ekf_running'].value:
                 track_target(pi,
-                    shared_data["predicted_azimuth"].value,
-                    shared_data["predicted_elevation"].value,
-                    0.0001, movement_queue, shared_data)
+                             shared_data["predicted_azimuth"].value,
+                             shared_data["predicted_elevation"].value,
+                             0.0001, movement_queue, shared_data)
+
             sleep(0.05)
+
     finally:
         print("[MotorControl] Shutting down...", flush=True)
         # Don’t enqueue movements here—worker may already be exiting

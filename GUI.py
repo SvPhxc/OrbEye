@@ -101,9 +101,13 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_acquire.clicked.connect(self.accuire_points)
         controls.addWidget(self.btn_acquire)
 
-        self.btn_stop_ekf = QtWidgets.QPushButton("Stop EKF")
-        self.btn_stop_ekf.clicked.connect(self.stopEKF)
+        self.btn_stop_ekf = QtWidgets.QPushButton("Stop EKF & Generate Plot")
+        self.btn_stop_ekf.clicked.connect(self.stop_and_plot_ekf)
         controls.addWidget(self.btn_stop_ekf)
+
+        self.chk_debug_mode = QtWidgets.QCheckBox("Debug Mode (Hand Tracking)")
+        self.chk_debug_mode.toggled.connect(self.on_debug_mode_toggled)
+        controls.addWidget(self.chk_debug_mode)
 
         self.chk_track_pred = QtWidgets.QCheckBox("Track Prediction")
         self.chk_track_pred.setChecked(True)
@@ -274,10 +278,25 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.view.addItem(sofia_line)
         self.orbit_items.append(sofia_line)
 
+    def on_debug_mode_toggled(self, enabled):
+        self.shared_data["debug_mode"].value = bool(enabled)
+        if enabled:
+            print("[GUI] Debug Mode ENABLED. System configured for close-range hand tracking.")
+            # Set a sensible LiDAR range for hand tracking
+            self.shared_data["lidar_acceptance_range"][0] = 0.2  # 20cm
+            self.shared_data["lidar_acceptance_range"][1] = 2.0  # 2m
+        else:
+            print("[GUI] Debug Mode DISABLED. System configured for drone tracking.")
+            # Restore default drone tracking range
+            self.shared_data["lidar_acceptance_range"][0] = 3.0  # 3m
+            self.shared_data["lidar_acceptance_range"][1] = 12.0  # 12m
+
     def accuire_points(self):
         self.shared_data["acquire_points"].value = True
 
-    def stopEKF(self):
+    def stop_and_plot_ekf(self):
+        print("[GUI] Requesting EKF stop and plot generation.")
+        self.shared_data["generate_plot_on_stop"].value = True
         self.shared_data["ekf_running"].value = False
 
     def on_track_pred_toggled(self, enabled):

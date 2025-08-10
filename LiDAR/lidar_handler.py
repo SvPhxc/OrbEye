@@ -218,6 +218,20 @@ def detect_satellite_direct_index(current_strength, current_range_cm, az_deg, el
     Enhanced version of your existing detect_satellite_direct_index function.
     Keeps the same signature but adds multi-criteria detection.
     """
+    if shared_data["debug_mode"].value:
+        # In debug mode, we bypass background subtraction.
+        # A strong signal in the close-range window is enough.
+        if shared_data["lidar_acceptance_range"][0] * 100 <= current_range_cm <= shared_data["lidar_acceptance_range"][
+            1] * 100 \
+                and current_strength > 1000:  # A reasonably high strength for a close object
+            # print(f"[DETECT-DBG] Detection at ({az_deg:.1f}°, {el_deg:.1f}°)")
+            sp = shared_data["satellite_points"]
+            sp[0], sp[1], sp[2], sp[3] = az_deg, el_deg, current_strength, current_range_cm
+            shared_data["satellite_detected"].value = True
+            return True
+        else:
+            shared_data["satellite_detected"].value = False
+            return False
     az = int(round(az_deg)) % 360
     el = int(round(el_deg))
     b = bg_index.get((az, el))
