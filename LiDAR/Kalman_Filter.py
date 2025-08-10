@@ -1,4 +1,16 @@
-#change location of the file later 
+# ==============================================================================
+# LiDAR/Kalman_Filter.py
+# ------------------------------------------------------------------------------
+# This module runs the Extended Kalman Filter (EKF) for tracking.
+# It operates as a separate process and communicates with other parts of the
+# system via shared memory.
+#
+# Key Features:
+# - A robust state machine that handles Initialization, Running, and Stopped states.
+# - Adapts its parameters for "Drone Mode" or "Debug Mode" (hand tracking).
+# - Logs measurement and estimate history while running.
+# - On request, calls the plotting module to visualize the track after completion.
+# ==============================================================================
 
 import numpy as np
 from filterpy.kalman import ExtendedKalmanFilter
@@ -6,10 +18,13 @@ from filterpy.common import Q_discrete_white_noise
 from scipy.linalg import block_diag
 import time
 import copy
-from multiprocessing import Process, Array, Value
+import traceback
+
+# --- New import for post-track analysis ---
 from analysis.plotter import plot_ekf_vs_measured
 
-# Helper Functions
+
+# region Helper Functions
 def spherical_to_cartesian(az_rad, el_rad, dist):
     """Converts spherical coordinates (azimuth, elevation, distance) to Cartesian (x, y, z)."""
     x = dist * np.cos(el_rad) * np.cos(az_rad)
@@ -17,381 +32,275 @@ def spherical_to_cartesian(az_rad, el_rad, dist):
     z = dist * np.sin(el_rad)
     return x, y, z
 
+
 def cartesian_to_spherical(x, y, z):
     """Converts Cartesian coordinates to spherical (azimuth, elevation, distance)."""
-    dist = np.sqrt(x**2 + y**2 + z**2)
+    dist = np.sqrt(x ** 2 + y ** 2 + z ** 2)
+    if dist == 0:
+        return 0, 0, 0
     az = np.arctan2(y, x)
-    el = np.arctan2(z, np.sqrt(x**2 + y**2))
+    el = np.arcsin(z / dist)
     return az, el, dist
+
 
 def normalize_angle(angle):
     """Normalize angle to [-π, π] range."""
     return np.arctan2(np.sin(angle), np.cos(angle))
 
+
 def state_to_angles(state):
     """Convert state vector to azimuth and elevation in degrees."""
     x, y, z = state[0], state[1], state[2]
-    az, el, _ = cartesian_to_spherical(x, y, z)
-    return np.rad2deg(normalize_angle(az)), np.rad2deg(el)
+    az_rad, el_rad, _ = cartesian_to_spherical(x, y, z)
+    return np.rad2deg(normalize_angle(az_rad)), np.rad2deg(el_rad)
+
 
 def angle_difference(angle1, angle2):
-    """Calculate the shortest angular distance between two angles."""
-    diff = angle1 - angle2
-    return normalize_angle(diff)
+    """Calculate the shortest angular distance between two angles in radians."""
+    return normalize_angle(angle1 - angle2)
 
-# Close-Range Drone Tracker EKF
+
+# endregion
+
 class CloseRangeDroneTrackerEKF(ExtendedKalmanFilter):
-    def __init__(self, std_acc=0.04, distance_constraint=True):
+    def __init__(self, std_acc, distance_constraint):
         dim_x = 6  # State: [x, y, z, vx, vy, vz]
         dim_z = 3  # Measurement: [azimuth, elevation, distance]
         super().__init__(dim_x=dim_x, dim_z=dim_z)
+
         self.std_acc = std_acc
         self.distance_constraint = distance_constraint
-        
-        # Initialize with smaller uncertainty for close-range tracking
-        self.P = np.eye(6) * 5
-        # Position uncertainty - be more confident in z (elevation-related)
-        self.P[0:2, 0:2] *= 1.0  # x, y position uncertainty
-        self.P[2, 2] *= 0.5      # z position uncertainty (more confident)
-        # Velocity uncertainty  
-        self.P[3:5, 3:5] *= 0.3  # x, y velocity uncertainty
-        self.P[5, 5] *= 0.1      # z velocity uncertainty (very confident)
-        
-        # Track initialization status
+
+        # Initialize covariance matrix P
+        self.P = np.eye(6) * 10.0  # Start with moderate uncertainty
+        self.P[3:, 3:] *= 2.0  # More uncertainty in velocity
+
         self.initialized = False
         self.last_time = None
-        
+
     def update_matrices(self, dt):
-        """Updates F and Q matrices for a given time step dt."""
-        # State Transition Matrix F (constant velocity model)
+        """Updates F (State Transition) and Q (Process Noise) matrices for a given time step dt."""
         self.F = np.array([[1, 0, 0, dt, 0, 0],
-                          [0, 1, 0, 0, dt, 0],
-                          [0, 0, 1, 0, 0, dt],
-                          [0, 0, 0, 1, 0, 0],
-                          [0, 0, 0, 0, 1, 0],
-                          [0, 0, 0, 0, 0, 1]])
-        
-        # Much smaller process noise for close-range, slower drone movements
-        q_block = Q_discrete_white_noise(dim=2, dt=dt, var=self.std_acc**2)
-        self.Q = block_diag(q_block, q_block, q_block)
-    
+                           [0, 1, 0, 0, dt, 0],
+                           [0, 0, 1, 0, 0, dt],
+                           [0, 0, 0, 1, 0, 0],
+                           [0, 0, 0, 0, 1, 0],
+                           [0, 0, 0, 0, 0, 1]])
+
+        q_pos = Q_discrete_white_noise(dim=3, dt=dt, var=self.std_acc ** 2, block_size=1)
+        q_vel = np.eye(3) * (self.std_acc * dt) ** 2
+        self.Q = block_diag(q_pos, q_vel)
+
     def h(self, x):
-        """Measurement function: maps state space to [azimuth, elevation, distance]."""
+        """Measurement function: maps state space [x,y,z,...] to measurement space [az, el, dist]."""
         az, el, dist = cartesian_to_spherical(x[0], x[1], x[2])
         return np.array([az, el, dist])
-    
+
     def HJacobian(self, x):
         """Jacobian of the measurement function H with improved numerical stability."""
         H = np.zeros((3, 6))
         x0, x1, x2 = x[0], x[1], x[2]
-        
-        # Add small epsilon to avoid division by zero
+
         eps = 1e-6
-        x_sq_y_sq = x0**2 + x1**2 + eps
-        dist_sq = x_sq_y_sq + x2**2 + eps
+        x_sq_y_sq = x0 ** 2 + x1 ** 2
+        dist_sq = x_sq_y_sq + x2 ** 2
         dist = np.sqrt(dist_sq)
+
+        if x_sq_y_sq < eps or dist < eps:  # Avoid division by zero
+            return H
+
         sqrt_x_sq_y_sq = np.sqrt(x_sq_y_sq)
-        
-        # Partials for azimuth
+
         H[0, 0] = -x1 / x_sq_y_sq
         H[0, 1] = x0 / x_sq_y_sq
-        
-        # Partials for elevation (most sensitive for close range)
+
         H[1, 0] = -x0 * x2 / (sqrt_x_sq_y_sq * dist_sq)
         H[1, 1] = -x1 * x2 / (sqrt_x_sq_y_sq * dist_sq)
         H[1, 2] = sqrt_x_sq_y_sq / dist_sq
-        
-        # Partials for distance
+
         H[2, 0] = x0 / dist
         H[2, 1] = x1 / dist
         H[2, 2] = x2 / dist
-        
+
         return H
-    
+
     def predict(self):
-        """Predict step with distance constraint for close-range tracking."""
+        """Predict step with optional distance constraint."""
         super().predict()
-        
-        # Apply distance constraint (keep drone in 6-12m range)
+
         if self.distance_constraint:
-            current_dist = np.sqrt(self.x[0]**2 + self.x[1]**2 + self.x[2]**2)
-            if current_dist < 6.0:
-                # Scale position to minimum distance
-                scale = 6.0 / current_dist
-                self.x[0:3] *= scale
-            elif current_dist > 12.0:
-                # Scale position to maximum distance  
+            current_dist = np.linalg.norm(self.x[0:3])
+            if current_dist > 12.0:
                 scale = 12.0 / current_dist
                 self.x[0:3] *= scale
-    
+            elif current_dist < 3.0:
+                scale = 3.0 / current_dist
+                self.x[0:3] *= scale
+
     def update_with_angle_wrapping(self, z, HJacobian, Hx, R):
-        """Update step with proper angle wrapping and enhanced elevation tracking."""
-        # Predict measurement
+        """Custom update step with proper angle wrapping for azimuth."""
+        # Calculate innovation (residual)
         hx = Hx(self.x)
-        
-        # Calculate innovation with angle wrapping for azimuth
         y = z - hx
-        y[0] = angle_difference(z[0], hx[0])  # Wrap azimuth difference
-        
-        # For elevation, apply small smoothing to reduce noise sensitivity
-        # Only apply small corrections to prevent over-correction
-        if abs(y[1]) > np.deg2rad(2.0):  # If elevation error > 2 degrees
-            y[1] = np.sign(y[1]) * np.deg2rad(2.0)  # Limit maximum correction
-        
-        # Rest of the update step
+        y[0] = angle_difference(z[0], hx[0])  # Wrap azimuth residual
+
+        # Standard EKF update equations
         H = HJacobian(self.x)
         PHT = self.P @ H.T
         S = H @ PHT + R
-        
-        # Add small regularization for numerical stability
-        S += np.eye(S.shape[0]) * 1e-8
-        
+
         try:
             K = PHT @ np.linalg.inv(S)
         except np.linalg.LinAlgError:
-            # Fallback to pseudo-inverse if singular
-            K = PHT @ np.linalg.pinv(S)
-        
-        # Apply selective update - be more conservative with elevation updates
-        K_modified = K.copy()
-        K_modified[:, 1] *= 0.8  # Reduce elevation correction gain by 20%
-        
-        # Update state and covariance
-        self.x = self.x + K_modified @ y
-        I_KH = np.eye(self.x.shape[0]) - K_modified @ H
-        self.P = I_KH @ self.P @ I_KH.T + K_modified @ R @ K_modified.T
+            K = PHT @ np.linalg.pinv(S)  # Fallback if S is singular
 
-def run_ekf_tracker(shared_data):
-    """
-    EKF tracking loop:
-      - Waits for ekf_start + at least 2 acquired points
-      - Initializes EKF from the first two points (position + velocity)
-      - Then runs predict() every cycle and update() whenever a fresh, valid LiDAR sample arrives
-      - Publishes estimated_* and predicted_* angles + ekf_confidence to shared_data
-    """
-    print("[EKF] Starting tracker...")
-    if shared_data["debug_mode"].value:
-        print("[EKF] Configuring for DEBUG MODE (Hand Tracking).")
-        # Higher process noise to follow erratic movements, no distance constraint
-        ekf = CloseRangeDroneTrackerEKF(std_acc=0.5, distance_constraint=False)
-    else:
-        print("[EKF] Configuring for DRONE MODE.")
-        # Original parameters for orbital tracking
-        ekf = CloseRangeDroneTrackerEKF(std_acc=0.04, distance_constraint=True)
-
-    # State for init & measurements
-    history_measurements = []
-    history_estimates = []
-
-    waiting_for_init = True
-    last_measurement_time = None
-    measurement_count = 0
-
-    # Handy refs to shared Values (created in main via setup_ekf_shared_data)
-    ekf_initialized     = shared_data['ekf_initialized']
-    estimated_azimuth   = shared_data['estimated_azimuth']
-    estimated_elevation = shared_data['estimated_elevation']
-    predicted_azimuth   = shared_data['predicted_azimuth']
-    predicted_elevation = shared_data['predicted_elevation']
-    ekf_confidence      = shared_data['ekf_confidence']
-
-    # Optional control flags you added
-    ekf_running   = shared_data['ekf_running']      # bool: track predictions?
-    ekf_start     = shared_data['ekf_start']        # bool: set True after spiral acquisition
-    points_count  = shared_data['points_count']     # int: how many valid points captured (0..3)
-    points_buffer = shared_data['points_buffer']    # 12 doubles: [az,el,dist_m,str]*3
-
-    while not shared_data["shutdown"].value:
-        # --- NEW: Check if we should stop and plot ---
-        if not shared_data['ekf_running'].value and ekf.initialized:
-            if shared_data['generate_plot_on_stop'].value:
-                print("[EKF] EKF stopped. Generating final plot...")
-                plot_ekf_vs_measured(history_measurements, history_estimates)
-                shared_data['generate_plot_on_stop'].value = False  # Reset flag
-
-            # Reset EKF state for next run
-            ekf.initialized = False
-            history_measurements.clear()
-            history_estimates.clear()
-            print("[EKF] Tracker is now idle.")
-
-        # If not running, just sleep
-        if not shared_data['ekf_running'].value:
-            time.sleep(0.1)
-            continue
-
-        try:
-            now = time.time()
-
-            # ---------------------------
-            # 1) Handle EKF initialization
-            # ---------------------------
-            if waiting_for_init and ekf_start.value:
-                k = points_count.value
-                if k >= 2:
-                    pb = points_buffer  # layout: [az0, el0, dist0_m, str0, az1, el1, dist1_m, str1, az2, el2, dist2_m, str2]
-
-                    # First two points → init buffer
-                    z1 = np.array([np.deg2rad(pb[0]), np.deg2rad(pb[1]), pb[2]])
-                    z2 = np.array([np.deg2rad(pb[4]), np.deg2rad(pb[5]), pb[6]])
-                    initialization_buffer = [
-                        {'z': z1, 'time': now,         'strength': pb[3]},
-                        {'z': z2, 'time': now + 0.10,  'strength': pb[7]},
-                    ]
-
-                    init_ekf(ekf, initialization_buffer)
-                    ekf.initialized = True
-                    ekf.last_time = now
-                    with ekf_initialized.get_lock():
-                        ekf_initialized.value = True
-                    with ekf_running.get_lock():
-                        ekf_running.value = True  # start following predictions (your motor loop decides how to act)
-
-                    waiting_for_init = False
-                    print("[EKF] Initialized from acquired points.")
-                    # Optional: immediately use 3rd point as first update if present
-                    if k >= 3:
-                        z3 = np.array([np.deg2rad(pb[8]), np.deg2rad(pb[9]), pb[10]])
-                        R3 = create_measurement_noise_matrix(pb[11], measurement_count)
-                        ekf.update_with_angle_wrapping(z3, ekf.HJacobian, ekf.h, R3)
-                        measurement_count += 1
-                        last_measurement_time = now + 0.20
-
-                    continue  # next loop
-
-            # If not initialized yet, just idle
-            if not ekf.initialized:
-                time.sleep(0.02)
-                continue
-
-            # ---------------------------
-            # 2) Normal EKF tracking loop
-            # ---------------------------
-            # Time update
-            dt = now - (ekf.last_time if ekf.last_time is not None else now)
-            if dt <= 0.0:
-                dt = 1e-3
-
-            ekf.update_matrices(dt)
-            ekf.predict()
-
-            # Try to read a fresh LiDAR sample
-            with shared_data["lidar_data"].get_lock():
-                lidar_distance_cm = shared_data["lidar_data"][0]
-                lidar_strength    = shared_data["lidar_data"][1]
-                lidar_ts          = shared_data["lidar_data"][2]
-
-            # Current sensor pointing (for az/el)
-            with shared_data["stepper_degrees"].get_lock():
-                current_az_deg = shared_data["stepper_degrees"].value
-            with shared_data["servo_degrees"].get_lock():
-                current_el_deg = shared_data["servo_degrees"].value
-
-            # Only update if we have a *new* and *plausible* measurement
-            has_new = (last_measurement_time is None) or (lidar_ts > last_measurement_time)
-            valid_range = (shared_data["lidar_acceptance_range"][0] <= lidar_distance_cm*100 <= shared_data["lidar_acceptance_range"][1] )  
-            valid_strength = (lidar_strength >= 5000)             # conservative TFmini gate
-
-            if has_new and valid_range and valid_strength:
-                z = np.array([
-                    np.deg2rad(current_az_deg % 360.0),
-                    np.deg2rad(max(0.0, min(90.0, current_el_deg))),
-                    lidar_distance_cm / 100.0  # m
-                ])
-                R = create_measurement_noise_matrix(lidar_strength, measurement_count)
-                ekf.update_with_angle_wrapping(z, ekf.HJacobian, ekf.h, R)
-
-                last_measurement_time = lidar_ts
-                measurement_count += 1
-                ekf.update_with_angle_wrapping(z, ekf.HJacobian, ekf.h, R)
-
-                # --- NEW: Log the measurement and the resulting state ---
-                history_measurements.append({'z': z, 'time': lidar_ts})
-                history_estimates.append(ekf.x.copy())  # Log the corrected state
-
-                last_measurement_time = lidar_ts
-            else:
-                if ekf.initialized:
-                    history_estimates.append(ekf.x.copy())
-
-            # Publish outputs (estimates + one-step prediction)
-            est_az_deg, est_el_deg = state_to_angles(ekf.x)
-            pred_az_deg, pred_el_deg = get_next_prediction(ekf, max(dt, 0.02))
-            conf = calculate_confidence(ekf.P)
-
-            with estimated_azimuth.get_lock():
-                estimated_azimuth.value = float(est_az_deg)
-            with estimated_elevation.get_lock():
-                estimated_elevation.value = float(est_el_deg)
-            with predicted_azimuth.get_lock():
-                predicted_azimuth.value = float(pred_az_deg)
-            with predicted_elevation.get_lock():
-                predicted_elevation.value = float(pred_el_deg)
-            with ekf_confidence.get_lock():
-                ekf_confidence.value = float(conf)
-
-            ekf.last_time = now
-            time.sleep(0.01)  # ~50 Hz loop
-
-        except Exception as e:
-            print(f"[EKF] Error: {e}")
-            time.sleep(0.05)
-
-    print("[EKF] Shutting down...")
+        self.x = self.x + K @ y
+        I_KH = np.eye(self.dim_x) - K @ H
+        self.P = I_KH @ self.P @ I_KH.T + K @ R @ K.T
 
 
-def init_ekf(ekf, initialization_buffer):
-    """Initialize EKF state using first two measurements."""
-    meas1 = initialization_buffer[0]
-    meas2 = initialization_buffer[1]
-    
-    # Convert to Cartesian coordinates
+# region EKF Helper Functions
+def init_ekf(ekf, initial_points):
+    """Initializes the EKF state vector from the first two measurements."""
+    meas1, meas2 = initial_points[0], initial_points[1]
     x1, y1, z1 = spherical_to_cartesian(meas1['z'][0], meas1['z'][1], meas1['z'][2])
     x2, y2, z2 = spherical_to_cartesian(meas2['z'][0], meas2['z'][1], meas2['z'][2])
-    
-    # Calculate time difference and initial velocity
+
     dt = meas2['time'] - meas1['time']
-    if dt <= 0:
-        dt = 0.5  # Default time step
-    
-    vx = (x2 - x1) / dt
-    vy = (y2 - y1) / dt  
-    vz = (z2 - z1) / dt
-    
-    # Set initial state (use second measurement as starting position)
+    if dt <= 0.01:
+        dt = 0.1
+        print(f"[EKF WARN] Invalid dt in init ({dt:.4f}s), defaulting to {dt}s.")
+
+    vx, vy, vz = (x2 - x1) / dt, (y2 - y1) / dt, (z2 - z1) / dt
     ekf.x = np.array([x2, y2, z2, vx, vy, vz])
 
+
 def create_measurement_noise_matrix(strength, measurement_count):
-    """Create measurement noise matrix based on signal strength and search phase."""
-    # Base noise levels for close-range tracking with spiral search
-    base_angular_var = (np.deg2rad(0.3))**2
-    base_dist_var = 0.03**2
-    
-    # Adjust based on signal strength
-    angular_var = base_angular_var / (strength + 0.3)**2
-    elevation_var = angular_var * 0.4  # Better elevation precision
-    dist_var = base_dist_var / (strength + 0.3)**2
-    
-    # Add search phase uncertainty (simulate aggressive search periods)
-    if measurement_count % 20 < 5:  # 25% of time in "aggressive search mode"
-        angular_var *= 1.8
-        elevation_var *= 1.4
-    
-    return np.diag([angular_var, elevation_var, dist_var])
+    """Creates the R (measurement noise) matrix, adapting to signal strength."""
+    # Base noise variance (squared standard deviation)
+    base_angular_var = (np.deg2rad(0.5)) ** 2
+    base_dist_var = (0.05) ** 2  # 5cm std dev
+
+    # Noise decreases with stronger signal (higher confidence)
+    strength_factor = max(1.0, strength / 1000.0)
+    angular_var = base_angular_var / strength_factor
+    dist_var = base_dist_var / strength_factor
+
+    return np.diag([angular_var, angular_var, dist_var])
+
 
 def get_next_prediction(ekf, dt):
-    """Get prediction for next time step without modifying main filter."""
+    """Peeks at the prediction for the next time step without modifying the main filter state."""
     temp_ekf = copy.deepcopy(ekf)
     temp_ekf.update_matrices(dt)
     temp_ekf.predict()
     return state_to_angles(temp_ekf.x)
 
+
 def calculate_confidence(P):
-    """Calculate tracking confidence based on covariance matrix."""
-    # Use trace of position covariance as confidence metric
+    """Calculates a tracking confidence score (0-1) based on the covariance matrix."""
     position_uncertainty = np.trace(P[0:3, 0:3])
-    # Convert to 0-1 scale (lower uncertainty = higher confidence)
     confidence = 1.0 / (1.0 + position_uncertainty)
     return min(max(confidence, 0.0), 1.0)
 
 
+# endregion
+
+def run_ekf_tracker(shared_data):
+    """
+    Main EKF tracking loop with a robust state machine.
+    """
+    print("[EKF] Starting tracker process...")
+    ekf = None
+
+    history_measurements, history_estimates = [], []
+
+    # Local references for cleaner code
+    ekf_start, ekf_running = shared_data['ekf_start'], shared_data['ekf_running']
+    points_count, points_buffer = shared_data['points_count'], shared_data['points_buffer']
+    shutdown, generate_plot = shared_data['shutdown'], shared_data['generate_plot_on_stop']
+
+    while not shutdown.value:
+        try:
+            # STATE 1: UNINITIALIZED - Waiting for acquisition to complete
+            if ekf is None or not ekf.initialized:
+                if ekf_start.value and points_count.value >= 2:
+                    print("[EKF] Initialization signal received.")
+
+                    if shared_data["debug_mode"].value:
+                        print("[EKF] Configuring for DEBUG MODE (Hand Tracking).")
+                        ekf = CloseRangeDroneTrackerEKF(std_acc=0.5, distance_constraint=False)
+                    else:
+                        print("[EKF] Configuring for DRONE MODE.")
+                        ekf = CloseRangeDroneTrackerEKF(std_acc=0.04, distance_constraint=True)
+
+                    history_measurements.clear()
+                    history_estimates.clear()
+
+                    p1 = {'z': np.array([np.deg2rad(points_buffer[0]), np.deg2rad(points_buffer[1]), points_buffer[2]]),
+                          'time': points_buffer[4]}
+                    p2 = {'z': np.array([np.deg2rad(points_buffer[5]), np.deg2rad(points_buffer[6]), points_buffer[7]]),
+                          'time': points_buffer[9]}
+                    init_ekf(ekf, [p1, p2])
+
+                    ekf.last_time = p2['time']
+                    ekf.initialized = True
+                    shared_data['ekf_initialized'].value = True
+                    ekf_running.value = True
+                    ekf_start.value = False
+                    points_count.value = 0
+                    print(f"[EKF] Initialized successfully. Tracking started.")
+                else:
+                    time.sleep(0.1)
+                    continue
+
+            # STATE 2: INITIALIZED - Either running or stopped
+            now = time.time()
+            if ekf_running.value:
+                dt = now - (ekf.last_time if ekf.last_time is not None else now)
+                if dt <= 0: dt = 1e-3
+                ekf.update_matrices(dt)
+                ekf.predict()
+
+                with shared_data["lidar_data"].get_lock():
+                    dist_cm, strength, ts = shared_data["lidar_data"]
+                az, el = shared_data["stepper_degrees"].value, shared_data["servo_degrees"].value
+                min_m, max_m = shared_data["lidar_acceptance_range"]
+
+                has_new = (not history_measurements) or (ts > history_measurements[-1]['time'])
+                valid_range = (min_m <= dist_cm / 100.0 <= max_m)
+                min_strength = 1000 if shared_data["debug_mode"].value else 5000
+                valid_strength = (strength >= min_strength)
+
+                if has_new and valid_range and valid_strength:
+                    z = np.array([np.deg2rad(az), np.deg2rad(el), dist_cm / 100.0])
+                    R = create_measurement_noise_matrix(strength, len(history_measurements))
+                    ekf.update_with_angle_wrapping(z, ekf.HJacobian, ekf.h, R)
+                    history_measurements.append({'z': z, 'time': ts})
+
+                history_estimates.append(ekf.x.copy())
+                ekf.last_time = now
+
+                pred_az, pred_el = get_next_prediction(ekf, max(dt, 0.02))
+                shared_data["predicted_azimuth"].value = pred_az
+                shared_data["predicted_elevation"].value = pred_el
+                shared_data["ekf_confidence"].value = calculate_confidence(ekf.P)
+            else:
+                if generate_plot.value:
+                    print("[EKF] EKF stopped. Generating final plot...")
+                    plot_ekf_vs_measured(history_measurements, history_estimates)
+                    generate_plot.value = False
+
+                print("[EKF] Resetting tracker state. Ready for new acquisition.")
+                ekf.initialized = False
+                shared_data['ekf_initialized'].value = False
+
+            time.sleep(0.01)  # ~100Hz loop
+        except Exception as e:
+            print(f"[EKF] CRITICAL ERROR in tracking loop: {e}")
+            traceback.print_exc()
+            if ekf: ekf.initialized = False
+            ekf_running.value = False
+            time.sleep(1)
+
+    print("[EKF] Shutting down...")
