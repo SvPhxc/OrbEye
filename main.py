@@ -1,275 +1,189 @@
-# ==============================================================================
-# hardware_controller.py (Corrected, Self-Contained Version)
-# ------------------------------------------------------------------------------
-# A unified, high-performance hardware control process.
-# This version includes the PIDController class directly to avoid import errors.
-# ==============================================================================
-
+import sys
+import os
+import signal
 import time
-import serial
-import pigpio
-import threading
-import queue
-import numpy as np
+from multiprocessing import Process, Array, Value, Queue
 
-# The PIDController class is now inside this file, so no import is needed.
+# --- Import the run functions from your process files ---
+# This assumes your directory structure is clean.
+# For example:
+# /main.py
+# /GUI.py
+# /hardware_controller.py
+# /LiDAR/Kalman_Filter.py
 
-# --- Hardware & Scan Constants ---
-SERVO_PIN = 13
-STEPPER_PULSE_PIN = 19
-STEPPER_DIR_PIN = 3
-STEPPER_ENABLE_PIN = 4  # Active LOW to enable driver
-STEPPER_SLEEP_PIN = 6  # Set HIGH for operation
-MICROSTEP_ANGLE = 0.05625
-TARGET_REACHED_THRESHOLD_DEG = 1.0
-
-# Define the boundaries and resolution for scanning and searching
-SCAN_PAN_MIN, SCAN_PAN_MAX = 45, 315
-SCAN_TILT_MIN, SCAN_TILT_MAX = 10, 80
-SCAN_STEP_DEG = 1.0
-
-# --- PID Tuning Gains (CRITICAL!) ---
-MAX_PAN_SPEED_DPS = 250.0
-PAN_KP, PAN_KI, PAN_KD = 1.0, 0.05, 0.15
-MAX_TILT_SPEED_DPS = 600.0
-TILT_KP, TILT_KI, TILT_KD = 1.2, 0.1, 0.2
+from hardware_controller import run_hardware_controller
+from GUI import run_gui
+from LiDAR.Kalman_Filter import run_ekf_tracker
 
 
-# ==============================================================================
-# PID CONTROLLER CLASS (MOVED HERE)
-# ==============================================================================
-class PIDController:
-    """A generic PID controller class."""
-
-    def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-100, 100), anti_windup_limit=20):
-        self.Kp = Kp
-        self.Ki = Ki
-        self.Kd = Kd
-        self.setpoint = setpoint
-        self.output_limits = output_limits
-        self.anti_windup_limit = anti_windup_limit
-        self._integral = 0
-        self._last_error = 0
-        self._last_time = time.monotonic()
-        self._last_output = 0
-
-    def update(self, current_value):
-        current_time = time.monotonic()
-        dt = current_time - self._last_time
-        if dt <= 0: return self._last_output
-        error = self.setpoint - current_value
-        P_out = self.Kp * error
-        self._integral += error * dt
-        self._integral = max(-self.anti_windup_limit, min(self.anti_windup_limit, self._integral))
-        I_out = self.Ki * self._integral
-        derivative = (error - self._last_error) / dt
-        D_out = self.Kd * derivative
-        output = P_out + I_out + D_out
-        output = max(self.output_limits[0], min(self.output_limits[1], output))
-        self._last_error = error
-        self._last_time = current_time
-        self._last_output = output
-        return output
-
-    def set_setpoint(self, new_setpoint):
-        self.setpoint = new_setpoint
-
-    def reset(self):
-        self._integral = 0
-        self._last_error = 0
-        self._last_time = time.monotonic()
-
-
-# ==============================================================================
-
-
-class HardwareController:
-    def __init__(self, shared_data):
-        self.shared_data = shared_data
-        self.pi = None
-        self.ser = None
-        self.shutdown_event = threading.Event()
-        self.lidar_queue = queue.Queue(maxsize=1)
-        self.internal_pan_pos = self.shared_data["stepper_degrees"].value
-        self.internal_tilt_pos = self.shared_data["servo_degrees"].value
-        self.pan_pid = PIDController(PAN_KP, PAN_KI, PAN_KD, output_limits=(-MAX_PAN_SPEED_DPS, MAX_PAN_SPEED_DPS))
-        self.tilt_pid = PIDController(TILT_KP, TILT_KI, TILT_KD,
-                                      output_limits=(-MAX_TILT_SPEED_DPS, MAX_TILT_SPEED_DPS))
-        self.current_scan_az = SCAN_PAN_MIN
-        self.current_scan_el = SCAN_TILT_MAX
-        self.scan_pan_direction = 1
-        self.background_data_buffer = []
-
-    def _lidar_reader_thread(self):
-        """Dedicated thread to continuously read from the TF-Mini S."""
-        print("[HWCtrl-LIDAR] LiDAR reader thread started.")
-        while not self.shutdown_event.is_set():
-            try:
-                self.ser.read_until(b'\x59\x59')
-                frame = self.ser.read(7)
-                if len(frame) == 7:
-                    distance, strength = frame[0] + (frame[1] << 8), frame[2] + (frame[3] << 8)
-                    try:
-                        self.lidar_queue.put_nowait((distance, strength, time.time()))
-                    except queue.Full:
-                        pass
-            except (serial.SerialException, OSError):
-                if not self.shutdown_event.is_set():
-                    print("[HWCtrl-LIDAR] Serial error. Thread stopping.")
-                break
-        print("[HWCtrl-LIDAR] LiDAR reader thread shut down.")
-
-    def _execute_motor_commands(self, pan_velocity_dps, tilt_velocity_dps, dt):
-        """Translates desired velocities into hardware commands."""
-        # Pan Stepper
-        pan_deg_change = pan_velocity_dps * dt
-        if abs(pan_deg_change) > 0.001:
-            pan_steps_to_move = round(abs(pan_deg_change) / MICROSTEP_ANGLE)
-            if pan_steps_to_move > 0:
-                self.pi.write(STEPPER_DIR_PIN, 0 if pan_velocity_dps < 0 else 1)
-                frequency = min(pan_steps_to_move / dt, 300000)
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, frequency, 500000)
-            else:
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
-            self.internal_pan_pos = (self.internal_pan_pos + pan_deg_change) % 360
-        else:
-            self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
-
-        # Tilt Servo
-        tilt_deg_change = tilt_velocity_dps * dt
-        self.internal_tilt_pos = max(0, min(90, self.internal_tilt_pos + tilt_deg_change))
-        pulse_width = 500 + (self.internal_tilt_pos / 0.09) + (28 / 0.09)
-        self.pi.set_servo_pulsewidth(SERVO_PIN, pulse_width)
-
-    def _update_scan_pattern(self):
-        """Calculates the next point in the raster scan pattern."""
-        self.current_scan_az += SCAN_STEP_DEG * self.scan_pan_direction
-        if self.scan_pan_direction == 1 and self.current_scan_az > SCAN_PAN_MAX:
-            self.scan_pan_direction = -1
-            self.current_scan_az = SCAN_PAN_MAX
-            self.current_scan_el -= SCAN_STEP_DEG
-        elif self.scan_pan_direction == -1 and self.current_scan_az < SCAN_PAN_MIN:
-            self.scan_pan_direction = 1
-            self.current_scan_az = SCAN_PAN_MIN
-            self.current_scan_el -= SCAN_STEP_DEG
-        return self.current_scan_el >= SCAN_TILT_MIN
-
-    def run(self):
-        """Main entry point and control loop for the hardware controller."""
+def join_or_escalate(proc, name, timeout=5):
+    """
+    A robust function to join a process, giving it time to shut down
+    gracefully before forcing termination.
+    """
+    if proc is None:
+        return
+    proc.join(timeout=timeout)
+    if proc.is_alive():
+        print(f"[main] Process '{name}' is still alive after {timeout}s. Sending SIGTERM...")
         try:
-            self.pi = pigpio.pi()
-            if not self.pi.connected: raise RuntimeError("pigpio connection failed.")
-            self.pi.set_mode(STEPPER_ENABLE_PIN, pigpio.OUTPUT)
-            self.pi.set_mode(STEPPER_SLEEP_PIN, pigpio.OUTPUT)
-            self.pi.write(STEPPER_ENABLE_PIN, 0)
-            self.pi.write(STEPPER_SLEEP_PIN, 1)
-            print("[HWCtrl] Stepper driver enabled.")
-            self.ser = serial.Serial(self.shared_data["lidar_port"], 115200, timeout=0.1)
-            self.ser.write(b'\x42\x57\x02\x00\x00\x00\x01\x06')
-            lidar_thread = threading.Thread(target=self._lidar_reader_thread);
-            lidar_thread.daemon = True;
-            lidar_thread.start()
-            print("[HWCtrl] Hardware Controller process is running.")
-            last_loop_time = time.monotonic()
-            current_state = "IDLE"
-            while not self.shared_data["shutdown"].value:
-                dt = time.monotonic() - last_loop_time
-                if dt <= 0: continue
-                last_loop_time = time.monotonic()
-                if self.shared_data["lidar_track_mode_active"].value:
-                    next_state = "HF_TRACKING"
-                elif self.shared_data["go_to_target"].value:
-                    next_state = "GOTO_POSITION"
-                elif self.shared_data["search_mode_active"].value:
-                    next_state = "SEARCHING"
-                elif self.shared_data["background_scan_active"].value:
-                    next_state = "BACKGROUND_SCAN"
-                else:
-                    next_state = "IDLE"
-                if next_state != current_state:
-                    print(f"[HWCtrl] State change: {current_state} -> {next_state}")
-                    self.pan_pid.reset();
-                    self.tilt_pid.reset()
-                    if next_state in ["BACKGROUND_SCAN",
-                                      "SEARCHING"]: self.current_scan_az, self.current_scan_el = SCAN_PAN_MIN, SCAN_TILT_MAX; self.scan_pan_direction = 1
-                    current_state = next_state
-                pan_vel, tilt_vel = 0, 0
-                target_reached = abs(
-                    self.pan_pid.setpoint - self.internal_pan_pos) < TARGET_REACHED_THRESHOLD_DEG and abs(
-                    self.tilt_pid.setpoint - self.internal_tilt_pos) < TARGET_REACHED_THRESHOLD_DEG
-                if current_state == "HF_TRACKING":
-                    self.pan_pid.set_setpoint(self.shared_data["predicted_azimuth"].value);
-                    self.tilt_pid.set_setpoint(self.shared_data["predicted_elevation"].value)
-                    pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
-                        self.internal_tilt_pos)
-                elif current_state == "GOTO_POSITION":
-                    self.pan_pid.set_setpoint(self.shared_data["target_azimuth"].value);
-                    self.tilt_pid.set_setpoint(self.shared_data["target_elevation"].value)
-                    self.shared_data["target_reached"].value = target_reached
-                    if not target_reached: pan_vel, tilt_vel = self.pan_pid.update(
-                        self.internal_pan_pos), self.tilt_pid.update(self.internal_tilt_pos)
-                elif current_state in ["BACKGROUND_SCAN", "SEARCHING"]:
-                    self.pan_pid.set_setpoint(self.current_scan_az);
-                    self.tilt_pid.set_setpoint(self.current_scan_el)
-                    if target_reached:
-                        try:
-                            dist, strength, _ = self.lidar_queue.get_nowait()
-                            if current_state == "BACKGROUND_SCAN":
-                                self.background_data_buffer.append(
-                                    [self.internal_pan_pos, self.internal_tilt_pos, dist, strength])
-                            elif current_state == "SEARCHING":
-                                min_r, max_r = self.shared_data["lidar_acceptance_range"];
-                                if (min_r * 100) < dist < (max_r * 100):
-                                    print(
-                                        f"[HWCtrl-SEARCH] Target FOUND at Az:{self.internal_pan_pos:.1f}, El:{self.internal_tilt_pos:.1f}, Dist:{dist}cm")
-                                    with self.shared_data["satellite_points"].get_lock(): self.shared_data[
-                                                                                              "satellite_points"][:] = [
-                                        self.internal_pan_pos, self.internal_tilt_pos, dist, strength]
-                                    self.shared_data["satellite_detected"].value, self.shared_data[
-                                        "search_mode_active"].value = True, False
-                        except queue.Empty:
-                            pass
-                        if not self._update_scan_pattern():
-                            print(f"[HWCtrl] {current_state} finished.")
-                            if current_state == "BACKGROUND_SCAN":
-                                self.shared_data["background_scan_active"].value = False
-                            elif current_state == "SEARCHING":
-                                self.shared_data["search_mode_active"].value = False
-                    else:
-                        pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
-                            self.internal_tilt_pos)
-                self._execute_motor_commands(pan_vel, tilt_vel, dt)
-                try:
-                    dist, strength, ts = self.lidar_queue.get_nowait()
-                    with self.shared_data["lidar_data"].get_lock():
-                        self.shared_data["lidar_data"][:] = [dist, strength, ts]
-                except queue.Empty:
-                    pass
-                self.shared_data["stepper_degrees"].value, self.shared_data[
-                    "servo_degrees"].value = self.internal_pan_pos, self.internal_tilt_pos
-                if self.shared_data["save_background_trigger"].value:
-                    if self.background_data_buffer:
-                        print(f"[HWCtrl] Saving {len(self.background_data_buffer)} points...")
-                        np.save(self.shared_data["background_path"], np.array(self.background_data_buffer));
-                        self.background_data_buffer = []
-                    self.shared_data["save_background_trigger"].value = False
-                time.sleep(0.002)
+            # In POSIX systems (Linux, macOS), this is a more graceful kill signal
+            os.kill(proc.pid, signal.SIGTERM)
         except Exception as e:
-            import traceback; print(f"[HWCtrl] CRITICAL ERROR: {e}"); traceback.print_exc()
-        finally:
-            print("[HWCtrl] Shutting down...")
-            self.shutdown_event.set()
-            if 'lidar_thread' in locals() and lidar_thread.is_alive(): lidar_thread.join(timeout=1)
-            if self.pi and self.pi.connected:
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0);
-                self.pi.write(STEPPER_ENABLE_PIN, 1);
-                self.pi.write(STEPPER_SLEEP_PIN, 0);
-                self.pi.set_servo_pulsewidth(SERVO_PIN, 0);
-                self.pi.stop()
-                print("[HWCtrl] pigpio resources released.")
-            if self.ser and self.ser.is_open: self.ser.close()
+            print(f"[main] SIGTERM for '{name}' failed: {e}")
+        proc.join(timeout=3)
+    if proc.is_alive():
+        print(f"[main] Process '{name}' will not die. Forcing terminate() (last resort).")
+        try:
+            # terminate() is less graceful and should be a last resort
+            proc.terminate()
+        except Exception as e:
+            print(f"[main] terminate() for '{name}' failed: {e}")
+        proc.join(timeout=2)
 
 
-def run_hardware_controller(shared_data):
-    controller = HardwareController(shared_data)
-    controller.run()
+if __name__ == "__main__":
+    print("[main] Initializing shared memory space...")
+
+    # ==========================================================================
+    # 1. SHARED MEMORY SETUP
+    # Define all variables that need to be accessed by multiple processes.
+    # ==========================================================================
+
+    # --- System-wide Flags ---
+    shutdown_flag = Value('b', False)
+
+    # --- Hardware Controller State Flags (set by GUI, read by HW Controller) ---
+    background_scan_active = Value('b', False)
+    search_mode_active = Value('b', False)
+    lidar_track_mode_active = Value('b', False)
+    go_to_target = Value('b', False)
+    save_background_trigger = Value('b', False)
+    target_reached = Value('b', False)
+
+    # --- Target and Position Data ---
+    target_azimuth = Value('d', 0.0)
+    target_elevation = Value('d', 0.0)
+    stepper_degrees = Value('d', 0.0)  # Current position reported by HW Controller
+    servo_degrees = Value('d', 90.0)  # Current position reported by HW Controller
+
+    # --- LiDAR Data (written by HW Controller, read by GUI/EKF) ---
+    lidar_data = Array('d', [0.0, 0.0, 0.0])  # [distance_cm, strength, timestamp]
+
+    # --- Target Detection Data (written by HW Controller, read by EKF/GUI) ---
+    satellite_detected = Value('b', False)
+    satellite_points = Array('d', [0.0, 0.0, 0.0, 0.0])  # [az, el, dist, strength]
+    lidar_acceptance_range = Array('d', [3.0, 50.0])  # Default drone range [min_m, max_m]
+
+    # --- EKF Related Data ---
+    ekf_running = Value('b', False)  # GUI can toggle this to enable/disable EKF calculations
+    acquire_points = Value('b', False)  # GUI triggers this for EKF initialization
+    generate_plot_on_stop = Value('b', False)  # GUI requests EKF to generate a final plot
+    predicted_azimuth = Value('d', 0.0)  # EKF writes, HW Controller reads for tracking
+    predicted_elevation = Value('d', 0.0)  # EKF writes, HW Controller reads for tracking
+    debug_mode = Value('b', False)  # Toggled by GUI to change acceptance range, etc.
+
+    # --- Configuration Data ---
+    # These are treated as constants but included here for easy access by all processes.
+    lidar_port_str = "/dev/serial0"
+    background_path_str = "background_data.npy"
+
+    # ==========================================================================
+    # 2. SHARED DATA DICTIONARY
+    # Pack all shared objects into a single dictionary for easy passing.
+    # ==========================================================================
+    shared_data = {
+        "shutdown": shutdown_flag,
+        "background_scan_active": background_scan_active,
+        "search_mode_active": search_mode_active,
+        "lidar_track_mode_active": lidar_track_mode_active,
+        "go_to_target": go_to_target,
+        "save_background_trigger": save_background_trigger,
+        "target_reached": target_reached,
+        "target_azimuth": target_azimuth,
+        "target_elevation": target_elevation,
+        "stepper_degrees": stepper_degrees,
+        "servo_degrees": servo_degrees,
+        "lidar_data": lidar_data,
+        "satellite_detected": satellite_detected,
+        "satellite_points": satellite_points,
+        "lidar_acceptance_range": lidar_acceptance_range,
+        "ekf_running": ekf_running,
+        "acquire_points": acquire_points,
+        "generate_plot_on_stop": generate_plot_on_stop,
+        "predicted_azimuth": predicted_azimuth,
+        "predicted_elevation": predicted_elevation,
+        "debug_mode": debug_mode,
+        "lidar_port": lidar_port_str,
+        "background_path": background_path_str,
+    }
+
+    # ==========================================================================
+    # 3. PROCESS INITIALIZATION
+    # Create the Process objects for each major component of the application.
+    # ==========================================================================
+    print("[main] Initializing processes...")
+
+    # The single, unified process for all hardware control
+    p_hw = Process(target=run_hardware_controller, args=(shared_data,))
+
+    # The GUI process
+    # The movement_queue is no longer used by the GUI, so we pass None.
+    p_gui = Process(target=run_gui, args=(shared_data, None))
+
+    # The EKF tracker process
+    p_ekf = Process(target=run_ekf_tracker, args=(shared_data,))
+
+    processes = {
+        "HardwareController": p_hw,
+        "GUI": p_gui,
+        "EKF": p_ekf,
+    }
+
+    # Ensure processes are not daemonic, allowing for graceful shutdown
+    for p in processes.values():
+        p.daemon = False
+
+
+    # ==========================================================================
+    # 4. STARTUP & SHUTDOWN HANDLING
+    # ==========================================================================
+
+    # --- Graceful Shutdown Handler ---
+    def _graceful_shutdown(signum, frame):
+        print(f"\n[main] Received signal {signum}. Requesting global shutdown...")
+        shared_data["shutdown"].value = True  # Signal all processes to stop their loops
+
+
+    signal.signal(signal.SIGINT, _graceful_shutdown)  # Handle Ctrl+C
+    signal.signal(signal.SIGTERM, _graceful_shutdown)  # Handle `kill` command
+
+    try:
+        # --- Start all processes ---
+        print("[main] Starting all processes...")
+        for name, p in processes.items():
+            print(f"  - Starting {name}...")
+            p.start()
+        print("[main] All processes are running. System is active.")
+
+        # --- Keep main process alive ---
+        # The main process just waits for the shutdown signal.
+        while not shared_data["shutdown"].value:
+            time.sleep(0.1)
+
+    except (KeyboardInterrupt, SystemExit):
+        # This block is redundant due to the signal handler but is good practice.
+        if not shared_data["shutdown"].value:
+            print("[main] Main loop interrupted. Requesting shutdown...")
+            shared_data["shutdown"].value = True
+
+    finally:
+        # --- Clean Shutdown Sequence ---
+        print("\n[main] Starting shutdown sequence...")
+
+        # Shut down in a logical order: brains first, then body.
+        # This gives the GUI and EKF a chance to finish before the hardware stops.
+        join_or_escalate(processes["GUI"], "GUI")
+        join_or_escalate(processes["EKF"], "EKF")
+        join_or_escalate(processes["Hardware
