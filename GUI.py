@@ -244,6 +244,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
         try:
             # Fetch TLE and parse elements
             if name == "test":
+                with open("example.tle", "w") as f:
+                    f.write(f"{name}\n{tle_lines[0]}\n{tle_lines[1]}\n")
                 elements = parse_tle_file("example.tle")[0]
             else:
                 tle_lines = fetch_tle_by_name(name)
