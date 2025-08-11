@@ -117,14 +117,14 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         # --- EKF Control Group (for other processes) ---
         ekf_box = QtWidgets.QGroupBox("EKF Control")
-        ekf_layout = QVBoxLayout()
-        self.btn_acquire = QPushButton("Acquire (3 pts for EKF)")
+        ekf_layout = QtWidgets.QVBoxLayout()  # <-- CORRECTED
+        self.btn_acquire = QtWidgets.QPushButton("Acquire (3 pts for EKF)")  # <-- CORRECTED
         self.btn_acquire.clicked.connect(lambda: setattr(self.shared_data["acquire_points"], 'value', True))
         ekf_layout.addWidget(self.btn_acquire)
-        self.btn_stop_ekf = QPushButton("Stop EKF & Generate Plot")
+        self.btn_stop_ekf = QtWidgets.QPushButton("Stop EKF & Generate Plot")  # <-- CORRECTED
         self.btn_stop_ekf.clicked.connect(self.stop_and_plot_ekf)
         ekf_layout.addWidget(self.btn_stop_ekf)
-        self.chk_debug_mode = QCheckBox("Debug Mode (Hand Tracking)")
+        self.chk_debug_mode = QtWidgets.QCheckBox("Debug Mode (Hand Tracking)")  # <-- CORRECTED
         self.chk_debug_mode.toggled.connect(self.on_debug_mode_toggled)
         ekf_layout.addWidget(self.chk_debug_mode)
         ekf_box.setLayout(ekf_layout)

@@ -61,6 +61,9 @@ if __name__ == "__main__":
     go_to_target = Value('b', False)
     save_background_trigger = Value('b', False)
     target_reached = Value('b', False)
+    ekf_start = Value('b', False)              # <-- ADD THIS LINE
+    ekf_running = Value('b', False)
+    acquire_points = Value('b', False)
 
     # --- Target and Position Data ---
     target_azimuth = Value('d', 0.0)
@@ -109,6 +112,7 @@ if __name__ == "__main__":
         "satellite_detected": satellite_detected,
         "satellite_points": satellite_points,
         "lidar_acceptance_range": lidar_acceptance_range,
+        "ekf_start": ekf_start,
         "ekf_running": ekf_running,
         "acquire_points": acquire_points,
         "generate_plot_on_stop": generate_plot_on_stop,
@@ -116,6 +120,7 @@ if __name__ == "__main__":
         "predicted_elevation": predicted_elevation,
         "debug_mode": debug_mode,
         "lidar_port": lidar_port_str,
+
         "background_path": background_path_str,
     }
 
