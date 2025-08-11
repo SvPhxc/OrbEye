@@ -1,5 +1,5 @@
 # ==============================================================================
-# hardware_controller.py (Corrected for Integer Frequency)
+# hardware_controller.py (High-Speed Scanning Version)
 # ==============================================================================
 
 import time
@@ -9,43 +9,24 @@ import threading
 import queue
 import numpy as np
 
-# --- Hardware & Scan Constants ---
-SERVO_PIN = 13
-STEPPER_PULSE_PIN = 19
-STEPPER_DIR_PIN = 3
-STEPPER_ENABLE_PIN = 4
-STEPPER_SLEEP_PIN = 6
-MICROSTEP_ANGLE = 0.05625
-TARGET_REACHED_THRESHOLD_DEG = 0.1
-SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360
-SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90
-SCAN_STEP_DEG = 1.0
 
-# --- PID Tuning Gains ---
-MAX_PAN_SPEED_DPS = 360.0
-PAN_KP, PAN_KI, PAN_KD = 6.0, 0.0, 0.0
-MAX_TILT_SPEED_DPS = 600.0
-TILT_KP, TILT_KI, TILT_KD = 6.0, 0.0, 0.0
-
-
+# --- PIDController Class (self-contained to avoid import issues) ---
 class PIDController:
-    """A generic PID controller class."""
-
     def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-100, 100), anti_windup_limit=20):
-        self.Kp, self.Ki, self.Kd = Kp, Ki, Kd
-        self.setpoint = setpoint
-        self.output_limits = output_limits
+        self.Kp, self.Ki, self.Kd = Kp, Ki, Kd;
+        self.setpoint = setpoint;
+        self.output_limits = output_limits;
         self.anti_windup_limit = anti_windup_limit
-        self._integral = 0
-        self._last_error = 0
-        self._last_time = time.monotonic()
+        self._integral = 0;
+        self._last_error = 0;
+        self._last_time = time.monotonic();
         self._last_output = 0
 
     def update(self, current_value):
-        current_time = time.monotonic()
+        current_time = time.monotonic();
         dt = current_time - self._last_time
         if dt <= 0: return self._last_output
-        error = self.setpoint - current_value
+        error = self.setpoint - current_value;
         self._integral += error * dt
         self._integral = max(-self.anti_windup_limit, min(self.anti_windup_limit, self._integral))
         derivative = (error - self._last_error) / dt
@@ -59,10 +40,29 @@ class PIDController:
     def reset(self): self._integral, self._last_error, self._last_time = 0, 0, time.monotonic()
 
 
+# --- Hardware & Scan Constants ---
+SERVO_PIN = 13;
+STEPPER_PULSE_PIN = 19;
+STEPPER_DIR_PIN = 3;
+STEPPER_ENABLE_PIN = 4;
+STEPPER_SLEEP_PIN = 6
+MICROSTEP_ANGLE = 0.05625;
+TARGET_REACHED_THRESHOLD_DEG = 0.1  # Tighter threshold for accuracy
+SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360;
+SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90;
+SCAN_TILT_STEP_DEG = 1.0
+
+# --- PID & Speed Tuning ---
+MAX_PAN_SPEED_DPS = 360.0  # Speed for GOTO moves and scan sweeps
+PAN_KP, PAN_KI, PAN_KD = 6.0, 0.05, 0.15
+MAX_TILT_SPEED_DPS = 600.0
+TILT_KP, TILT_KI, TILT_KD = 6, 0.1, 0.2
+
+
 class HardwareController:
     def __init__(self, shared_data):
-        self.shared_data = shared_data
-        self.pi = None
+        self.shared_data = shared_data;
+        self.pi = None;
         self.ser = None
         self.shutdown_event = threading.Event()
         self.lidar_queue = queue.Queue(maxsize=1)
@@ -71,16 +71,18 @@ class HardwareController:
         self.pan_pid = PIDController(PAN_KP, PAN_KI, PAN_KD, output_limits=(-MAX_PAN_SPEED_DPS, MAX_PAN_SPEED_DPS))
         self.tilt_pid = PIDController(TILT_KP, TILT_KI, TILT_KD,
                                       output_limits=(-MAX_TILT_SPEED_DPS, MAX_TILT_SPEED_DPS))
-        self.current_scan_az = SCAN_PAN_MIN
+        self.current_scan_az = SCAN_PAN_MIN;
         self.current_scan_el = SCAN_TILT_MAX
-        self.scan_pan_direction = 1
+        self.scan_pan_direction = 1;
         self.background_data_buffer = []
+        # --- NEW: Sub-state for the scanner ---
+        self.scan_sub_state = "IDLE"
 
     def _lidar_reader_thread(self):
         print("[HWCtrl-LIDAR] LiDAR reader thread started.")
         while not self.shutdown_event.is_set():
             try:
-                self.ser.read_until(b'\x59\x59')
+                self.ser.read_until(b'\x59\x59');
                 frame = self.ser.read(7)
                 if len(frame) == 7:
                     distance, strength = frame[0] + (frame[1] << 8), frame[2] + (frame[3] << 8)
@@ -89,7 +91,7 @@ class HardwareController:
                     except queue.Full:
                         pass
             except (serial.SerialException, OSError):
-                if not self.shutdown_event.is_set(): print("[HWCtrl-LIDAR] Serial error. Thread stopping.")
+                if not self.shutdown_event.is_set(): print("[HWCtrl-LIDAR] Serial error.")
                 break
         print("[HWCtrl-LIDAR] LiDAR reader thread shut down.")
 
@@ -100,41 +102,34 @@ class HardwareController:
             pan_steps_to_move = round(abs(pan_deg_change) / MICROSTEP_ANGLE)
             if pan_steps_to_move > 0:
                 self.pi.write(STEPPER_DIR_PIN, 0 if pan_velocity_dps < 0 else 1)
-
-                # --- FIX IS HERE: Convert calculated frequency to an integer ---
                 frequency = int(min(pan_steps_to_move / dt, 300000))
-                # -----------------------------------------------------------------
-
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, frequency, 500000)  # duty cycle 50%
+                self.pi.hardware_PWM(STEPPER_PULSE_PIN, frequency, 500000)
             else:
                 self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
             self.internal_pan_pos = (self.internal_pan_pos + pan_deg_change) % 360
         else:
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
-
         # Tilt Servo
         tilt_deg_change = tilt_velocity_dps * dt
         self.internal_tilt_pos = max(0, min(90, self.internal_tilt_pos + tilt_deg_change))
         pulse_width = 500 + (self.internal_tilt_pos / 0.09) + (28 / 0.09)
-        self.pi.set_servo_pulsewidth(SERVO_PIN, int(pulse_width))  # Also good practice to int() here
+        self.pi.set_servo_pulsewidth(SERVO_PIN, int(pulse_width))
 
-    def _update_scan_pattern(self):
-        self.current_scan_az += SCAN_STEP_DEG * self.scan_pan_direction
-        if self.scan_pan_direction == 1 and self.current_scan_az > SCAN_PAN_MAX:
-            self.scan_pan_direction, self.current_scan_az = -1, SCAN_PAN_MAX
-            self.current_scan_el -= SCAN_STEP_DEG
-        elif self.scan_pan_direction == -1 and self.current_scan_az < SCAN_PAN_MIN:
-            self.scan_pan_direction, self.current_scan_az = 1, SCAN_PAN_MIN
-            self.current_scan_el -= SCAN_STEP_DEG
+    def _update_scan_for_next_row(self):
+        """Prepares the state for the next row sweep."""
+        self.current_scan_el -= SCAN_TILT_STEP_DEG
+        self.scan_pan_direction *= -1  # Reverse pan direction for the next sweep
+        # Target for the start of the next row is the edge we just arrived at
+        self.current_scan_az = SCAN_PAN_MAX if self.scan_pan_direction == -1 else SCAN_PAN_MIN
         return self.current_scan_el >= SCAN_TILT_MIN
 
     def run(self):
         try:
-            self.pi = pigpio.pi()
+            self.pi = pigpio.pi();
             if not self.pi.connected: raise RuntimeError("pigpio connection failed.")
-            self.pi.set_mode(STEPPER_ENABLE_PIN, pigpio.OUTPUT)
+            self.pi.set_mode(STEPPER_ENABLE_PIN, pigpio.OUTPUT);
             self.pi.set_mode(STEPPER_SLEEP_PIN, pigpio.OUTPUT)
-            self.pi.write(STEPPER_ENABLE_PIN, 0)
+            self.pi.write(STEPPER_ENABLE_PIN, 0);
             self.pi.write(STEPPER_SLEEP_PIN, 1)
             print("[HWCtrl] Stepper driver enabled.")
             self.ser = serial.Serial(self.shared_data["lidar_port"], 115200, timeout=0.1)
@@ -143,11 +138,11 @@ class HardwareController:
             lidar_thread.daemon = True;
             lidar_thread.start()
             print("[HWCtrl] Hardware Controller process is running.")
-            last_loop_time = time.monotonic()
+            last_loop_time = time.monotonic();
             current_state = "IDLE"
             while not self.shared_data["shutdown"].value:
                 dt = time.monotonic() - last_loop_time
-                if dt <= 0: continue
+                if dt <= 0.001: time.sleep(0.001); continue
                 last_loop_time = time.monotonic()
                 if self.shared_data["lidar_track_mode_active"].value:
                     next_state = "HF_TRACKING"
@@ -163,60 +158,69 @@ class HardwareController:
                     print(f"[HWCtrl] State change: {current_state} -> {next_state}")
                     self.pan_pid.reset();
                     self.tilt_pid.reset()
-                    if next_state in ["BACKGROUND_SCAN",
-                                      "SEARCHING"]: self.current_scan_az, self.current_scan_el = SCAN_PAN_MIN, SCAN_TILT_MAX; self.scan_pan_direction = 1
+                    if next_state == "BACKGROUND_SCAN":
+                        self.current_scan_az, self.current_scan_el = SCAN_PAN_MIN, SCAN_TILT_MAX
+                        self.scan_pan_direction = 1;
+                        self.scan_sub_state = "MOVING_TO_ROW_START"
+                    elif next_state == "IDLE":
+                        self.scan_sub_state = "IDLE"  # Reset sub-state when leaving scan mode
                     current_state = next_state
                 pan_vel, tilt_vel = 0, 0
-                target_reached = abs(
-                    self.pan_pid.setpoint - self.internal_pan_pos) < TARGET_REACHED_THRESHOLD_DEG and abs(
-                    self.tilt_pid.setpoint - self.internal_tilt_pos) < TARGET_REACHED_THRESHOLD_DEG
                 if current_state == "HF_TRACKING":
                     self.pan_pid.set_setpoint(self.shared_data["predicted_azimuth"].value);
                     self.tilt_pid.set_setpoint(self.shared_data["predicted_elevation"].value)
                     pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
                         self.internal_tilt_pos)
                 elif current_state == "GOTO_POSITION":
-                    self.pan_pid.set_setpoint(self.shared_data["target_azimuth"].value)
+                    self.pan_pid.set_setpoint(self.shared_data["target_azimuth"].value);
                     self.tilt_pid.set_setpoint(self.shared_data["target_elevation"].value)
-
+                    target_reached = abs(
+                        self.pan_pid.setpoint - self.internal_pan_pos) < TARGET_REACHED_THRESHOLD_DEG and abs(
+                        self.tilt_pid.setpoint - self.internal_tilt_pos) < TARGET_REACHED_THRESHOLD_DEG
                     self.shared_data["target_reached"].value = target_reached
                     if not target_reached:
                         pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
                             self.internal_tilt_pos)
                     else:
-                        # --- ADD THIS LINE ---
-                        # Target has been reached, so consume the trigger by setting it to False.
                         self.shared_data["go_to_target"].value = False
-                elif current_state in ["BACKGROUND_SCAN", "SEARCHING"]:
-                    self.pan_pid.set_setpoint(self.current_scan_az);
-                    self.tilt_pid.set_setpoint(self.current_scan_el)
-                    if target_reached:
+
+                # --- NEW HIGH-SPEED SCAN LOGIC ---
+                elif current_state == "BACKGROUND_SCAN":
+                    if self.scan_sub_state == "MOVING_TO_ROW_START":
+                        self.pan_pid.set_setpoint(self.current_scan_az);
+                        self.tilt_pid.set_setpoint(self.current_scan_el)
+                        target_reached = abs(
+                            self.pan_pid.setpoint - self.internal_pan_pos) < TARGET_REACHED_THRESHOLD_DEG and abs(
+                            self.tilt_pid.setpoint - self.internal_tilt_pos) < TARGET_REACHED_THRESHOLD_DEG
+                        if target_reached:
+                            print(f"[HWCtrl-Scan] Reached start of row El={self.current_scan_el:.1f}. Starting sweep.")
+                            self.scan_sub_state = "SWEEPING_ROW"
+                        else:
+                            pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
+                                self.internal_tilt_pos)
+
+                    elif self.scan_sub_state == "SWEEPING_ROW":
+                        pan_vel = MAX_PAN_SPEED_DPS * self.scan_pan_direction;
+                        tilt_vel = 0
                         try:
                             dist, strength, _ = self.lidar_queue.get_nowait()
-                            if current_state == "BACKGROUND_SCAN":
-                                self.background_data_buffer.append(
-                                    [self.internal_pan_pos, self.internal_tilt_pos, dist, strength])
-                            elif current_state == "SEARCHING":
-                                min_r, max_r = self.shared_data["lidar_acceptance_range"];
-                                if (min_r * 100) < dist < (max_r * 100):
-                                    print(
-                                        f"[HWCtrl-SEARCH] Target FOUND at Az:{self.internal_pan_pos:.1f}, El:{self.internal_tilt_pos:.1f}, Dist:{dist}cm")
-                                    with self.shared_data["satellite_points"].get_lock(): self.shared_data[
-                                                                                              "satellite_points"][:] = [
-                                        self.internal_pan_pos, self.internal_tilt_pos, dist, strength]
-                                    self.shared_data["satellite_detected"].value, self.shared_data[
-                                        "search_mode_active"].value = True, False
+                            self.background_data_buffer.append(
+                                [self.internal_pan_pos, self.internal_tilt_pos, dist, strength])
                         except queue.Empty:
                             pass
-                        if not self._update_scan_pattern():
-                            if current_state == "BACKGROUND_SCAN":
+
+                        # Check if sweep is finished
+                        pan_finished = (self.scan_pan_direction == 1 and self.internal_pan_pos >= SCAN_PAN_MAX) or \
+                                       (self.scan_pan_direction == -1 and self.internal_pan_pos <= SCAN_PAN_MIN)
+                        if pan_finished:
+                            print(f"[HWCtrl-Scan] Finished sweep at El={self.current_scan_el:.1f}.")
+                            pan_vel = 0  # Stop motion
+                            if self._update_scan_for_next_row():
+                                self.scan_sub_state = "MOVING_TO_ROW_START"
+                            else:
+                                print("[HWCtrl] Background scan finished.");
                                 self.shared_data["background_scan_active"].value = False
-                            elif current_state == "SEARCHING":
-                                self.shared_data["search_mode_active"].value = False
-                            print(f"[HWCtrl] {current_state} finished.")
-                    else:
-                        pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
-                            self.internal_tilt_pos)
+
                 self._execute_motor_commands(pan_vel, tilt_vel, dt)
                 try:
                     dist, strength, ts = self.lidar_queue.get_nowait()
@@ -232,7 +236,7 @@ class HardwareController:
                         np.save(self.shared_data["background_path"], np.array(self.background_data_buffer));
                         self.background_data_buffer = []
                     self.shared_data["save_background_trigger"].value = False
-                time.sleep(0.002)
+                time.sleep(0.001)
         except Exception as e:
             import traceback; print(f"[HWCtrl] CRITICAL ERROR: {e}"); traceback.print_exc()
         finally:
