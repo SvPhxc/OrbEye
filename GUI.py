@@ -251,7 +251,15 @@ class TrackerWindow(QtWidgets.QMainWindow):
             elements = parse_tle_file("temp.tle")[0]
 
             # Propagate orbit
-            self.orbit_xyz = generate_orbit_xyz(tle_lines=tle_lines, duration_minutes=90)
+            self.orbit_xyz = generate_orbit_xyz(
+                tle_lines=tle_lines,
+                duration_minutes=90,
+                site_lat_deg=42.6977,
+                site_lon_deg=23.3219,
+                site_h_m=0.0,
+                units="km"  # match your viewer units
+            )
+
 
             # Clear old visuals
             self.remove_orbit()
