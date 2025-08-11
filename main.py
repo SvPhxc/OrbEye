@@ -4,6 +4,7 @@ from motors.motor_controller import run_motor_control
 from LiDAR.lidar_handler import run_lidar
 from LiDAR.Kalman_Filter import run_ekf_tracker
 from tracking.tracker import tracking
+from hardware_controller import run_hardware_controller
 from GUI import run_gui
 import time, os, signal, sys
 
@@ -54,6 +55,12 @@ if __name__ == "__main__":
     lidar_acceptance_range = Array('d', [1.0, 2.0])  # min_m, max_m
     go_to_zero = Value('b', False)
     stepper_busy = Value('b', False)
+    background_scan_active = Value('b', False)
+    search_mode_active = Value('b', False)
+    lidar_track_mode_active = Value('b', False)
+    go_to_target = Value('b', False)
+    save_background_trigger = Value('b', False)
+    target_reached = Value('b', False)
     background_path = "background_data.npy"
 
     direction = Value('i', -1)
@@ -107,24 +114,28 @@ if __name__ == "__main__":
         "lidar_acceptance_range": lidar_acceptance_range,
         "go_to_zero": go_to_zero,
         "stepper_busy": stepper_busy,
+        "background_scan_active": background_scan_active,
+        "search_mode_active": search_mode_active,
+        "lidar_track_mode_active": lidar_track_mode_active,
+        "save_background_trigger": save_background_trigger,
+        "target_reached": target_reached,
     }
 
     # ===== Start processes (non-daemon; default) =====
     movement_queue = Queue()
     # p1 = Process(target=run_tracking, args=(shared_data,))
-    p2 = Process(target=run_motor_control, args=(shared_data, movement_queue))
+    p2 = Process(target=run_hardware_controller, args=(shared_data))
     p3 = Process(target=run_gui, args=(shared_data, movement_queue))
-    p4 = Process(target=run_lidar, args=(shared_data,))
     p5 = Process(target=run_ekf_tracker, args=(shared_data,))
 
-    for p in (p2, p3, p4, p5):  # p1 if you enable it
+    for p in (p2, p3, p5):  # p1 if you enable it
         p.daemon = False
 
     # Start
     # p1.start()
     p2.start()
     p3.start()
-    p4.start()
+
     p5.start()
 
     # ===== Handle Ctrl-C / SIGTERM to flip the flag, not kill processes =====
@@ -151,9 +162,8 @@ if __name__ == "__main__":
         # Give each process a chance to run its finally/cleanup
         # p1: run_tracking (if enabled)
         # join_or_escalate(p1, "Tracking")
-        join_or_escalate(p4, "LiDAR")
         join_or_escalate(p5, "EKF")
-        join_or_escalate(p2, "MotorControl")
+        join_or_escalate(p2, "HarwareControll")
         join_or_escalate(p3, "GUI")
 
         print("Program exited cleanly")
