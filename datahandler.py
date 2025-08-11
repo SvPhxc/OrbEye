@@ -73,12 +73,14 @@ def _rot_ecef_to_enu(lat_rad, lon_rad):
         [ clat*clon,     clat*slon,      slat],    # Up
     ], dtype=float)
 
+
 def _teme_to_itrs_m(r_teme_km, t_dt_utc):
-    """Astropy: TEME (km) -> ITRS/ECEF (meters) at datetime t."""
+    """TEME (km) -> ITRS/ECEF (meters) using Astropy, robust to units."""
+    r = np.asarray(r_teme_km, dtype=float)  # ensure plain floats
     t = Time(t_dt_utc, scale="utc")
-    teme = TEME(CartesianRepresentation(*(np.array(r_teme_km) * u.km)), obstime=t)
-    itrs = teme.transform_to(ITRS(obstime=t))
-    return itrs.cartesian.xyz.to_value(u.m)  # np.array([x,y,z]) in meters
+    cr = CartesianRepresentation(x=r[0]*u.km, y=r[1]*u.km, z=r[2]*u.km)
+    itrs = TEME(cr, obstime=t).transform_to(ITRS(obstime=t))
+    return itrs.cartesian.xyz.to_value(u.m)  # returns plain floats (meters)
 
 # ---------- Main function ----------
 def generate_orbit_xyz(
@@ -118,10 +120,13 @@ def generate_orbit_xyz(
     want_enu = (site_lat_deg is not None and site_lon_deg is not None)
     if want_enu:
         site = EarthLocation.from_geodetic(lon=site_lon_deg * u.deg,
-                                           lat=site_lat_deg * u.deg,
-                                           height=site_h_m * u.m)
-        site_ecef_m = np.array(site.to_geocentric())  # tuple of quantities (x,y,z) in m
-        site_ecef_m = np.array([c.value for c in site_ecef_m], dtype=float)
+                                        lat=site_lat_deg * u.deg,
+                                        height=site_h_m * u.m)
+        site_ecef_m = np.array([
+            site.x.to_value(u.m),
+            site.y.to_value(u.m),
+            site.z.to_value(u.m)
+        ], dtype=float)
 
         lat_rad = np.deg2rad(site_lat_deg)
         lon_rad = np.deg2rad(site_lon_deg)
@@ -139,7 +144,7 @@ def generate_orbit_xyz(
             r_km = np.array(r_km, dtype=float)
             xyz_km[i] = r_km
             if want_enu:
-                r_ecef_m = _teme_to_itrs_m(r_km, t)
+                r_ecef_m = _teme_to_itrs_m(r_km, t)   # plain floats in meters
                 rho_ecef = r_ecef_m - site_ecef_m
                 enu_m[i] = R_e2n @ rho_ecef
 
