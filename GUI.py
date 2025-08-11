@@ -242,18 +242,20 @@ class TrackerWindow(QtWidgets.QMainWindow):
             return
 
         try:
-            # Fetch TLE and parse elements
             if name == "test":
-                with open("example.tle", "w") as f:
-                    f.write(f"{name}\n{tle_lines[0]}\n{tle_lines[1]}\n")
-                elements = parse_tle_file("example.tle")[0]
+                tle_filename = "example.tle"
+                # Put known-good test lines here
+                line1 = "1 99999U 25001A   25214.00000000  .00000010  00000-0  10000-4 0  9990"
+                line2 = "2 99999 097.5000 123.4567 0001000 000.0000 000.0000 14.95000000    01"
+                with open(tle_filename, "w") as f:
+                    f.write(f"{name}\n{line1}\n{line2}\n")
             else:
+                tle_filename = "temp.tle"
                 tle_lines = fetch_tle_by_name(name)
-
-                with open("temp.tle", "w") as f:
+                with open(tle_filename, "w") as f:
                     f.write(f"{name}\n{tle_lines[0]}\n{tle_lines[1]}\n")
 
-                elements = parse_tle_file("temp.tle")[0]
+            elements = parse_tle_file(tle_filename)[0]
 
             # Propagate orbit
             self.orbit_xyz = generate_orbit_xyz(
