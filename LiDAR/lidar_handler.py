@@ -19,8 +19,7 @@ def read_tfmini_data(serial_port):
                 buffer = buffer[9:]  # Remove this frame from the buffer
                 return distance, strength
             else:
-                buffer = buffer[1:]  # Skip until next potential frame
-
+                buffer = buffer[1:]  # Skip until next potential framee
 def run_lidar(shared_data, port="/dev/serial0", baudrate=115200):
     """
     TFmini process for Raspberry Pi UART.

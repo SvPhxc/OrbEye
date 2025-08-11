@@ -106,7 +106,6 @@ if __name__ == "__main__":
         "ekf_confidence": ekf_confidence,
         "lidar_acceptance_range": lidar_acceptance_range,
         "go_to_zero": go_to_zero,
-        "stepper_busy": stepper_busy,
     }
 
     # ===== Start processes (non-daemon; default) =====

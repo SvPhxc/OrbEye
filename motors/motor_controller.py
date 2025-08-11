@@ -5,6 +5,7 @@ import pigpio
 import RPi.GPIO as GPIO
 from time import sleep, monotonic
 import LiDAR.calculate_scan_path_test as calculate_scan_path
+import LiDAR.adaptive_tracking as adaptive_tracker
 import math
 import signal
 
@@ -16,7 +17,25 @@ STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 
-#maybe add a function to take it to the inital defined position first
+
+def integrated_search_and_track(shared_data, pi, movement_queue, delta_azimuth=50, distance_meters=2,initial_pan_angle=0, initial_tilt_angle=0):
+    """
+    Combined search and tracking function that switches modes based on target detection.
+    """
+    # Check if we have a strong target signal
+    lidar_data = shared_data['lidar_data']
+    distance, strength, timestamp = lidar_data
+    
+    if strength >= 10000:
+        # Target detected - switch to adaptive tracking
+        print("Strong target detected! Switching to adaptive tracking...")
+        adaptive_tracker.adaptive_tracking_loop(shared_data, pi, movement_queue, lidar_data)
+    else:
+        # No target - continue with your existing arc search
+        print("No target detected. Running arc search pattern...")
+        start_arc_search(shared_data, pi, movement_queue, 
+                        delta_azimuth, distance_meters,
+                        initial_pan_angle, initial_tilt_angle)
 
 def start_arc_search(shared_data, pi, movement_queue,
                      delta_azimuth=50, distance_meters=2,
@@ -290,7 +309,10 @@ def run_motor_control(shared_data, movement_queue):
             if shared_data["go_to_target"].value: track_target(pi, shared_data["target_azimuth"].value, shared_data["target_elevation"].value, 0.0001, movement_queue, shared_data); shared_data["go_to_target"].value = False
             if shared_data["acquire_points"].value:
                 #square_search(75, 0, 10, shared_data, movement_queue, pi)
-                start_arc_search(shared_data, pi, movement_queue, 50, 2, 0, 0)
+                #start_arc_search(shared_data, pi, movement_queue, 50, 2, 0, 0)
+                #start adaptive one
+                integrated_search_and_track(shared_data,pi,movement_queue)                
+                
                 shared_data["acquire_points"].value = False
                 if shared_data["points_count"].value >= 3:
                     shared_data["ekf_start"].value = True
