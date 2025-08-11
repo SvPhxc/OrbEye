@@ -12,7 +12,7 @@ from multiprocessing import Process, Array, Value, Queue
 # /hardware_controller.py
 # /LiDAR/Kalman_Filter.py
 
-from hardware_controller import run_hardware_controller
+from motor.hardware_controller import run_hardware_controller
 from GUI import run_gui
 from LiDAR.Kalman_Filter import run_ekf_tracker
 
