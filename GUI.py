@@ -257,6 +257,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
             az, el = self.shared_data['stepper_degrees'].value, self.shared_data['servo_degrees'].value
             dist_cm = self.shared_data['lidar_data'][0]
             length_m = dist_cm / 100.0 if 10.0 <= dist_cm <= 16000.0 else 15.0
+            length_m *= 10
             az_rad, el_rad = np.radians(az), np.radians(el)
 
             # --- CORRECTED COORDINATE CONVERSION ---
