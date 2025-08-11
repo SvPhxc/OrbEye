@@ -8,7 +8,7 @@ import time
 import os
 from astropy.time import Time
 
-from motors.motor_controller import *
+#from motors.motor_controller import *
 
 from datahandler import (
     parse_tle_file,
