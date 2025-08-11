@@ -2,6 +2,7 @@ import math
 import time
 from enum import Enum
 from collections import deque
+from motors.motor_controller import move
 
 class TrackingState(Enum):
     SEARCHING = "searching"
@@ -12,8 +13,8 @@ class TrackingState(Enum):
 class AdaptiveTracker:
     def __init__(self, shared_dict, motor_response_time=0.1):
         self.shared_dict = shared_dict
-        self.current_pan = shared_dict.get('stepper_degrees', 0.0)  # Pan from stepper
-        self.current_tilt = shared_dict.get('servo_degrees', 0.0)   # Tilt from servo
+        self.current_pan = shared_dict['stepper_degrees'].value  # Pan from stepper
+        self.current_tilt = shared_dict['servo_degrees'].value  # Tilt from servo
         self.motor_response_time = motor_response_time
         
         # Target tracking variables
@@ -216,8 +217,9 @@ class AdaptiveTracker:
     
     def update_current_position(self):
         """Update current pan/tilt position from shared dictionary."""
-        self.current_pan = self.shared_dict.get('stepper_degrees', 0.0)
-        self.current_tilt = self.shared_dict.get('servo_degrees', 0.0)
+        self.current_pan = self.shared_dict['stepper_degrees'].value
+        self.current_tilt = self.shared_dict['servo_degrees'].value
+        
     
     def get_motor_commands(self, target_pan, target_tilt):
         """
@@ -312,7 +314,7 @@ def execute_adaptive_tracking_commands(pi, motor_commands, movement_queue, share
         shared_data: Your shared data dictionary
     """
     for direction, degrees in motor_commands:
-        if shared_data.get('shutdown', {}).get('value', False):
+        if shared_data['shutdown'].value == False:
             break
             
         # Use your existing move function
@@ -320,9 +322,9 @@ def execute_adaptive_tracking_commands(pi, motor_commands, movement_queue, share
         
         # Wait for stepper movements to complete
         if direction in ['left', 'right']:
-            while shared_data.get('stepper_busy', {}).get('value', False):
+            while shared_data['stepper_busy'].value == False:
                 time.sleep(0.01)
-                if shared_data.get('shutdown', {}).get('value', False):
+                if shared_data['shutdown'].value== True:
                     break
 
 
@@ -343,8 +345,7 @@ def adaptive_tracking_loop(shared_data, pi, movement_queue, lidar_data):
     print("=== Starting Adaptive Tracking ===")
     
     # Main tracking loop
-    while (shared_data.get('acquire_points', {}).get('value', True) and 
-           not shared_data.get('shutdown', {}).get('value', False)):
+    while (shared_data['acquire_points'].value == True and shared_data['shutdown'].value == False):
         
         current_time = time.time()
         
