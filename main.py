@@ -1,10 +1,8 @@
 # ==============================================================================
-# hardware_controller.py (Corrected Version)
+# hardware_controller.py (Corrected, Self-Contained Version)
 # ------------------------------------------------------------------------------
 # A unified, high-performance hardware control process.
-# This single process manages the LiDAR, stepper, and servo to provide
-# multiple modes of operation via a state machine.
-# INCLUDES correct stepper driver ENABLE and SLEEP pin handling.
+# This version includes the PIDController class directly to avoid import errors.
 # ==============================================================================
 
 import time
@@ -13,7 +11,8 @@ import pigpio
 import threading
 import queue
 import numpy as np
-from .motor_utils import PIDController  # Assuming motor_utils.py still has the PID class
+
+# The PIDController class is now inside this file, so no import is needed.
 
 # --- Hardware & Scan Constants ---
 SERVO_PIN = 13
@@ -34,6 +33,54 @@ MAX_PAN_SPEED_DPS = 250.0
 PAN_KP, PAN_KI, PAN_KD = 1.0, 0.05, 0.15
 MAX_TILT_SPEED_DPS = 600.0
 TILT_KP, TILT_KI, TILT_KD = 1.2, 0.1, 0.2
+
+
+# ==============================================================================
+# PID CONTROLLER CLASS (MOVED HERE)
+# ==============================================================================
+class PIDController:
+    """A generic PID controller class."""
+
+    def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-100, 100), anti_windup_limit=20):
+        self.Kp = Kp
+        self.Ki = Ki
+        self.Kd = Kd
+        self.setpoint = setpoint
+        self.output_limits = output_limits
+        self.anti_windup_limit = anti_windup_limit
+        self._integral = 0
+        self._last_error = 0
+        self._last_time = time.monotonic()
+        self._last_output = 0
+
+    def update(self, current_value):
+        current_time = time.monotonic()
+        dt = current_time - self._last_time
+        if dt <= 0: return self._last_output
+        error = self.setpoint - current_value
+        P_out = self.Kp * error
+        self._integral += error * dt
+        self._integral = max(-self.anti_windup_limit, min(self.anti_windup_limit, self._integral))
+        I_out = self.Ki * self._integral
+        derivative = (error - self._last_error) / dt
+        D_out = self.Kd * derivative
+        output = P_out + I_out + D_out
+        output = max(self.output_limits[0], min(self.output_limits[1], output))
+        self._last_error = error
+        self._last_time = current_time
+        self._last_output = output
+        return output
+
+    def set_setpoint(self, new_setpoint):
+        self.setpoint = new_setpoint
+
+    def reset(self):
+        self._integral = 0
+        self._last_error = 0
+        self._last_time = time.monotonic()
+
+
+# ==============================================================================
 
 
 class HardwareController:
@@ -76,7 +123,7 @@ class HardwareController:
         """Translates desired velocities into hardware commands."""
         # Pan Stepper
         pan_deg_change = pan_velocity_dps * dt
-        if abs(pan_deg_change) > 0.001:  # Threshold to prevent noise
+        if abs(pan_deg_change) > 0.001:
             pan_steps_to_move = round(abs(pan_deg_change) / MICROSTEP_ANGLE)
             if pan_steps_to_move > 0:
                 self.pi.write(STEPPER_DIR_PIN, 0 if pan_velocity_dps < 0 else 1)
@@ -110,36 +157,25 @@ class HardwareController:
     def run(self):
         """Main entry point and control loop for the hardware controller."""
         try:
-            # --- Hardware Initialization ---
             self.pi = pigpio.pi()
-            if not self.pi.connected:
-                raise RuntimeError("pigpio connection failed.")
-
-            # --- NEW: Stepper Driver Pin Setup ---
+            if not self.pi.connected: raise RuntimeError("pigpio connection failed.")
             self.pi.set_mode(STEPPER_ENABLE_PIN, pigpio.OUTPUT)
             self.pi.set_mode(STEPPER_SLEEP_PIN, pigpio.OUTPUT)
-            self.pi.write(STEPPER_ENABLE_PIN, 0)  # Set LOW to ENABLE the driver
-            self.pi.write(STEPPER_SLEEP_PIN, 1)  # Set HIGH to wake up the driver
+            self.pi.write(STEPPER_ENABLE_PIN, 0)
+            self.pi.write(STEPPER_SLEEP_PIN, 1)
             print("[HWCtrl] Stepper driver enabled.")
-
             self.ser = serial.Serial(self.shared_data["lidar_port"], 115200, timeout=0.1)
-            self.ser.write(b'\x42\x57\x02\x00\x00\x00\x01\x06')  # 1000Hz mode
-
-            lidar_thread = threading.Thread(target=self._lidar_reader_thread)
-            lidar_thread.daemon = True
+            self.ser.write(b'\x42\x57\x02\x00\x00\x00\x01\x06')
+            lidar_thread = threading.Thread(target=self._lidar_reader_thread);
+            lidar_thread.daemon = True;
             lidar_thread.start()
             print("[HWCtrl] Hardware Controller process is running.")
-
             last_loop_time = time.monotonic()
             current_state = "IDLE"
-
-            # --- Main Control Loop ---
             while not self.shared_data["shutdown"].value:
                 dt = time.monotonic() - last_loop_time
                 if dt <= 0: continue
                 last_loop_time = time.monotonic()
-
-                # State Determination and Transition
                 if self.shared_data["lidar_track_mode_active"].value:
                     next_state = "HF_TRACKING"
                 elif self.shared_data["go_to_target"].value:
@@ -150,36 +186,30 @@ class HardwareController:
                     next_state = "BACKGROUND_SCAN"
                 else:
                     next_state = "IDLE"
-
                 if next_state != current_state:
                     print(f"[HWCtrl] State change: {current_state} -> {next_state}")
                     self.pan_pid.reset();
                     self.tilt_pid.reset()
-                    if next_state in ["BACKGROUND_SCAN", "SEARCHING"]:
-                        self.current_scan_az, self.current_scan_el = SCAN_PAN_MIN, SCAN_TILT_MAX
-                        self.scan_pan_direction = 1
+                    if next_state in ["BACKGROUND_SCAN",
+                                      "SEARCHING"]: self.current_scan_az, self.current_scan_el = SCAN_PAN_MIN, SCAN_TILT_MAX; self.scan_pan_direction = 1
                     current_state = next_state
-
-                # State Execution Logic
                 pan_vel, tilt_vel = 0, 0
-                target_reached = abs(self.pan_pid.setpoint - self.internal_pan_pos) < TARGET_REACHED_THRESHOLD_DEG and \
-                                 abs(self.tilt_pid.setpoint - self.internal_tilt_pos) < TARGET_REACHED_THRESHOLD_DEG
-
+                target_reached = abs(
+                    self.pan_pid.setpoint - self.internal_pan_pos) < TARGET_REACHED_THRESHOLD_DEG and abs(
+                    self.tilt_pid.setpoint - self.internal_tilt_pos) < TARGET_REACHED_THRESHOLD_DEG
                 if current_state == "HF_TRACKING":
-                    self.pan_pid.set_setpoint(self.shared_data["predicted_azimuth"].value)
+                    self.pan_pid.set_setpoint(self.shared_data["predicted_azimuth"].value);
                     self.tilt_pid.set_setpoint(self.shared_data["predicted_elevation"].value)
                     pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
                         self.internal_tilt_pos)
-
                 elif current_state == "GOTO_POSITION":
-                    self.pan_pid.set_setpoint(self.shared_data["target_azimuth"].value)
+                    self.pan_pid.set_setpoint(self.shared_data["target_azimuth"].value);
                     self.tilt_pid.set_setpoint(self.shared_data["target_elevation"].value)
                     self.shared_data["target_reached"].value = target_reached
                     if not target_reached: pan_vel, tilt_vel = self.pan_pid.update(
                         self.internal_pan_pos), self.tilt_pid.update(self.internal_tilt_pos)
-
                 elif current_state in ["BACKGROUND_SCAN", "SEARCHING"]:
-                    self.pan_pid.set_setpoint(self.current_scan_az)
+                    self.pan_pid.set_setpoint(self.current_scan_az);
                     self.tilt_pid.set_setpoint(self.current_scan_el)
                     if target_reached:
                         try:
@@ -188,7 +218,7 @@ class HardwareController:
                                 self.background_data_buffer.append(
                                     [self.internal_pan_pos, self.internal_tilt_pos, dist, strength])
                             elif current_state == "SEARCHING":
-                                min_r, max_r = self.shared_data["lidar_acceptance_range"]
+                                min_r, max_r = self.shared_data["lidar_acceptance_range"];
                                 if (min_r * 100) < dist < (max_r * 100):
                                     print(
                                         f"[HWCtrl-SEARCH] Target FOUND at Az:{self.internal_pan_pos:.1f}, El:{self.internal_tilt_pos:.1f}, Dist:{dist}cm")
@@ -208,10 +238,7 @@ class HardwareController:
                     else:
                         pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
                             self.internal_tilt_pos)
-
                 self._execute_motor_commands(pan_vel, tilt_vel, dt)
-
-                # Update Shared Memory
                 try:
                     dist, strength, ts = self.lidar_queue.get_nowait()
                     with self.shared_data["lidar_data"].get_lock():
@@ -220,34 +247,29 @@ class HardwareController:
                     pass
                 self.shared_data["stepper_degrees"].value, self.shared_data[
                     "servo_degrees"].value = self.internal_pan_pos, self.internal_tilt_pos
-
                 if self.shared_data["save_background_trigger"].value:
                     if self.background_data_buffer:
                         print(f"[HWCtrl] Saving {len(self.background_data_buffer)} points...")
-                        np.save(self.shared_data["background_path"], np.array(self.background_data_buffer))
+                        np.save(self.shared_data["background_path"], np.array(self.background_data_buffer));
                         self.background_data_buffer = []
                     self.shared_data["save_background_trigger"].value = False
                 time.sleep(0.002)
-
         except Exception as e:
-            import traceback
-            print(f"[HWCtrl] CRITICAL ERROR in main loop: {e}");
-            traceback.print_exc()
+            import traceback; print(f"[HWCtrl] CRITICAL ERROR: {e}"); traceback.print_exc()
         finally:
             print("[HWCtrl] Shutting down...")
             self.shutdown_event.set()
             if 'lidar_thread' in locals() and lidar_thread.is_alive(): lidar_thread.join(timeout=1)
             if self.pi and self.pi.connected:
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
-                self.pi.write(STEPPER_ENABLE_PIN, 1)  # Set HIGH to DISABLE driver
-                self.pi.write(STEPPER_SLEEP_PIN, 0)  # Set LOW to put driver to sleep
-                self.pi.set_servo_pulsewidth(SERVO_PIN, 0)
+                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0);
+                self.pi.write(STEPPER_ENABLE_PIN, 1);
+                self.pi.write(STEPPER_SLEEP_PIN, 0);
+                self.pi.set_servo_pulsewidth(SERVO_PIN, 0);
                 self.pi.stop()
                 print("[HWCtrl] pigpio resources released.")
             if self.ser and self.ser.is_open: self.ser.close()
 
 
 def run_hardware_controller(shared_data):
-    """Entry point function for the process."""
     controller = HardwareController(shared_data)
     controller.run()
