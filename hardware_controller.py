@@ -1,8 +1,5 @@
 # ==============================================================================
-# hardware_controller.py (Corrected, Self-Contained Version)
-# ------------------------------------------------------------------------------
-# A unified, high-performance hardware control process.
-# This version includes the PIDController class directly to avoid import errors.
+# hardware_controller.py (Corrected for Integer Frequency)
 # ==============================================================================
 
 import time
@@ -12,39 +9,30 @@ import threading
 import queue
 import numpy as np
 
-# The PIDController class is now inside this file, so no import is needed.
-
 # --- Hardware & Scan Constants ---
 SERVO_PIN = 13
 STEPPER_PULSE_PIN = 19
 STEPPER_DIR_PIN = 3
-STEPPER_ENABLE_PIN = 4  # Active LOW to enable driver
-STEPPER_SLEEP_PIN = 6  # Set HIGH for operation
+STEPPER_ENABLE_PIN = 4
+STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 TARGET_REACHED_THRESHOLD_DEG = 1.0
-
-# Define the boundaries and resolution for scanning and searching
-SCAN_PAN_MIN, SCAN_PAN_MAX = 45, 315
-SCAN_TILT_MIN, SCAN_TILT_MAX = 10, 80
+SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360
+SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90
 SCAN_STEP_DEG = 1.0
 
-# --- PID Tuning Gains (CRITICAL!) ---
+# --- PID Tuning Gains ---
 MAX_PAN_SPEED_DPS = 250.0
 PAN_KP, PAN_KI, PAN_KD = 1.0, 0.05, 0.15
 MAX_TILT_SPEED_DPS = 600.0
 TILT_KP, TILT_KI, TILT_KD = 1.2, 0.1, 0.2
 
 
-# ==============================================================================
-# PID CONTROLLER CLASS (MOVED HERE)
-# ==============================================================================
 class PIDController:
     """A generic PID controller class."""
 
     def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-100, 100), anti_windup_limit=20):
-        self.Kp = Kp
-        self.Ki = Ki
-        self.Kd = Kd
+        self.Kp, self.Ki, self.Kd = Kp, Ki, Kd
         self.setpoint = setpoint
         self.output_limits = output_limits
         self.anti_windup_limit = anti_windup_limit
@@ -58,29 +46,17 @@ class PIDController:
         dt = current_time - self._last_time
         if dt <= 0: return self._last_output
         error = self.setpoint - current_value
-        P_out = self.Kp * error
         self._integral += error * dt
         self._integral = max(-self.anti_windup_limit, min(self.anti_windup_limit, self._integral))
-        I_out = self.Ki * self._integral
         derivative = (error - self._last_error) / dt
-        D_out = self.Kd * derivative
-        output = P_out + I_out + D_out
+        output = (self.Kp * error) + (self.Ki * self._integral) + (self.Kd * derivative)
         output = max(self.output_limits[0], min(self.output_limits[1], output))
-        self._last_error = error
-        self._last_time = current_time
-        self._last_output = output
+        self._last_error, self._last_time, self._last_output = error, current_time, output
         return output
 
-    def set_setpoint(self, new_setpoint):
-        self.setpoint = new_setpoint
+    def set_setpoint(self, new_setpoint): self.setpoint = new_setpoint
 
-    def reset(self):
-        self._integral = 0
-        self._last_error = 0
-        self._last_time = time.monotonic()
-
-
-# ==============================================================================
+    def reset(self): self._integral, self._last_error, self._last_time = 0, 0, time.monotonic()
 
 
 class HardwareController:
@@ -101,7 +77,6 @@ class HardwareController:
         self.background_data_buffer = []
 
     def _lidar_reader_thread(self):
-        """Dedicated thread to continuously read from the TF-Mini S."""
         print("[HWCtrl-LIDAR] LiDAR reader thread started.")
         while not self.shutdown_event.is_set():
             try:
@@ -114,21 +89,23 @@ class HardwareController:
                     except queue.Full:
                         pass
             except (serial.SerialException, OSError):
-                if not self.shutdown_event.is_set():
-                    print("[HWCtrl-LIDAR] Serial error. Thread stopping.")
+                if not self.shutdown_event.is_set(): print("[HWCtrl-LIDAR] Serial error. Thread stopping.")
                 break
         print("[HWCtrl-LIDAR] LiDAR reader thread shut down.")
 
     def _execute_motor_commands(self, pan_velocity_dps, tilt_velocity_dps, dt):
-        """Translates desired velocities into hardware commands."""
         # Pan Stepper
         pan_deg_change = pan_velocity_dps * dt
         if abs(pan_deg_change) > 0.001:
             pan_steps_to_move = round(abs(pan_deg_change) / MICROSTEP_ANGLE)
             if pan_steps_to_move > 0:
                 self.pi.write(STEPPER_DIR_PIN, 0 if pan_velocity_dps < 0 else 1)
-                frequency = min(pan_steps_to_move / dt, 300000)
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, frequency, 500000)
+
+                # --- FIX IS HERE: Convert calculated frequency to an integer ---
+                frequency = int(min(pan_steps_to_move / dt, 300000))
+                # -----------------------------------------------------------------
+
+                self.pi.hardware_PWM(STEPPER_PULSE_PIN, frequency, 500000)  # duty cycle 50%
             else:
                 self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
             self.internal_pan_pos = (self.internal_pan_pos + pan_deg_change) % 360
@@ -139,23 +116,19 @@ class HardwareController:
         tilt_deg_change = tilt_velocity_dps * dt
         self.internal_tilt_pos = max(0, min(90, self.internal_tilt_pos + tilt_deg_change))
         pulse_width = 500 + (self.internal_tilt_pos / 0.09) + (28 / 0.09)
-        self.pi.set_servo_pulsewidth(SERVO_PIN, pulse_width)
+        self.pi.set_servo_pulsewidth(SERVO_PIN, int(pulse_width))  # Also good practice to int() here
 
     def _update_scan_pattern(self):
-        """Calculates the next point in the raster scan pattern."""
         self.current_scan_az += SCAN_STEP_DEG * self.scan_pan_direction
         if self.scan_pan_direction == 1 and self.current_scan_az > SCAN_PAN_MAX:
-            self.scan_pan_direction = -1
-            self.current_scan_az = SCAN_PAN_MAX
+            self.scan_pan_direction, self.current_scan_az = -1, SCAN_PAN_MAX
             self.current_scan_el -= SCAN_STEP_DEG
         elif self.scan_pan_direction == -1 and self.current_scan_az < SCAN_PAN_MIN:
-            self.scan_pan_direction = 1
-            self.current_scan_az = SCAN_PAN_MIN
+            self.scan_pan_direction, self.current_scan_az = 1, SCAN_PAN_MIN
             self.current_scan_el -= SCAN_STEP_DEG
         return self.current_scan_el >= SCAN_TILT_MIN
 
     def run(self):
-        """Main entry point and control loop for the hardware controller."""
         try:
             self.pi = pigpio.pi()
             if not self.pi.connected: raise RuntimeError("pigpio connection failed.")
@@ -230,11 +203,11 @@ class HardwareController:
                         except queue.Empty:
                             pass
                         if not self._update_scan_pattern():
-                            print(f"[HWCtrl] {current_state} finished.")
                             if current_state == "BACKGROUND_SCAN":
                                 self.shared_data["background_scan_active"].value = False
                             elif current_state == "SEARCHING":
                                 self.shared_data["search_mode_active"].value = False
+                            print(f"[HWCtrl] {current_state} finished.")
                     else:
                         pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
                             self.internal_tilt_pos)
