@@ -134,7 +134,7 @@ class HardwareController:
             print("[HWCtrl] Stepper driver enabled.")
             self.ser = serial.Serial(self.shared_data["lidar_port"], 115200, timeout=0.1)
             set_rate_command = bytearray([0x5A, 0x06, 0x03, 0xE8, 0x03, 0x4E])
-            ser.write(set_rate_command)
+            self.ser.write(set_rate_command)
             lidar_thread = threading.Thread(target=self._lidar_reader_thread);
             lidar_thread.daemon = True;
             lidar_thread.start()
