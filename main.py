@@ -14,8 +14,6 @@ try:
     from LiDAR.Kalman_Filter import run_ekf_tracker
 except ImportError:
     print("[main] WARNING: LiDAR/Kalman_Filter.py not found. Using a placeholder.")
-
-
     def run_ekf_tracker(shared_data):
         print("[EKF] EKF process started (placeholder).")
         while not shared_data["shutdown"].value:
@@ -44,45 +42,55 @@ def join_or_escalate(proc, name, timeout=5):
         except Exception as e:
             print(f"[main] terminate() for '{name}' failed: {e}")
 
-
 if __name__ == "__main__":
     print("[main] Initializing shared memory space...")
 
     # ==========================================================================
-    # SHARED MEMORY SETUP
+    # SHARED MEMORY SETUP (VERIFIED COMPLETE)
     # ==========================================================================
     shared_data = {
+        # --- System-wide Flags ---
         "shutdown": Value('b', False),
+
+        # --- Hardware & Mode Flags ---
         "background_scan_active": Value('b', False),
         "search_mode_active": Value('b', False),
         "lidar_track_mode_active": Value('b', False),
         "go_to_target": Value('b', False),
         "save_background_trigger": Value('b', False),
         "target_reached": Value('b', False),
+
+        # --- Position & Target Data ---
         "target_azimuth": Value('d', 0.0),
         "target_elevation": Value('d', 0.0),
         "stepper_degrees": Value('d', 0.0),
         "servo_degrees": Value('d', 90.0),
+
+        # --- Sensor Data ---
         "lidar_data": Array('d', [0.0, 0.0, 0.0]),
         "satellite_detected": Value('b', False),
         "satellite_points": Array('d', [0.0, 0.0, 0.0, 0.0]),
         "lidar_acceptance_range": Array('d', [3.0, 50.0]),
+
+        # --- Acquirer & EKF State ---
+        "acquire_points": Value('b', False),
+        "acquirer_status": Value('i', 0), # 0=Idle, 1=Acquiring, 2=Success, 3=Fail
+        "points_buffer": Array('d', 15),  # For 3 points with 5 values each
+        "points_count": Value('i', 0),
         "ekf_start": Value('b', False),
         "ekf_running": Value('b', False),
-        "acquire_points": Value('b', False),
+        "ekf_initialized": Value('b', False),
+
+        # --- FIX: EKF Confidence (restored) ---
+        "ekf_confidence": Value('d', 0.0),
+
+        # --- EKF Output & GUI Controls ---
         "generate_plot_on_stop": Value('b', False),
         "predicted_azimuth": Value('d', 0.0),
         "predicted_elevation": Value('d', 0.0),
         "debug_mode": Value('b', False),
 
-        # --- FIX: Sized for 3 points with 5 values each (az, el, dist, str, time) ---
-        "points_buffer": Array('d', 15),
-        "points_count": Value('i', 0),
-
-        # --- FIX: EKF Initialized Flag (restored) ---
-        "ekf_initialized": Value('b', False),
-
-        "acquirer_status": Value('i', 0),
+        # --- Configuration ---
         "lidar_port": "/dev/serial0",
         "background_path": "background_data.npy",
     }
@@ -98,7 +106,6 @@ if __name__ == "__main__":
         "EKF": Process(target=run_ekf_tracker, args=(shared_data,)),
     }
 
-
     # ==========================================================================
     # STARTUP & SHUTDOWN HANDLING
     # ==========================================================================
@@ -106,7 +113,6 @@ if __name__ == "__main__":
         if not shared_data["shutdown"].value:
             print(f"\n[main] Received signal {signum}. Requesting global shutdown...")
             shared_data["shutdown"].value = True
-
 
     signal.signal(signal.SIGINT, _graceful_shutdown)
     signal.signal(signal.SIGTERM, _graceful_shutdown)
@@ -121,9 +127,9 @@ if __name__ == "__main__":
 
         while not shared_data["shutdown"].value:
             if not all(p.is_alive() for p in processes.values()):
-                print("[main] A critical process has terminated. Initiating shutdown.")
-                shared_data["shutdown"].value = True
-                break
+                 print("[main] A critical process has terminated. Initiating shutdown.")
+                 shared_data["shutdown"].value = True
+                 break
             time.sleep(0.2)
     except (KeyboardInterrupt, SystemExit):
         if not shared_data["shutdown"].value:
