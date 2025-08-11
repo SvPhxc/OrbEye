@@ -276,11 +276,11 @@ class TrackerWindow(QtWidgets.QMainWindow):
         except Exception as e:
             print(f"Error: {e}")
         # Plot line to Sofia
-        sofia_pos = get_sofia_eci(time_utc=Time.now())  # current ECI position
-        sofia_line = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], sofia_pos * self.debug_scale]),
-                                    color=(0, 1, 1, 1), width=2)
-        self.view.addItem(sofia_line)
-        self.orbit_items.append(sofia_line)
+        #sofia_pos = get_sofia_eci(time_utc=Time.now())  # current ECI position
+        #sofia_line = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], sofia_pos * self.debug_scale]),
+        #                            color=(0, 1, 1, 1), width=2)
+        #self.view.addItem(sofia_line)
+        #self.orbit_items.append(sofia_line)
 
     def accuire_points(self):
         self.shared_data["acquire_points"].value = True
