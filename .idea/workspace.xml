@@ -5,12 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="35c70f19-7828-4c72-ae95-c5846c6a2230" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/GUI.py" beforeDir="false" afterPath="$PROJECT_DIR$/GUI.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/LiDAR/Kalman_Filter.py" beforeDir="false" afterPath="$PROJECT_DIR$/LiDAR/Kalman_Filter.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/analysis/plotter.py" beforeDir="false" afterPath="$PROJECT_DIR$/analysis/plotter.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/hardware_controller.py" beforeDir="false" afterPath="$PROJECT_DIR$/hardware_controller.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/motors/enhanced_acquisition.py" beforeDir="false" afterPath="$PROJECT_DIR$/motors/enhanced_acquisition.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -33,11 +28,6 @@
     &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;
   }
 }</component>
-  <component name="RecentsManager">
-    <key name="MoveFile.RECENT_KEYS">
-      <recent name="C:\Users\Alex\Documents\FtcRobotController-master\OrbEye" />
-    </key>
-  </component>
   <component name="TaskManager">
     <servers />
   </component>

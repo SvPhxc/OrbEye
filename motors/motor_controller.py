@@ -7,7 +7,7 @@
 # ==============================================================================
 from tracking.tle_tracker import acquire_target_from_tle, track_target_with_ekf
 
-from multiprocessing import Process
+from multiprocessing import Process, Queue
 import pigpio
 import RPi.GPIO as GPIO
 from time import sleep
@@ -15,7 +15,8 @@ import signal
 
 # --- Import from our new, decoupled files ---
 from motors.motor_utils import stepper_worker, track_target, move, STEPPER_ENABLE_PIN, STEPPER_SLEEP_PIN
-from acquisition import run_acquisition_sequence, run_manual_acquisition_sequence
+from tracking.tracker import active_track_target
+from tracking.acquisition import run_acquisition_sequence, run_manual_acquisition_sequence
 from tracking.tle_utils import parse_tle_file
 
 
