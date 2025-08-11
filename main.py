@@ -8,13 +8,15 @@ from multiprocessing import Process, Array, Value
 
 from hardware_controller import run_hardware_controller
 from GUI import run_gui
-from acquirer import run_acquirer # <-- IMPORT THE NEW PROCESS
+from acquirer import run_acquirer
 
 # Placeholder for EKF in case the file is missing
 try:
     from LiDAR.Kalman_Filter import run_ekf_tracker
 except ImportError:
     print("[main] WARNING: LiDAR/Kalman_Filter.py not found. Using a placeholder.")
+
+
     def run_ekf_tracker(shared_data):
         print("[EKF] EKF process started (placeholder).")
         while not shared_data["shutdown"].value:
@@ -43,6 +45,7 @@ def join_or_escalate(proc, name, timeout=5):
         except Exception as e:
             print(f"[main] terminate() for '{name}' failed: {e}")
 
+
 if __name__ == "__main__":
     print("[main] Initializing shared memory space...")
 
@@ -50,35 +53,50 @@ if __name__ == "__main__":
     # SHARED MEMORY SETUP (with all EKF variables restored)
     # ==========================================================================
     shared_data = {
+        # --- System-wide Flags ---
         "shutdown": Value('b', False),
+
+        # --- Hardware Controller State Flags ---
         "background_scan_active": Value('b', False),
         "search_mode_active": Value('b', False),
         "lidar_track_mode_active": Value('b', False),
         "go_to_target": Value('b', False),
         "save_background_trigger": Value('b', False),
         "target_reached": Value('b', False),
+
+        # --- Target and Position Data ---
         "target_azimuth": Value('d', 0.0),
         "target_elevation": Value('d', 0.0),
         "stepper_degrees": Value('d', 0.0),
         "servo_degrees": Value('d', 90.0),
+
+        # --- LiDAR Data ---
         "lidar_data": Array('d', [0.0, 0.0, 0.0]),
+
+        # --- Target Detection Data ---
         "satellite_detected": Value('b', False),
         "satellite_points": Array('d', [0.0, 0.0, 0.0, 0.0]),
         "lidar_acceptance_range": Array('d', [3.0, 50.0]),
+
+        # --- EKF Related Data ---
         "ekf_start": Value('b', False),
         "ekf_running": Value('b', False),
-        "acquire_points": Value('b', False), # The flag for the new acquirer process
+        "acquire_points": Value('b', False),
         "generate_plot_on_stop": Value('b', False),
         "predicted_azimuth": Value('d', 0.0),
         "predicted_elevation": Value('d', 0.0),
         "debug_mode": Value('b', False),
-        # --- EKF Point Buffer and Counter (restored) ---
-        "points_buffer": Array('d', 12), # For 3 points: [az, el, dist, str] * 3
+        "points_buffer": Array('d', 12),
         "points_count": Value('i', 0),
-        # --- TLE data placeholder ---
-        "tle_data": Array('c', 256), # A char array to hold TLE strings if needed
+
+        # --- FIX: EKF Initialized Flag (restored) ---
+        "ekf_initialized": Value('b', False),
+        # -------------------------------------------
+
         # --- Acquirer Status ---
-        "acquirer_status": Value('i', 0), # 0=Idle, 1=Acquiring, 2=Success, 3=Failed
+        "acquirer_status": Value('i', 0),
+
+        # --- Configuration Data ---
         "lidar_port": "/dev/serial0",
         "background_path": "background_data.npy",
     }
@@ -90,9 +108,10 @@ if __name__ == "__main__":
     processes = {
         "HardwareController": Process(target=run_hardware_controller, args=(shared_data,)),
         "GUI": Process(target=run_gui, args=(shared_data, None)),
-        "Acquirer": Process(target=run_acquirer, args=(shared_data,)), # <-- ADD THE NEW PROCESS
+        "Acquirer": Process(target=run_acquirer, args=(shared_data,)),
         "EKF": Process(target=run_ekf_tracker, args=(shared_data,)),
     }
+
 
     # ==========================================================================
     # STARTUP & SHUTDOWN HANDLING
@@ -101,6 +120,7 @@ if __name__ == "__main__":
         if not shared_data["shutdown"].value:
             print(f"\n[main] Received signal {signum}. Requesting global shutdown...")
             shared_data["shutdown"].value = True
+
 
     signal.signal(signal.SIGINT, _graceful_shutdown)
     signal.signal(signal.SIGTERM, _graceful_shutdown)
@@ -115,9 +135,9 @@ if __name__ == "__main__":
 
         while not shared_data["shutdown"].value:
             if not all(p.is_alive() for p in processes.values()):
-                 print("[main] A critical process has terminated. Initiating shutdown.")
-                 shared_data["shutdown"].value = True
-                 break
+                print("[main] A critical process has terminated. Initiating shutdown.")
+                shared_data["shutdown"].value = True
+                break
             time.sleep(0.2)
     except (KeyboardInterrupt, SystemExit):
         if not shared_data["shutdown"].value:
