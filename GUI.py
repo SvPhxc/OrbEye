@@ -243,17 +243,19 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         try:
             if name == "test":
+                # Put a real test TLE here (example ISS-ish format; replace with valid lines)
+                tle_lines = (
+                    "1 25544U 98067A   24220.51736111  .00012345  00000-0  10270-3 0  9991",
+                    "2 25544  51.6423  23.5266 0005695  77.5318  47.6386 15.50123456789012",
+                )
                 tle_filename = "example.tle"
-                # Put known-good test lines here
-                line1 = "1 99999U 25001A   25214.00000000  .00000010  00000-0  10000-4 0  9990"
-                line2 = "2 99999 097.5000 123.4567 0001000 000.0000 000.0000 14.95000000    01"
-                with open(tle_filename, "w") as f:
-                    f.write(f"{name}\n{line1}\n{line2}\n")
             else:
-                tle_filename = "temp.tle"
                 tle_lines = fetch_tle_by_name(name)
-                with open(tle_filename, "w") as f:
-                    f.write(f"{name}\n{tle_lines[0]}\n{tle_lines[1]}\n")
+                tle_filename = "temp.tle"
+
+            # --- 2) Now you can safely use tle_lines
+            with open(tle_filename, "w") as f:
+                f.write(f"{name}\n{tle_lines[0]}\n{tle_lines[1]}\n")
 
             elements = parse_tle_file(tle_filename)[0]
 
