@@ -22,10 +22,10 @@ SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90
 SCAN_STEP_DEG = 1.0
 
 # --- PID Tuning Gains ---
-MAX_PAN_SPEED_DPS = 250.0
-PAN_KP, PAN_KI, PAN_KD = 1.0, 0.05, 0.15
+MAX_PAN_SPEED_DPS = 360.0
+PAN_KP, PAN_KI, PAN_KD = 2.0, 0.0, 0.0
 MAX_TILT_SPEED_DPS = 600.0
-TILT_KP, TILT_KI, TILT_KD = 1.2, 0.1, 0.2
+TILT_KP, TILT_KI, TILT_KD = 2.0, 0.0, 0.0
 
 
 class PIDController:
@@ -176,11 +176,17 @@ class HardwareController:
                     pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
                         self.internal_tilt_pos)
                 elif current_state == "GOTO_POSITION":
-                    self.pan_pid.set_setpoint(self.shared_data["target_azimuth"].value);
+                    self.pan_pid.set_setpoint(self.shared_data["target_azimuth"].value)
                     self.tilt_pid.set_setpoint(self.shared_data["target_elevation"].value)
+
                     self.shared_data["target_reached"].value = target_reached
-                    if not target_reached: pan_vel, tilt_vel = self.pan_pid.update(
-                        self.internal_pan_pos), self.tilt_pid.update(self.internal_tilt_pos)
+                    if not target_reached:
+                        pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
+                            self.internal_tilt_pos)
+                    else:
+                        # --- ADD THIS LINE ---
+                        # Target has been reached, so consume the trigger by setting it to False.
+                        self.shared_data["go_to_target"].value = False
                 elif current_state in ["BACKGROUND_SCAN", "SEARCHING"]:
                     self.pan_pid.set_setpoint(self.current_scan_az);
                     self.tilt_pid.set_setpoint(self.current_scan_el)

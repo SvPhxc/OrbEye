@@ -178,8 +178,11 @@ class TrackerWindow(QtWidgets.QMainWindow):
     # --- NEW: Click Handlers for New/Updated Buttons ---
     def on_scan_toggled(self, checked):
         print(f"[GUI] Background Scan toggled: {'ON' if checked else 'OFF'}")
+        if checked:
+            # --- ADD THIS LINE ---
+            self.shared_data["go_to_target"].value = False  # Cancel any manual movement
         self.shared_data["background_scan_active"].value = checked
-        if not checked:  # If user manually turns it off, ensure button reflects this
+        if not checked:
             self.btn_scan.setChecked(False)
 
     def on_save_scan_clicked(self):
@@ -188,6 +191,9 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     def on_search_toggled(self, checked):
         print(f"[GUI] Target Search toggled: {'ON' if checked else 'OFF'}")
+        if checked:
+            # --- ADD THIS LINE ---
+            self.shared_data["go_to_target"].value = False  # Cancel any manual movement
         self.shared_data["search_mode_active"].value = checked
         if not checked:
             self.btn_search.setChecked(False)
