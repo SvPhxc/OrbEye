@@ -82,12 +82,47 @@ def _teme_to_itrs_m(r_teme_km, t_dt_utc):
     itrs = TEME(cr, obstime=t).transform_to(ITRS(obstime=t))
     return itrs.cartesian.xyz.to_value(u.m)  # returns plain floats (meters)
 
+def find_overhead_time(tle_lines, site_lat_deg, site_lon_deg, site_h_m=0.0,
+                       search_hours=24, step_seconds=15):
+    # Setup
+    sat = Satrec.twoline2rv(tle_lines[0], tle_lines[1])
+    t0 = sat_epoch_datetime(sat)
+    site = EarthLocation.from_geodetic(lon=site_lon_deg*u.deg, lat=site_lat_deg*u.deg, height=site_h_m*u.m)
+    site_ecef_m = np.array([site.x.to_value(u.m), site.y.to_value(u.m), site.z.to_value(u.m)], float)
+
+    lat_rad = np.deg2rad(site_lat_deg); lon_rad = np.deg2rad(site_lon_deg)
+    R_e2n = np.array([[-np.sin(lon_rad),  np.cos(lon_rad), 0.0],
+                      [-np.sin(lat_rad)*np.cos(lon_rad), -np.sin(lat_rad)*np.sin(lon_rad),  np.cos(lat_rad)],
+                      [ np.cos(lat_rad)*np.cos(lon_rad),  np.cos(lat_rad)*np.sin(lon_rad),  np.sin(lat_rad)]], float)
+
+    best_el = -1e9
+    best_t  = t0
+
+    steps = int(search_hours*3600/step_seconds)
+    for i in range(steps):
+        t = t0 + timedelta(seconds=i*step_seconds)
+        jd, fr = jday(t.year, t.month, t.day, t.hour, t.minute, t.second + t.microsecond*1e-6)
+        e, r_km, _ = sat.sgp4(jd, fr)
+        if e != 0: 
+            continue
+        r_ecef_m = _teme_to_itrs_m(np.asarray(r_km, float), t)   # your Astropy helper
+        rho_enu  = R_e2n @ (r_ecef_m - site_ecef_m)
+        rng = np.linalg.norm(rho_enu)
+        if rng <= 0:
+            continue
+        el = np.arcsin(rho_enu[2] / rng)  # radians
+        if el > best_el:
+            best_el, best_t = el, t
+
+    return best_t, np.degrees(best_el)
+
 # ---------- Main function ----------
 def generate_orbit_xyz(
     tle_filename=None,
     tle_lines=None,
     duration_minutes=90,
     step_seconds=60,
+    start_time_utc=None,
     *,
     site_lat_deg=None,       # if provided -> return ENU [E,N,U]
     site_lon_deg=None,
@@ -111,7 +146,7 @@ def generate_orbit_xyz(
         raise ValueError("Either tle_filename or tle_lines must be provided.")
 
     sat = Satrec.twoline2rv(tle_line1, tle_line2)
-    start_time = sat_epoch_datetime(sat)  # UTC datetime at TLE epoch
+    start_time = start_time_utc or sat_epoch_datetime(sat)
 
     num_steps = int((duration_minutes * 60) / step_seconds)
     xyz_km = np.full((num_steps, 3), np.nan, dtype=float)

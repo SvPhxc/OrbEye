@@ -1,6 +1,7 @@
 import sys
 import numpy as np
 from PyQt5 import QtWidgets, QtCore
+from datetime import timedelta
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 import time
@@ -13,7 +14,8 @@ from datahandler import (
     parse_tle_file,
     generate_orbit_xyz,
     fetch_tle_by_name,
-    get_sofia_eci
+    get_sofia_eci,
+    find_overhead_time
 )
 
 
@@ -259,14 +261,25 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
             elements = parse_tle_file(tle_filename)[0]
 
-            # Propagate orbit
+            # 1) Get any real TLE, e.g. ISS from your fetch (or your test one)
+            tle_lines = fetch_tle_by_name(name)
+
+            # 2) Find the overhead time for Sofia
+            over_t, peak_el_deg = find_overhead_time(tle_lines, 42.6977, 23.3219)
+
+            # 3) Start 45 min before that so the 90-min segment shows the overhead in the middle
+            start_time = over_t - timedelta(minutes=45)
+
+            # 4) Generate ENU and plot
             self.orbit_xyz = generate_orbit_xyz(
                 tle_lines=tle_lines,
                 duration_minutes=90,
+                step_seconds=10,
+                start_time_utc=start_time,     # <-- new!
                 site_lat_deg=42.6977,
                 site_lon_deg=23.3219,
                 site_h_m=0.0,
-                units="km"  # match your viewer units
+                units="km"
             )
 
 
