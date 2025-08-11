@@ -193,4 +193,37 @@ def run_ekf_tracker(shared_data):
                     dist_cm, strength, ts = shared_data["lidar_data"]
                 az, el = shared_data["stepper_degrees"].value, shared_data["servo_degrees"].value
                 min_m, max_m = shared_data["lidar_acceptance_range"]
-                has_new = (not history_measurements
+                has_new = (not history_measurements) or (ts > history_measurements[-1]['time'])
+                valid_range = (min_m <= dist_cm / 100.0 <= max_m)
+                min_strength = 1000 if shared_data["debug_mode"].value else 5000
+                valid_strength = (strength >= min_strength)
+
+                if has_new and valid_range and valid_strength:
+                    z = np.array([np.deg2rad(az), np.deg2rad(el), dist_cm / 100.0])
+                    R = create_measurement_noise_matrix(strength, len(history_measurements))
+                    ekf.update_with_angle_wrapping(z, ekf.HJacobian, ekf.h, R)
+                    history_measurements.append({'z': z, 'time': ts})
+
+                history_estimates.append(ekf.x.copy())
+                ekf.last_time = now
+                pred_az, pred_el = get_next_prediction(ekf, max(dt, 0.02))
+                shared_data["predicted_azimuth"].value = pred_az
+                shared_data["predicted_elevation"].value = pred_el
+                shared_data["ekf_confidence"].value = calculate_confidence(ekf.P)
+            else:
+                if shared_data['generate_plot_on_stop'].value:
+                    print("[EKF] EKF stopped. Generating final plot...")
+                    plot_ekf_vs_measured(history_measurements, history_estimates)
+                    shared_data['generate_plot_on_stop'].value = False
+                ekf.initialized = False
+                shared_data['ekf_initialized'].value = False
+                time.sleep(0.1)
+
+            time.sleep(0.01)
+        except Exception as e:
+            print(f"[EKF] CRITICAL ERROR in tracking loop: {e}");
+            traceback.print_exc()
+            if ekf: ekf.initialized = False
+            shared_data['ekf_running'].value = False
+            time.sleep(1)
+    print("[EKF] Shutting down.")
