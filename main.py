@@ -1,189 +1,163 @@
-import sys
-import os
-import signal
-import time
-from multiprocessing import Process, Array, Value, Queue
-
-# --- Import the run functions from your process files ---
-# This assumes your directory structure is clean.
-# For example:
-# /main.py
-# /GUI.py
-# /hardware_controller.py
-# /LiDAR/Kalman_Filter.py
-
-from hardware_controller import run_hardware_controller
-from GUI import run_gui
+from multiprocessing import Process, Queue, Array, Value
+from webcam.blob_tracker import run_tracking
+from motors.motor_controller import run_motor_control
+from LiDAR.lidar_handler import run_lidar
 from LiDAR.Kalman_Filter import run_ekf_tracker
+import tracking.tracker
+from GUI import run_gui
+import time, os, signal, sys
 
-
-def join_or_escalate(proc, name, timeout=5):
-    """
-    A robust function to join a process, giving it time to shut down
-    gracefully before forcing termination.
-    """
-    if proc is None:
+def join_or_escalate(proc, name, timeout=8):
+    if proc is None: 
         return
     proc.join(timeout=timeout)
     if proc.is_alive():
-        print(f"[main] Process '{name}' is still alive after {timeout}s. Sending SIGTERM...")
+        print(f"[main] {name} still alive after {timeout}s → SIGTERM")
         try:
-            # In POSIX systems (Linux, macOS), this is a more graceful kill signal
             os.kill(proc.pid, signal.SIGTERM)
         except Exception as e:
-            print(f"[main] SIGTERM for '{name}' failed: {e}")
+            print(f"[main] SIGTERM {name} failed: {e}")
         proc.join(timeout=3)
     if proc.is_alive():
-        print(f"[main] Process '{name}' will not die. Forcing terminate() (last resort).")
+        print(f"[main] {name} still alive → terminate() (last resort)")
         try:
-            # terminate() is less graceful and should be a last resort
             proc.terminate()
         except Exception as e:
-            print(f"[main] terminate() for '{name}' failed: {e}")
+            print(f"[main] terminate() {name} failed: {e}")
         proc.join(timeout=2)
 
-
 if __name__ == "__main__":
-    print("[main] Initializing shared memory space...")
-
-    # ==========================================================================
-    # 1. SHARED MEMORY SETUP
-    # Define all variables that need to be accessed by multiple processes.
-    # ==========================================================================
-
-    # --- System-wide Flags ---
+    # ===== Shared memory setup =====
+    lidar_data = Array('d', 3)  # [distance, strength, timestamp]
+    backgorund_data = Array('d', 4)
     shutdown_flag = Value('b', False)
-
-    # --- Hardware Controller State Flags (set by GUI, read by HW Controller) ---
-    background_scan_active = Value('b', False)
-    search_mode_active = Value('b', False)
-    lidar_track_mode_active = Value('b', False)
+    scan_trigger = Value('b', False)
+    tilt_up = Value('b', False)
+    tilt_down = Value('b', False)
+    pan_left = Value('b', False)
+    pan_right = Value('b', False)
+    flipped = Value('b', False)
     go_to_target = Value('b', False)
-    save_background_trigger = Value('b', False)
-    target_reached = Value('b', False)
+    save_background = Value('b', False)
+    background_ready = Value('b', False)
+    acquire_points = Value('b', False)
+    ekf_start = Value('b', False)
+    ekf_running = Value('b', False)
+    points_buffer = Array('d', 15)
+    points_count = Value('i', 0)
+    ekf_initialized = Value('b', False)
+    estimated_azimuth = Value('d', 0.0)
+    estimated_elevation = Value('d', 0.0)
+    predicted_azimuth = Value('d', 0.0)
+    predicted_elevation = Value('d', 0.0)
+    ekf_confidence = Value('d', 0.0)
+    lidar_acceptance_range = Array('d', [1.0, 2.0])  # min_m, max_m
+    go_to_zero = Value('b', False)
+    background_path = "background_data.npy"
 
-    # --- Target and Position Data ---
+    direction = Value('i', -1)
+    target = Value('i', -1)
+    commanding = Value('i', -1)
+    stepper_degrees = Value('d', 0.0)
+    cumulative_error = Value('d', 0.0)
+    servo_degrees = Value('d', 90.0)
     target_azimuth = Value('d', 0.0)
     target_elevation = Value('d', 0.0)
-    stepper_degrees = Value('d', 0.0)  # Current position reported by HW Controller
-    servo_degrees = Value('d', 90.0)  # Current position reported by HW Controller
-
-    # --- LiDAR Data (written by HW Controller, read by GUI/EKF) ---
-    lidar_data = Array('d', [0.0, 0.0, 0.0])  # [distance_cm, strength, timestamp]
-
-    # --- Target Detection Data (written by HW Controller, read by EKF/GUI) ---
+    background_lidar = Array('d', 360 * 90 * 2)  # shape (90,360,2) flattened
+    satellite_points = Array('d', 4)
     satellite_detected = Value('b', False)
-    satellite_points = Array('d', [0.0, 0.0, 0.0, 0.0])  # [az, el, dist, strength]
-    lidar_acceptance_range = Array('d', [3.0, 50.0])  # Default drone range [min_m, max_m]
 
-    # --- EKF Related Data ---
-    ekf_running = Value('b', False)  # GUI can toggle this to enable/disable EKF calculations
-    acquire_points = Value('b', False)  # GUI triggers this for EKF initialization
-    generate_plot_on_stop = Value('b', False)  # GUI requests EKF to generate a final plot
-    predicted_azimuth = Value('d', 0.0)  # EKF writes, HW Controller reads for tracking
-    predicted_elevation = Value('d', 0.0)  # EKF writes, HW Controller reads for tracking
-    debug_mode = Value('b', False)  # Toggled by GUI to change acceptance range, etc.
+    debug_mode = Value('b', False)
+    generate_plot_on_stop = Value('b', False)
 
-    # --- Configuration Data ---
-    # These are treated as constants but included here for easy access by all processes.
-    lidar_port_str = "/dev/serial0"
-    background_path_str = "background_data.npy"
-
-    # ==========================================================================
-    # 2. SHARED DATA DICTIONARY
-    # Pack all shared objects into a single dictionary for easy passing.
-    # ==========================================================================
     shared_data = {
+        "lidar_data": lidar_data,
+        "background_data": backgorund_data,
         "shutdown": shutdown_flag,
-        "background_scan_active": background_scan_active,
-        "search_mode_active": search_mode_active,
-        "lidar_track_mode_active": lidar_track_mode_active,
+        "direction": direction,
+        "target": target,
+        "commanding": commanding,
+        "scan_trigger": scan_trigger,
+        "stepper_degrees": stepper_degrees,
+        "cumulative_error": cumulative_error,
+        "servo_degrees": servo_degrees,
+        "tilt_up": tilt_up,
+        "tilt_down": tilt_down,
+        "pan_left": pan_left,
+        "pan_right": pan_right,
+        "flipped": flipped,
         "go_to_target": go_to_target,
-        "save_background_trigger": save_background_trigger,
-        "target_reached": target_reached,
         "target_azimuth": target_azimuth,
         "target_elevation": target_elevation,
-        "stepper_degrees": stepper_degrees,
-        "servo_degrees": servo_degrees,
-        "lidar_data": lidar_data,
-        "satellite_detected": satellite_detected,
+        "background_lidar": background_lidar,
         "satellite_points": satellite_points,
-        "lidar_acceptance_range": lidar_acceptance_range,
-        "ekf_running": ekf_running,
+        "satellite_detected": satellite_detected,
+        "save_background": save_background,
+        "background_ready": background_ready,
+        "background_path": background_path,
         "acquire_points": acquire_points,
-        "generate_plot_on_stop": generate_plot_on_stop,
+        "ekf_start": ekf_start,
+        "ekf_running": ekf_running,
+        "points_buffer": points_buffer,
+        "points_count": points_count,
+        "ekf_initialized": ekf_initialized,
+        "estimated_azimuth": estimated_azimuth,
+        "estimated_elevation": estimated_elevation,
         "predicted_azimuth": predicted_azimuth,
         "predicted_elevation": predicted_elevation,
+        "ekf_confidence": ekf_confidence,
+        "lidar_acceptance_range": lidar_acceptance_range,
+        "go_to_zero": go_to_zero,
         "debug_mode": debug_mode,
-        "lidar_port": lidar_port_str,
-        "background_path": background_path_str,
+        "generate_plot_on_stop": generate_plot_on_stop,
     }
 
-    # ==========================================================================
-    # 3. PROCESS INITIALIZATION
-    # Create the Process objects for each major component of the application.
-    # ==========================================================================
-    print("[main] Initializing processes...")
+    # ===== Start processes (non-daemon; default) =====
+    movement_queue = Queue()
+    # p1 = Process(target=run_tracking, args=(shared_data,))
+    p2 = Process(target=run_motor_control, args=(shared_data, movement_queue))
+    p3 = Process(target=run_gui, args=(shared_data, movement_queue))
+    p4 = Process(target=run_lidar, args=(shared_data,))
+    p5 = Process(target=run_ekf_tracker, args=(shared_data,))
 
-    # The single, unified process for all hardware control
-    p_hw = Process(target=run_hardware_controller, args=(shared_data,))
-
-    # The GUI process
-    # The movement_queue is no longer used by the GUI, so we pass None.
-    p_gui = Process(target=run_gui, args=(shared_data, None))
-
-    # The EKF tracker process
-    p_ekf = Process(target=run_ekf_tracker, args=(shared_data,))
-
-    processes = {
-        "HardwareController": p_hw,
-        "GUI": p_gui,
-        "EKF": p_ekf,
-    }
-
-    # Ensure processes are not daemonic, allowing for graceful shutdown
-    for p in processes.values():
+    for p in (p2, p3, p4, p5):  # p1 if you enable it
         p.daemon = False
 
+    # Start
+    # p1.start()
+    p2.start()
+    p3.start()
+    p4.start()
+    p5.start()
 
-    # ==========================================================================
-    # 4. STARTUP & SHUTDOWN HANDLING
-    # ==========================================================================
-
-    # --- Graceful Shutdown Handler ---
-    def _graceful_shutdown(signum, frame):
-        print(f"\n[main] Received signal {signum}. Requesting global shutdown...")
-        shared_data["shutdown"].value = True  # Signal all processes to stop their loops
-
-
-    signal.signal(signal.SIGINT, _graceful_shutdown)  # Handle Ctrl+C
-    signal.signal(signal.SIGTERM, _graceful_shutdown)  # Handle `kill` command
+    # ===== Handle Ctrl-C / SIGTERM to flip the flag, not kill processes =====
+    def _graceful(signum, frame):
+        print(f"[main] Received signal {signum}, requesting shutdown...")
+        shutdown_flag.value = True
+    signal.signal(signal.SIGINT, _graceful)
+    signal.signal(signal.SIGTERM, _graceful)
 
     try:
-        # --- Start all processes ---
-        print("[main] Starting all processes...")
-        for name, p in processes.items():
-            print(f"  - Starting {name}...")
-            p.start()
-        print("[main] All processes are running. System is active.")
-
-        # --- Keep main process alive ---
-        # The main process just waits for the shutdown signal.
-        while not shared_data["shutdown"].value:
-            time.sleep(0.1)
-
-    except (KeyboardInterrupt, SystemExit):
-        # This block is redundant due to the signal handler but is good practice.
-        if not shared_data["shutdown"].value:
-            print("[main] Main loop interrupted. Requesting shutdown...")
-            shared_data["shutdown"].value = True
-
+        while not shutdown_flag.value:
+            time.sleep(0.05)
+    except KeyboardInterrupt:
+        print("[main] Ctrl+C pressed")
+        shutdown_flag.value = True
     finally:
-        # --- Clean Shutdown Sequence ---
-        print("\n[main] Starting shutdown sequence...")
+        print("Terminating processes (graceful)...")
+        # Unblock motor worker if it’s waiting on the queue
+        try:
+            movement_queue.put_nowait(None)
+        except Exception:
+            pass
 
-        # Shut down in a logical order: brains first, then body.
-        # This gives the GUI and EKF a chance to finish before the hardware stops.
-        join_or_escalate(processes["GUI"], "GUI")
-        join_or_escalate(processes["EKF"], "EKF")
-        join_or_escalate(processes["Hardware
+        # Give each process a chance to run its finally/cleanup
+        # p1: run_tracking (if enabled)
+        # join_or_escalate(p1, "Tracking")
+        join_or_escalate(p4, "LiDAR")
+        join_or_escalate(p5, "EKF")
+        join_or_escalate(p2, "MotorControl")
+        join_or_escalate(p3, "GUI")
+
+        print("Program exited cleanly")
+        sys.exit(0)
