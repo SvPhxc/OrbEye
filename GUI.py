@@ -167,27 +167,26 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     def toggle_background_plot(self):
         if self.background_plot.visible():
-            self.background_plot.hide();
+            self.background_plot.hide()
             return
         try:
             bg_data = np.load(self.shared_data["background_path"])
             points = []
             for reading in bg_data:
-                az, el, dist_cm, _ = reading[0], reading[1], reading[2], reading[3]
+                az, el, dist_cm, _ = reading
                 if 10 < dist_cm < 16000:
                     az_rad, el_rad = np.radians(az), np.radians(el)
                     dist_m = dist_cm / 100.0
 
-                    # --- FIX IS HERE: Swapped sin and cos for x and y ---
-                    # This maps Azimuth=0 to the Y-axis (forward)
-                    x = dist_m * np.cos(el_rad) * np.sin(az_rad)
-                    y = dist_m * np.cos(el_rad) * np.cos(az_rad)
-                    # ----------------------------------------------------
+                    # --- FIX: Use standard Cartesian coordinate conversion ---
+                    x = dist_m * np.cos(el_rad) * np.cos(az_rad)
+                    y = dist_m * np.cos(el_rad) * np.sin(az_rad)
+                    # --------------------------------------------------------
 
                     z = dist_m * np.sin(el_rad)
                     points.append([x, y, z])
             if points:
-                self.background_plot.setData(pos=np.array(points));
+                self.background_plot.setData(pos=np.array(points))
                 self.background_plot.show()
         except FileNotFoundError:
             print(f"[GUI] Error: '{self.shared_data['background_path']}' not found.")
@@ -237,25 +236,26 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.shared_data["lidar_acceptance_range"][0], self.shared_data["lidar_acceptance_range"][
             1] = min_range, max_range
 
-    def update_laser_from_pan_tilt(self):
-        try:
-            az, el = self.shared_data['stepper_degrees'].value, self.shared_data['servo_degrees'].value
-            dist_cm = self.shared_data['lidar_data'][0]
-            length_m = dist_cm / 100.0 if 10.0 <= dist_cm <= 16000.0 else 15.0
-            az_rad, el_rad = np.radians(az), np.radians(el)
+        # In GUI.py
 
-            # --- FIX IS HERE: Swapped sin and cos for x and y ---
-            # This ensures the live laser beam uses the same coordinate system as the background plot.
-            x = length_m * np.cos(el_rad) * np.sin(az_rad)
-            y = length_m * np.cos(el_rad) * np.cos(az_rad)
-            # ----------------------------------------------------
+        def update_laser_from_pan_tilt(self):
+            try:
+                az, el = self.shared_data['stepper_degrees'].value, self.shared_data['servo_degrees'].value
+                dist_cm = self.shared_data['lidar_data'][0]
+                length_m = dist_cm / 100.0 if 10.0 <= dist_cm <= 16000.0 else 15.0
+                az_rad, el_rad = np.radians(az), np.radians(el)
 
-            z = length_m * np.sin(el_rad)
-            tip = np.array([x, y, z])
-            self.laser.setData(pos=np.vstack((np.zeros(3), tip)))
-            self.satellite.setData(pos=tip.reshape(1, 3))
-        except Exception:
-            pass
+                # --- FIX: Use standard Cartesian coordinate conversion ---
+                x = length_m * np.cos(el_rad) * np.cos(az_rad)
+                y = length_m * np.cos(el_rad) * np.sin(az_rad)
+                # ----------------------------------------------------
+
+                z = length_m * np.sin(el_rad)
+                tip = np.array([x, y, z])
+                self.laser.setData(pos=np.vstack((np.zeros(3), tip)))
+                self.satellite.setData(pos=tip.reshape(1, 3))
+            except Exception:
+                pass
 
     def add_sphere(self):
         md = gl.MeshData.sphere(rows=5, cols=10, radius=0.5)
