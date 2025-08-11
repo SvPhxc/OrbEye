@@ -244,49 +244,37 @@ class TrackerWindow(QtWidgets.QMainWindow):
             return
 
         try:
-            if name == "test":
-                # Put a real test TLE here (example ISS-ish format; replace with valid lines)
+            # --- Always define tle_lines (handle "test" locally)
+            if name.lower() == "test":
+                # Example ISS TLE (static; just for testing)
                 tle_lines = (
-                    "1 25544U 98067A   24220.51736111  .00012345  00000-0  10270-3 0  9991",
-                    "2 25544  51.6423  23.5266 0005695  77.5318  47.6386 15.50123456789012",
+                    "1 25544U 98067A   20029.54791435  .00001264  00000-0  29621-4 0  9990",
+                    "2 25544  51.6442 115.8106 0004975  77.8491  35.3233 15.49174187211610",
                 )
                 tle_filename = "example.tle"
             else:
-                tle_lines = fetch_tle_by_name(name)
+                tle_lines = fetch_tle_by_name(name)   # your existing fetch
                 tle_filename = "temp.tle"
 
-            # --- 2) Now you can safely use tle_lines
+            # --- Write a 3-line TLE file for your parser
             with open(tle_filename, "w") as f:
                 f.write(f"{name}\n{tle_lines[0]}\n{tle_lines[1]}\n")
 
             elements = parse_tle_file(tle_filename)[0]
 
-            # 1) Get any real TLE, e.g. ISS from your fetch (or your test one)
-            tle_lines = fetch_tle_by_name(name)
-
-            # 2) Find the overhead time for Sofia
-            over_t, peak_el_deg = find_overhead_time(tle_lines, 42.6977, 23.3219)
-
-            # 3) Start 45 min before that so the 90-min segment shows the overhead in the middle
-            start_time = over_t - timedelta(minutes=45)
-
-            # 4) Generate ENU and plot
+            # --- Propagate and convert to ENU (km) for Sofia
             self.orbit_xyz = generate_orbit_xyz(
                 tle_lines=tle_lines,
                 duration_minutes=90,
-                step_seconds=10,
-                start_time_utc=start_time,     # <-- new!
+                step_seconds=10,        # smoother line
                 site_lat_deg=42.6977,
                 site_lon_deg=23.3219,
                 site_h_m=0.0,
                 units="km"
             )
 
-
-            # Clear old visuals
+            # --- Draw
             self.remove_orbit()
-
-            # Plot orbit and reference vectors
             self.plot_orbit_line()
             self.plot_keplerian_reference(
                 inclination_deg=elements['inclination_deg'],
@@ -295,14 +283,11 @@ class TrackerWindow(QtWidgets.QMainWindow):
                 length=2000.0
             )
             print(f"Plotted orbit and frame for '{name}'")
+
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"Error: {e}")
-        # Plot line to Sofia
-        #sofia_pos = get_sofia_eci(time_utc=Time.now())  # current ECI position
-        #sofia_line = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], sofia_pos * self.debug_scale]),
-        #                            color=(0, 1, 1, 1), width=2)
-        #self.view.addItem(sofia_line)
-        #self.orbit_items.append(sofia_line)
 
     def accuire_points(self):
         self.shared_data["acquire_points"].value = True
