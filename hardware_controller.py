@@ -1,4 +1,4 @@
-# hardware_controller.py (Corrected with Reversal Debounce Logic)
+# hardware_controller.py (Corrected with Robust Quadrant-Based Reversal)
 
 import time
 import serial
@@ -14,8 +14,8 @@ STEPPER_DIR_PIN = 3
 STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
-TARGET_REACHED_THRESHOLD_DEG = 0.05
-SCAN_PAN_SPEED_DPS = 600.0
+TARGET_REACHED_THRESHOLD_DEG = 0.05 # Kept from previous working version
+SCAN_PAN_SPEED_DPS = 360.0  # High speed is fine with this logic
 
 # --- Define the boundaries and resolution for scanning ---
 SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360
@@ -39,17 +39,17 @@ class PIDController:
         self._integral, self._last_error, self._last_output, self._last_time = 0, 0, 0, time.monotonic()
 
     def update(self, current_value):
-        current_time = time.monotonic()
+        current_time = time.monotonic();
         dt = current_time - self._last_time
         if dt <= 0: return self._last_output
         error = self.setpoint - current_value
         if self.wrap_range:
-            range_width = self.wrap_range[1] - self.wrap_range[0]
+            range_width = self.wrap_range[1] - self.wrap_range[0];
             error = (error + range_width / 2) % range_width - range_width / 2
-        self._integral += error * dt
+        self._integral += error * dt;
         self._integral = max(-self.anti_windup_limit, min(self.anti_windup_limit, self._integral))
         output = (self.Kp * error) + (self.Ki * self._integral) + (self.Kd * (error - self._last_error) / dt)
-        self._last_error, self._last_time = error, current_time
+        self._last_error, self._last_time = error, current_time;
         self._last_output = max(self.output_limits[0], min(self.output_limits[1], output))
         return self._last_output
 
@@ -78,8 +78,6 @@ class HardwareController:
         self.scan_pan_direction = 1
         self.background_data_buffer = []
         self.scan_target_az = 0.0
-        # --- CODE REPAIRED HERE ---
-        # Add the new debounce flag for handling reversals.
         self.is_reversing = False
 
     def _get_shortest_pan_error(self, setpoint, current_value):
@@ -87,7 +85,6 @@ class HardwareController:
         return (error + 180) % 360 - 180
 
     def _lidar_reader_thread(self):
-        # ... (lidar reader thread remains unchanged) ...
         print("[HWCtrl-LIDAR] LiDAR reader thread started.")
         while not self.shutdown_event.is_set():
             try:
@@ -105,7 +102,6 @@ class HardwareController:
         print("[HWCtrl-LIDAR] LiDAR reader thread shut down.")
 
     def _execute_motor_commands(self, pan_velocity_dps, tilt_velocity_dps, dt):
-        # ... (motor execution logic remains unchanged) ...
         self.internal_pan_pos = (self.internal_pan_pos + (pan_velocity_dps * dt)) % 360
         self.internal_tilt_pos = max(0, min(90, self.internal_tilt_pos + (tilt_velocity_dps * dt)))
         if abs(pan_velocity_dps) > 0.1:
@@ -135,6 +131,7 @@ class HardwareController:
                 dt = time.monotonic() - last_loop_time
                 if dt <= 0.001: continue
                 last_loop_time = time.monotonic()
+
                 if self.shared_data["background_scan_active"].value:
                     next_state = "BACKGROUND_SCAN"
                 elif self.shared_data["go_to_target"].value:
@@ -152,7 +149,7 @@ class HardwareController:
                         self.current_scan_el, self.scan_pan_direction = SCAN_TILT_MAX, 1
                         self.scan_target_az = self.internal_pan_pos
                         last_physical_pan_pos = self.internal_pan_pos
-                        self.is_reversing = False  # Reset the flag on state entry
+                        self.is_reversing = False
                     current_state = next_state
 
                 pan_vel, tilt_vel = 0, 0
@@ -161,7 +158,6 @@ class HardwareController:
                 if current_state == "IDLE":
                     pass
                 elif current_state == "GOTO_POSITION" or current_state == "HF_TRACKING":
-                    # ... (Point-to-point logic is unchanged) ...
                     target_az = self.shared_data["target_azimuth"].value if current_state == "GOTO_POSITION" else \
                     self.shared_data["predicted_azimuth"].value
                     target_el = self.shared_data["target_elevation"].value if current_state == "GOTO_POSITION" else \
@@ -169,7 +165,7 @@ class HardwareController:
                     self.pan_pid.set_setpoint(target_az);
                     self.tilt_pid.set_setpoint(target_el)
                     pan_error = abs(self._get_shortest_pan_error(target_az, self.internal_pan_pos))
-                    target_reached = pan_error < TARGET_REACHED_THRESHOLD_DEG
+                    target_reached = pan_error < self.TARGET_REACHED_THRESHOLD_DEG
                     if not target_reached: pan_vel, tilt_vel = self.pan_pid.update(
                         self.internal_pan_pos), self.tilt_pid.update(self.internal_tilt_pos)
                     if current_state == "GOTO_POSITION": self.shared_data["target_reached"].value = target_reached
@@ -188,30 +184,26 @@ class HardwareController:
                 self._execute_motor_commands(pan_vel, tilt_vel, dt)
 
                 if current_state == "BACKGROUND_SCAN":
-                    # --- CODE REPAIRED HERE ---
-                    # The reversal logic is now protected by the self.is_reversing flag.
-
-                    # 1. Clear the flag once we are safely away from the boundary.
                     if self.is_reversing and 10 < self.internal_pan_pos < 350:
                         self.is_reversing = False
 
-                    # 2. Check if a physical boundary has been crossed.
                     row_finished = False
-                    if self.scan_pan_direction == 1 and self.internal_pan_pos < last_physical_pan_pos:  # Wrapped from 360 to 0
+                    # --- CODE REPAIRED HERE ---
+                    # This is the robust, unambiguous check for a completed sweep.
+                    # It replaces the simple and buggy `internal < last` comparison.
+                    if self.scan_pan_direction == 1 and self.internal_pan_pos < 90 and last_physical_pan_pos > 270:
                         row_finished = True
-                    elif self.scan_pan_direction == -1 and self.internal_pan_pos > last_physical_pan_pos:  # Wrapped from 0 to 360
+                    elif self.scan_pan_direction == -1 and self.internal_pan_pos > 270 and last_physical_pan_pos < 90:
                         row_finished = True
 
-                    # 3. Only execute the reversal ONCE per crossing.
                     if row_finished and not self.is_reversing:
-                        self.is_reversing = True  # Engage the debounce lock
+                        self.is_reversing = True
                         self.current_scan_el -= SCAN_STEP_DEG
                         self.scan_pan_direction *= -1
-                        self.scan_target_az = self.internal_pan_pos  # Re-sync target
+                        self.scan_target_az = self.internal_pan_pos
                         print(
                             f"[HWCtrl-SCAN] Physical boundary crossed. Reversing. New elevation: {self.current_scan_el:.1f} deg")
 
-                # Data logging and other updates remain independent
                 try:
                     while not self.lidar_queue.empty():
                         dist, strength, ts = self.lidar_queue.get_nowait()
