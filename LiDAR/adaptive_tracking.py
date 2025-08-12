@@ -16,8 +16,8 @@ class TrackingState(Enum):
 class IntegratedAdaptiveTracker:
     def __init__(self, shared_data):
         self.shared_data = shared_data
-        self.min_target_distance = 20 # cm (e.g., ignore targets closer than 50cm)
-        self.max_target_distance = 500 # cm (e.g., ignore targets farther than 5m)
+        self.min_target_distance = 20 # cm (e.g., ignore targets closer than 20cm)
+        self.max_target_distance = 150 # cm (e.g., ignore targets farther than 1.5m)
         # Target tracking variables
         self.state = TrackingState.SEARCHING
         self.target_history = deque(maxlen=10)  # Store last 10 target positions
