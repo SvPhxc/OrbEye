@@ -15,6 +15,7 @@ def _shortest_angular_delta(target, current):
 
 
 class PIDController:
+    # No changes to the PID class itself
     def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-100, 100), anti_windup_limit=20):
         self.Kp, self.Ki, self.Kd = Kp, Ki, Kd
         self.setpoint, self.output_limits, self.anti_windup_limit = setpoint, output_limits, anti_windup_limit
@@ -46,14 +47,24 @@ STEPPER_PULSE_PIN = 19;
 STEPPER_DIR_PIN = 3;
 STEPPER_ENABLE_PIN = 4;
 STEPPER_SLEEP_PIN = 6
-MICROSTEP_ANGLE = 0.05625  # The angle of a single pulse
+MICROSTEP_ANGLE = 0.05625
 TARGET_REACHED_THRESHOLD_DEG = 0.1
 SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90
 
-# These PID values are tuned to prevent commanding accelerations that the motor cannot handle,
-# which is the primary cause of skipped steps.
-MAX_PAN_SPEED_DPS = 350.0
-PAN_KP, PAN_KI, PAN_KD = 3.5, 0.1, 1.2
+# --- CRITICAL TUNING PARAMETERS FOR PHYSICAL LIMITS ---
+
+# 1. MAX ACCELERATION (Degrees per second squared)
+# This is the most important new parameter. It limits how quickly the motor can change speed.
+# Start with a low value like 800 and increase it until the motor sounds smooth without stalling.
+MAX_PAN_ACCELERATION_DPSS = 1000.0
+
+# 2. MAX VELOCITY (Degrees per second)
+# Your motor may also have a top speed limit. Lower this if you hear stalling at high speeds.
+MAX_PAN_SPEED_DPS = 300.0
+
+# 3. PID GAINS
+# These should be tuned *after* setting the physical limits above.
+PAN_KP, PAN_KI, PAN_KD = 4.0, 0.1, 1.0
 
 MAX_TILT_SPEED_DPS = 600.0
 TILT_KP, TILT_KI, TILT_KD = 6.0, 0.0, 0.0
@@ -68,6 +79,8 @@ class HardwareController:
         self.lidar_queue = queue.Queue(maxsize=1)
         self.internal_pan_pos = self.shared_data["stepper_degrees"].value
         self.internal_tilt_pos = self.shared_data["servo_degrees"].value
+
+        # We now pass the limited speed to the PID
         self.pan_pid = PIDController(PAN_KP, PAN_KI, PAN_KD, output_limits=(-MAX_PAN_SPEED_DPS, MAX_PAN_SPEED_DPS))
         self.tilt_pid = PIDController(TILT_KP, TILT_KI, TILT_KD,
                                       output_limits=(-MAX_TILT_SPEED_DPS, MAX_TILT_SPEED_DPS))
@@ -83,13 +96,14 @@ class HardwareController:
                 pass
 
     def _execute_motor_commands(self, pan_vel_dps, tilt_vel_dps, dt):
+        # Pan motor (stepper)
         if abs(pan_vel_dps) > 0.1:
             self.pi.write(STEPPER_DIR_PIN, 0 if pan_vel_dps < 0 else 1)
             freq = int(abs(pan_vel_dps) / MICROSTEP_ANGLE)
-            safe_freq = min(freq, 300000)
+            safe_freq = min(freq, 400000)  # Absolute max freq for pigpio/driver
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, safe_freq, 500000)
 
-            # --- CRITICAL FIX: Calculate position based on actual pulses commanded ---
+            # Use pulse counting for position
             pulses_in_dt = safe_freq * dt
             angle_change_deg = pulses_in_dt * MICROSTEP_ANGLE
 
@@ -100,6 +114,7 @@ class HardwareController:
         else:
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
 
+        # Tilt motor (servo)
         if abs(tilt_vel_dps) > 0.1:
             self.internal_tilt_pos += tilt_vel_dps * dt
             self.internal_tilt_pos = max(SCAN_TILT_MIN, min(SCAN_TILT_MAX, self.internal_tilt_pos))
@@ -110,20 +125,31 @@ class HardwareController:
         try:
             self.pi = pigpio.pi();
             assert self.pi.connected
-            self.pi.set_mode(STEPPER_ENABLE_PIN, pigpio.OUTPUT);
+            # Setup GPIO pins
+            self.pi.set_mode(STEPPER_PULSE_PIN, pigpio.OUTPUT)
+            self.pi.set_mode(STEPPER_DIR_PIN, pigpio.OUTPUT)
+            self.pi.set_mode(STEPPER_ENABLE_PIN, pigpio.OUTPUT)
             self.pi.set_mode(STEPPER_SLEEP_PIN, pigpio.OUTPUT)
             self.pi.write(STEPPER_ENABLE_PIN, 0);
             self.pi.write(STEPPER_SLEEP_PIN, 1)
+
+            # Setup Serial
             self.ser = serial.Serial(self.shared_data["lidar_port"], 115200, timeout=0.1)
             self.ser.write(bytearray([0x5A, 0x06, 0x03, 0xE8, 0x03, 0x4E]))
             lidar_thread = threading.Thread(target=self._lidar_reader_thread);
             lidar_thread.daemon = True;
             lidar_thread.start()
+
             print("[HWCtrl] Process running.");
-            last_loop_time = time.monotonic();
+            last_loop_time = time.monotonic()
             current_state = "IDLE"
+
+            # Variables for acceleration ramping
+            current_pan_vel_dps = 0.0
+            current_tilt_vel_dps = 0.0
+
             while not self.shared_data["shutdown"].value:
-                dt = time.monotonic() - last_loop_time;
+                dt = time.monotonic() - last_loop_time
                 last_loop_time = time.monotonic()
                 if dt <= 0.001: time.sleep(0.001); continue
 
@@ -138,7 +164,9 @@ class HardwareController:
                     self.tilt_pid.reset();
                     current_state = next_state
 
-                pan_vel, tilt_vel = 0, 0
+                desired_pan_vel = 0.0
+                desired_tilt_vel = 0.0
+
                 if current_state == "GOTO_POSITION":
                     if is_tracking and self.shared_data["ekf_initialized"].value:
                         target_az = self.shared_data["predicted_azimuth"].value
@@ -155,12 +183,35 @@ class HardwareController:
                     if abs(pan_err) < TARGET_REACHED_THRESHOLD_DEG and abs(tilt_err) < TARGET_REACHED_THRESHOLD_DEG:
                         self.shared_data["target_reached"].value = True
                         if not is_tracking and not is_acquiring: self.shared_data["go_to_target"].value = False
+                        # When reached, desired velocity is zero
+                        desired_pan_vel = 0.0
                     else:
                         self.shared_data["target_reached"].value = False
-                        pan_vel = self.pan_pid.update(self.internal_pan_pos)
-                        tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
+                        # Get the raw desired velocity from the PID controller
+                        desired_pan_vel = self.pan_pid.update(self.internal_pan_pos)
 
-                self._execute_motor_commands(pan_vel, tilt_vel, dt)
+                    desired_tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
+
+                # --- ACCELERATION RAMPING LOGIC (THE SOLUTION) ---
+                # Calculate the maximum change in velocity allowed in this time step (dt)
+                max_dv = MAX_PAN_ACCELERATION_DPSS * dt
+
+                # Smoothly ramp the current velocity towards the desired velocity
+                if desired_pan_vel > current_pan_vel_dps:
+                    current_pan_vel_dps += max_dv
+                    if current_pan_vel_dps > desired_pan_vel:
+                        current_pan_vel_dps = desired_pan_vel
+                elif desired_pan_vel < current_pan_vel_dps:
+                    current_pan_vel_dps -= max_dv
+                    if current_pan_vel_dps < desired_pan_vel:
+                        current_pan_vel_dps = desired_pan_vel
+
+                # For tilt (servo), ramping is usually not necessary
+                current_tilt_vel_dps = desired_tilt_vel
+
+                # Execute the ramped velocity
+                self._execute_motor_commands(current_pan_vel_dps, current_tilt_vel_dps, dt)
+
                 try:
                     d, s, ts = self.lidar_queue.get_nowait()
                     with self.shared_data["lidar_data"].get_lock():
@@ -174,6 +225,7 @@ class HardwareController:
             print(f"[HWCtrl] CRITICAL ERROR: {e}");
             traceback.print_exc()
         finally:
+            # Graceful shutdown of hardware
             self.shutdown_event.set()
             if 'lidar_thread' in locals() and lidar_thread.is_alive(): lidar_thread.join(timeout=1)
             if self.pi and self.pi.connected:
