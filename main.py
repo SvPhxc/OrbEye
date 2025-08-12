@@ -10,11 +10,12 @@ import traceback
 # Import all process functions
 from hardware_controller import run_hardware_controller
 from GUI import run_gui
-from tracker_logic import run_tracker_logic # <-- IMPORT THE NEW MODULE
+# --- Placeholder imports for other modules to make the system runnable ---
+
+
 
 def join_or_escalate(proc, name, timeout=5):
     """Helper function to gracefully terminate processes."""
-    # ... (this function remains unchanged)
     if proc is None or not proc.is_alive():
         print(f"[main] '{name}' is already terminated.")
         return
@@ -23,10 +24,11 @@ def join_or_escalate(proc, name, timeout=5):
     if proc.is_alive():
         print(f"[main] Process '{name}' is still alive. Sending SIGTERM...")
         try:
+            # Use os.kill on non-Windows platforms for more robust termination
             if sys.platform != "win32":
                 os.kill(proc.pid, signal.SIGTERM)
             else:
-                proc.terminate()
+                proc.terminate() # Fallback for Windows
             proc.join(timeout=3)
         except Exception as e:
             print(f"[main] SIGTERM for '{name}' failed: {e}")
@@ -38,10 +40,10 @@ def join_or_escalate(proc, name, timeout=5):
         except Exception as e:
             print(f"[main] terminate() for '{name}' failed: {e}")
 
-
 if __name__ == "__main__":
     print("[main] Initializing shared memory space...")
 
+    # Using Manager for string values that need to be shared across processes
     manager = Manager()
 
     shared_data = {
@@ -58,32 +60,29 @@ if __name__ == "__main__":
         "servo_degrees": Value('d', 90.0),
 
         # --- LiDAR Data ---
-        "lidar_data": Array('d', [0.0, 0.0, 0.0]),
-        "lidar_acceptance_range": Array('d', [3.0, 50.0]),
+        "lidar_data": Array('d', [0.0, 0.0, 0.0]),  # dist_cm, strength, timestamp
+        "lidar_acceptance_range": Array('d', [3.0, 50.0]),  # min_m, max_m
         "lidar_port": manager.Value('c', "/dev/serial0"),
 
         # --- Background Scan ---
         "background_scan_active": Value('b', False),
+        # --- ADDED FOR HARDWARE CONTROLLER ---
+        "save_background_trigger": Value('b', False),
         "background_path": manager.Value('c', "background_scan.npy"),
-
-        # --- Auto-Tracking (NEW SECTION) ---
-        "auto_track_active": Value('b', False),
-        "tracker_status": Value('i', 0), # 0:IDLE, 1:ACQUIRING, 2:TRACKING, 3:REACQUIRING
-        "tracker_target_pan": Value('d', 0.0),
-        "tracker_target_tilt": Value('d', 0.0),
         # ------------------------------------
 
         # --- Acquirer (for EKF init) ---
         "acquire_points": Value('b', False),
-        "acquirer_status": Value('i', 0),
-        "points_buffer": Array('d', [0.0] * 15),
+        "acquirer_status": Value('i', 0),  # 0:idle, 1:running, 2:done, 3:failed
+        "points_buffer": Array('d', [0.0] * 15),  # az,el,dist,str,ts for 3 points
         "points_count": Value('i', 0),
 
-        # (The rest of the shared_data dictionary remains the same)
-        # ...
+        # --- Active Tracker (High-Frequency Hunt) ---
         "lidar_track_mode_active": Value('b', False),
         "satellite_detected": Value('b', False),
-        "satellite_points": Array('d', [0.0, 0.0, 0.0, 0.0, 0.0]),
+        "satellite_points": Array('d', [0.0, 0.0, 0.0, 0.0, 0.0]),  # az,el,dist_cm,str,ts
+
+        # --- EKF State ---
         "ekf_start": Value('b', False),
         "ekf_running": Value('b', False),
         "ekf_initialized": Value('b', False),
@@ -92,7 +91,9 @@ if __name__ == "__main__":
         "predicted_elevation": Value('d', 0.0),
         "estimated_azimuth": Value('d', 0.0),
         "estimated_elevation": Value('d', 0.0),
-        "generate_plot_on_stop": Value('b', False),
+        "generate_plot_on_stop": Value('b', False), # For GUI button
+
+        # --- Heatmap Tracker (for Debug Mode) ---
         "heatmap_measurement": Array('d', [0.0, 0.0, 0.0]),
         "heatmap_measurement_updated": Value('b', False),
     }
@@ -101,11 +102,9 @@ if __name__ == "__main__":
     processes = {
         "HardwareController": Process(target=run_hardware_controller, args=(shared_data,)),
         "GUI": Process(target=run_gui, args=(shared_data,)),
-        "TrackerLogic": Process(target=run_tracker_logic, args=(shared_data,)), # <-- ADD THE NEW PROCESS
     }
 
     def _graceful_shutdown(signum, frame):
-        # ... (this function remains unchanged) ...
         if not shared_data["shutdown"].value:
             print(f"\n[main] Signal {signum} received. Requesting global shutdown...")
             shared_data["shutdown"].value = True
@@ -114,10 +113,9 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _graceful_shutdown)
 
     try:
-        # ... (this block remains unchanged) ...
         print("[main] Starting all processes...")
         for name, p in processes.items():
-            p.daemon = False
+            p.daemon = False # Ensure processes are not auto-killed
             p.start()
             print(f"  - Started {name} (PID: {p.pid})")
         print("[main] All processes are running. System is active.")
@@ -135,8 +133,7 @@ if __name__ == "__main__":
             shared_data["shutdown"].value = True
     finally:
         print("\n[main] Starting shutdown sequence...")
-        join_or_escalate(processes.get("GUI"), "GUI")
-        join_or_escalate(processes.get("TrackerLogic"), "TrackerLogic") # <-- SHUTDOWN NEW PROCESS
-        join_or_escalate(processes.get("HardwareController"), "HardwareController")
+        join_or_escalate(processes["GUI"], "GUI")
+        join_or_escalate(processes["HardwareController"], "HardwareController")
         print("[main] All processes have been terminated. Program exited cleanly.")
         sys.exit(0)
