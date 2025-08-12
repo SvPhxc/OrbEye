@@ -15,7 +15,7 @@ STEPPER_DIR_PIN = 3
 STEPPER_ENABLE_PIN = 4  # Active LOW to enable driver
 STEPPER_SLEEP_PIN = 6  # Set HIGH for operation
 MICROSTEP_ANGLE = 0.05625
-TARGET_REACHED_THRESHOLD_DEG = 1.0
+TARGET_REACHED_THRESHOLD_DEG = 0.05
 
 # --- Define the boundaries and resolution for scanning and searching ---
 
@@ -25,10 +25,10 @@ SCAN_STEP_DEG = 1.0
 
 # --- PID Tuning Gains (CRITICAL!) ---
 
-MAX_PAN_SPEED_DPS = 360.0
-PAN_KP, PAN_KI, PAN_KD = 1.0, 0.05, 0.15
+MAX_PAN_SPEED_DPS = 600.0
+PAN_KP, PAN_KI, PAN_KD = 10.0, 0.05, 0.15
 MAX_TILT_SPEED_DPS = 600.0
-TILT_KP, TILT_KI, TILT_KD = 1.2, 0.1, 0.2
+TILT_KP, TILT_KI, TILT_KD = 6.2, 0.01, 0.02
 
 #==============================================================================
 # PID CONTROLLER CLASS (UPGRADED FOR ROTATIONAL SYSTEMS)
