@@ -70,6 +70,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.timer.timeout.connect(self.update_laser_from_pan_tilt)
         self.timer.start(30)  # ~33 fps is plenty
 
+        self.debug_flag_timer = QtCore.QTimer()
+        self.debug_flag_timer.timeout.connect(self._poll_lidar_debug_flag)
+        self.debug_flag_timer.start(10)  # check ~20 Hz
+
         # === Right: Controls ===
         controls = QtWidgets.QVBoxLayout()
         main_layout.addLayout(controls, stretch=1)
@@ -102,6 +106,12 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_simple_track = QtWidgets.QPushButton("Simple-Track")
         self.btn_simple_track.clicked.connect(self.simple_track)
         target_controls.addWidget(self.btn_simple_track)
+
+        # Add Active Lidar-Debug Button
+        self.btn_lidar_debug = QtWidgets.QPushButton("Aktive Lidar Debug")
+        self.btn_lidar_debug.setCheckable(True)
+        self.btn_lidar_debug.clicked.connect(self.lidar_debug)
+        target_controls.addWidget(self.btn_lidar_debug)
 
         self.btn_acquire = QtWidgets.QPushButton("Acquire (3 pts)")
         self.btn_acquire.clicked.connect(self.accuire_points)
@@ -295,6 +305,58 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     def simple_track(self):
         self.shared_data["adaptive_tracking_active"].value = True
+
+    def lidar_debug(self):
+        if self.btn_lidar_debug.isChecked():
+            self.shared_data["active_lidar_debug"].value = True
+        else: self.shared_data["active_lidar_debug"].value = False
+
+    def poll_lidar_debug_flag(self):
+        """Show/hide + update the red sphere based on shared_data['active_lidar_debug']."""
+        flag_obj = self.shared_data.get("active_lidar_debug", False)
+        flag = bool(getattr(flag_obj, "value", flag_obj))
+
+        if flag:
+            if not hasattr(self, "lidar_bg_dot"):
+                md = gl.MeshData.sphere(rows=6, cols=12, radius=0.5)  # small red ball
+                self.lidar_bg_dot = gl.GLMeshItem(meshdata=md, smooth=True, color=(1, 0, 0, 1), shader='shaded')
+                self.view.addItem(self.lidar_bg_dot)
+            self.lidar_bg_dot.show()
+            self.update_lidar_bg_dot()
+        else:
+            if hasattr(self, "lidar_bg_dot"):
+                self.lidar_bg_dot.hide()
+
+    def update_lidar_bg_dot(self):
+        """Place the red sphere using the SAME math as toggle_background_plot()."""
+        try:
+            # LiDAR distance (cm)
+            lidar = self.shared_data.get("lidar_data")
+            if lidar is None:
+                return
+            dist_cm = float(lidar[0])
+            if not (10.0 < dist_cm < 1600.0):
+                self.lidar_bg_dot.hide()
+                return
+
+            # Current pan/tilt (deg)
+            az_deg = float(self.shared_data['stepper_degrees'].value)   # 0..360
+            el_deg = float(self.shared_data['servo_degrees'].value)     # 0..90
+
+            # --- SAME conversion as your background plot ---
+            az_rad = np.radians(az_deg % 360.0)
+            el_rad = np.radians(np.clip(el_deg, 0.0, 90.0))
+            dist_m = dist_cm / 10.0
+            x = dist_m * np.cos(el_rad) * np.cos(az_rad)
+            y = -dist_m * np.cos(el_rad) * np.sin(az_rad)  # note the minus
+            z = dist_m * np.sin(el_rad)
+            # -----------------------------------------------
+
+            self.lidar_bg_dot.resetTransform()
+            self.lidar_bg_dot.translate(x, y, z)
+            self.lidar_bg_dot.show()
+        except Exception as e:
+            print(f"[GUI] _update_lidar_bg_dot error: {e}")
 
     def accuire_points(self):
         self.shared_data["acquire_points"].value = True
