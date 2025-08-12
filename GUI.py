@@ -124,11 +124,17 @@ class TrackerWindow(QtWidgets.QMainWindow):
         lcd_layout.addWidget(self.lcd_strength, 3, 1)
         controls_layout.addLayout(lcd_layout)
         controls_layout.addStretch()
+        self.chk_reactive_mode = QCheckBox("Enable Reactive Mode (No Prediction)")
+        self.chk_reactive_mode.toggled.connect(self.on_reactive_mode_toggled)
+
+        def on_reactive_mode_toggled(self, checked):
+            self.shared_data["reactive_mode"].value = checked
 
         self.btn_shutdown = QPushButton("Shutdown")
         self.btn_shutdown.setStyleSheet("background-color: #C41E3A; color: white; font-weight: bold;")
         self.btn_shutdown.clicked.connect(self.Pshutdown)
         controls_layout.addWidget(self.btn_shutdown)
+
 
         self.timer_ui = QtCore.QTimer(self)
         self.timer_ui.timeout.connect(self.update_ui)

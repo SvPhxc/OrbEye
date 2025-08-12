@@ -6,6 +6,7 @@ import signal
 import time
 from multiprocessing import Process, Array, Value, Manager
 import traceback
+from tracking_logic import run_tracking_logic
 
 # Import all process functions
 from hardware_controller import run_hardware_controller
@@ -81,6 +82,7 @@ if __name__ == "__main__":
         "lidar_track_mode_active": Value('b', False),
         "satellite_detected": Value('b', False),
         "satellite_points": Array('d', [0.0, 0.0, 0.0, 0.0, 0.0]),  # az,el,dist_cm,str,ts
+        "reactive_mode" : Value('b', True),  # True for reactive mode, False for manual tracking
 
         # --- EKF State ---
         "ekf_start": Value('b', False),
@@ -102,6 +104,8 @@ if __name__ == "__main__":
     processes = {
         "HardwareController": Process(target=run_hardware_controller, args=(shared_data,)),
         "GUI": Process(target=run_gui, args=(shared_data,)),
+        "TrackingLogic": Process(target=run_tracking_logic, args=(shared_data,)),
+
     }
 
     def _graceful_shutdown(signum, frame):
@@ -134,6 +138,8 @@ if __name__ == "__main__":
     finally:
         print("\n[main] Starting shutdown sequence...")
         join_or_escalate(processes["GUI"], "GUI")
+
         join_or_escalate(processes["HardwareController"], "HardwareController")
+        join_or_escalate(processes["TrackingLogic"], "TrackingLogic")
         print("[main] All processes have been terminated. Program exited cleanly.")
         sys.exit(0)
