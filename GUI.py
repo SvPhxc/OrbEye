@@ -494,7 +494,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     def background_scan(self):
         print("[GUI] Triggering background scan")
-        self.shared_data["scan_trigger"].value = True
+        self.shared_data["background_scan_active"].value = True
     
     def update_angle_display(self):
         self.lcd_pan.display(self.shared_data['stepper_degrees'].value)
