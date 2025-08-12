@@ -305,6 +305,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     def simple_track(self):
         self.shared_data["adaptive_tracking_active"].value = True
+        self.shared_data["lidar_track_mode_active"].value = True
 
     def lidar_debug(self):
         if self.btn_lidar_debug.isChecked():
