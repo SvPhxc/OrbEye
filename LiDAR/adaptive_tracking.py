@@ -417,7 +417,6 @@ class IntegratedAdaptiveTracker:
         print("[AdaptiveTracker] Tracking loop started")
         loop_hz = 15  # 15 Hz update rate
         loop_period = 1.0 / loop_hz
-        print(f"[DEBUG] LiDAR data received: {lidar_data}")
         last_status_time = 0
         status_period = 2.0  # Print status every 2 seconds
         
@@ -434,6 +433,7 @@ class IntegratedAdaptiveTracker:
                 if time.time() - last_mode_check > mode_check_period:
                     if not mode_requested or not self.shared_data["lidar_track_mode_active"].value:
                         mode_requested = self._request_tracking_mode()
+                        self.shared_data["lidar_track_mode_active"].value = True
                     last_mode_check = time.time()
                 
                 # Only process if we have tracking mode
