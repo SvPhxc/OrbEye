@@ -437,47 +437,32 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
 
     def toggle_background_plot(self):
-        """ --- NEW: Loads data from file and displays/hides the plot --- """
         if self.background_plot.visible():
             self.background_plot.hide()
             print("[GUI] Background visualization hidden.")
             return
-            
         try:
-            # Load the reshaped data [elevation, azimuth, [strength, range]]
-            bg_data = np.load("background_data.npy")
-            
+            bg_data_path = self.shared_data.get("background_path", "background_data.npy").value
+            bg_data = np.load(bg_data_path)
             points = []
-            # Iterate through the array to convert spherical to Cartesian
-            for reading in bg_data:
-
-                pos, dist_cm = reading[0], reading[1]
-                # Plot only valid points within a reasonable range
-                if 10 < dist_cm < 1600:
-                    # Convert to radians for math
-                     az = int(pos) % 360
-                     el = int(pos) // 360
-                     az_rad = np.radians(az)
-                     el_rad = np.radians(el)
-                     dist_m = dist_cm / 10.0  #Scale to meters for visualization
-
-                     # Spherical to Cartesian conversion
-                     x = dist_m * np.cos(el_rad) * np.cos(az_rad)
-                     y = - dist_m * np.cos(el_rad) * np.sin(az_rad)
-                     z = dist_m * np.sin(el_rad)
-                     points.append([x, y, z])
-
+            for az, el, dist_cm, strength in bg_data:
+                if 10 < dist_cm < 16000:
+                    az_rad, el_rad = np.radians(az), np.radians(el)
+                    dist_m = dist_cm / 100.0
+                    x = dist_m * np.cos(el_rad) * np.cos(az_rad)
+                    y = dist_m * np.cos(el_rad) * np.sin(az_rad)
+                    z = dist_m * np.sin(el_rad)
+                    points.append([x, y, z])
             if points:
                 print(f"[GUI] Plotting {len(points)} background points.")
                 self.background_plot.setData(pos=np.array(points))
                 self.background_plot.show()
             else:
                 print("[GUI] No valid points found in background data file.")
-
         except FileNotFoundError:
-            print("[GUI] Error: 'background_data.npy' not found. Please run a scan first.")
+            print(f"[GUI] Error: '{bg_data_path}' not found. Please run a background scan first.")
         except Exception as e:
-            print(f"[GUI] Error loading background data: {e}")
+            print(f"[GUI] An error occurred while loading or processing background data: {e}")
             
     def update_lidar_display(self):
         lidar_data = self.shared_data.get("lidar_data")
