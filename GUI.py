@@ -448,7 +448,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
             for az, el, dist_cm, strength in bg_data:
                 if 10 < dist_cm < 16000:
                     az_rad, el_rad = np.radians(az), np.radians(el)
-                    dist_m = dist_cm / 100.0
+                    dist_m = dist_cm / 10.0
                     x = dist_m * np.cos(el_rad) * np.cos(az_rad)
                     y = dist_m * np.cos(el_rad) * np.sin(az_rad)
                     z = dist_m * np.sin(el_rad)
