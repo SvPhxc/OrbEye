@@ -4,7 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="35c70f19-7828-4c72-ae95-c5846c6a2230" name="Changes" comment="" />
+    <list default="true" id="35c70f19-7828-4c72-ae95-c5846c6a2230" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/LiDAR/Kalman_Filter.py" beforeDir="false" afterPath="$PROJECT_DIR$/kalman_filter.py" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -26,6 +28,11 @@
     &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;
   }
 }</component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\Alex\Documents\FtcRobotController-master\OrbEye" />
+    </key>
+  </component>
   <component name="TaskManager">
     <servers />
   </component>
