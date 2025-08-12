@@ -1,4 +1,4 @@
-# main.py
+# main.py (Updated)
 
 import sys
 import os
@@ -45,7 +45,7 @@ def join_or_escalate(proc, name, timeout=5):
 if __name__ == "__main__":
     print("[main] Initializing shared memory space...")
 
-    # Using Manager for the lidar_port string for simplicity
+    # Using Manager for string values that need to be shared across processes
     manager = Manager()
 
     shared_data = {
@@ -68,6 +68,10 @@ if __name__ == "__main__":
 
         # --- Background Scan ---
         "background_scan_active": Value('b', False),
+        # --- ADDED FOR HARDWARE CONTROLLER ---
+        "save_background_trigger": Value('b', False),
+        "background_path": manager.Value('c', "background_scan.npy"),
+        # ------------------------------------
 
         # --- Acquirer (for EKF init) ---
         "acquire_points": Value('b', False),
@@ -97,7 +101,6 @@ if __name__ == "__main__":
     }
 
     print("[main] Initializing processes...")
-    # Note: GUI must run in the main process on macOS, but can be a separate process on Linux/Windows
     processes = {
         "HardwareController": Process(target=run_hardware_controller, args=(shared_data,)),
         "Acquirer": Process(target=run_acquirer, args=(shared_data,)),
@@ -124,7 +127,6 @@ if __name__ == "__main__":
         print("[main] All processes are running. System is active.")
 
         while not shared_data["shutdown"].value:
-            # Check if any critical process has died
             running_procs = [p for p in processes.values() if p.is_alive()]
             if len(running_procs) < len(processes):
                 print("[main] A critical process has terminated unexpectedly. Initiating shutdown.")
@@ -137,12 +139,11 @@ if __name__ == "__main__":
             shared_data["shutdown"].value = True
     finally:
         print("\n[main] Starting shutdown sequence...")
-        # Shutdown in reverse order of dependency
         join_or_escalate(processes["GUI"], "GUI")
         join_or_escalate(processes["Acquirer"], "Acquirer")
         join_or_escalate(processes["ActiveTracker"], "ActiveTracker")
         join_or_escalate(processes["HeatmapTracker"], "HeatmapTracker")
         join_or_escalate(processes["EKF"], "EKF")
-        join_or_escalate(processes["HardwareController"], "HardwareController") # Shutdown hardware last
+        join_or_escalate(processes["HardwareController"], "HardwareController")
         print("[main] All processes have been terminated. Program exited cleanly.")
         sys.exit(0)
