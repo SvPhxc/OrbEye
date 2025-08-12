@@ -1,4 +1,4 @@
-# main.py (Updated)
+# main.py
 
 import sys
 import os
@@ -10,8 +10,7 @@ import traceback
 # Import all process functions
 from hardware_controller import run_hardware_controller
 from GUI import run_gui
-# --- Placeholder imports for other modules to make the system runnable ---
-
+from ekf_tracker import run_ekf_tracker
 
 
 def join_or_escalate(proc, name, timeout=5):
@@ -24,7 +23,6 @@ def join_or_escalate(proc, name, timeout=5):
     if proc.is_alive():
         print(f"[main] Process '{name}' is still alive. Sending SIGTERM...")
         try:
-            # Use os.kill on non-Windows platforms for more robust termination
             if sys.platform != "win32":
                 os.kill(proc.pid, signal.SIGTERM)
             else:
@@ -43,7 +41,6 @@ def join_or_escalate(proc, name, timeout=5):
 if __name__ == "__main__":
     print("[main] Initializing shared memory space...")
 
-    # Using Manager for string values that need to be shared across processes
     manager = Manager()
 
     shared_data = {
@@ -61,29 +58,27 @@ if __name__ == "__main__":
 
         # --- LiDAR Data ---
         "lidar_data": Array('d', [0.0, 0.0, 0.0]),  # dist_cm, strength, timestamp
-        "lidar_acceptance_range": Array('d', [3.0, 50.0]),  # min_m, max_m
+        "lidar_acceptance_range": Array('d', [3.0, 50.0]),
         "lidar_port": manager.Value('c', "/dev/serial0"),
 
         # --- Background Scan ---
         "background_scan_active": Value('b', False),
-        # --- ADDED FOR HARDWARE CONTROLLER ---
         "save_background_trigger": Value('b', False),
         "background_path": manager.Value('c', "background_scan.npy"),
-        # ------------------------------------
 
         # --- Acquirer (for EKF init) ---
         "acquire_points": Value('b', False),
         "acquirer_status": Value('i', 0),  # 0:idle, 1:running, 2:done, 3:failed
-        "points_buffer": Array('d', [0.0] * 15),  # az,el,dist,str,ts for 3 points
+        "points_buffer": Array('d', [0.0] * 15),  # az,el,dist_m,str,ts for 3 points
         "points_count": Value('i', 0),
 
         # --- Active Tracker (High-Frequency Hunt) ---
         "lidar_track_mode_active": Value('b', False),
-        "satellite_detected": Value('b', False),
-        "satellite_points": Array('d', [0.0, 0.0, 0.0, 0.0, 0.0]),  # az,el,dist_cm,str,ts
+        "satellite_detected": Value('b', False), # Legacy, can be removed
+        "satellite_points": Array('d', [0.0] * 5), # Legacy, can be removed
 
-        # --- EKF State ---
-        "ekf_start": Value('b', False),
+        # --- EKF State & Control ---
+        "ekf_start": Value('b', False), # Legacy, replaced by acquirer_status
         "ekf_running": Value('b', False),
         "ekf_initialized": Value('b', False),
         "ekf_confidence": Value('d', 0.0),
@@ -91,7 +86,12 @@ if __name__ == "__main__":
         "predicted_elevation": Value('d', 0.0),
         "estimated_azimuth": Value('d', 0.0),
         "estimated_elevation": Value('d', 0.0),
-        "generate_plot_on_stop": Value('b', False), # For GUI button
+        "generate_plot_on_stop": Value('b', False),
+
+        # --- Grid Scan Orchestration ---
+        "new_prediction_available": Value('b', False),
+        "refined_measurement_updated": Value('b', False),
+        "refined_measurement": Array('d', [0.0] * 5),  # az, el, dist_m, str, ts
 
         # --- Heatmap Tracker (for Debug Mode) ---
         "heatmap_measurement": Array('d', [0.0, 0.0, 0.0]),
@@ -102,6 +102,7 @@ if __name__ == "__main__":
     processes = {
         "HardwareController": Process(target=run_hardware_controller, args=(shared_data,)),
         "GUI": Process(target=run_gui, args=(shared_data,)),
+        "EKFTracker": Process(target=run_ekf_tracker, args=(shared_data,)),
     }
 
     def _graceful_shutdown(signum, frame):
@@ -115,7 +116,7 @@ if __name__ == "__main__":
     try:
         print("[main] Starting all processes...")
         for name, p in processes.items():
-            p.daemon = False # Ensure processes are not auto-killed
+            p.daemon = False
             p.start()
             print(f"  - Started {name} (PID: {p.pid})")
         print("[main] All processes are running. System is active.")
@@ -133,7 +134,9 @@ if __name__ == "__main__":
             shared_data["shutdown"].value = True
     finally:
         print("\n[main] Starting shutdown sequence...")
+        # Terminate processes in reverse dependency order
         join_or_escalate(processes["GUI"], "GUI")
+        join_or_escalate(processes["EKFTracker"], "EKFTracker")
         join_or_escalate(processes["HardwareController"], "HardwareController")
         print("[main] All processes have been terminated. Program exited cleanly.")
         sys.exit(0)
