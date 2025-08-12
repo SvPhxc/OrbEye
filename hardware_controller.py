@@ -276,4 +276,22 @@ class HardwareController:
                 time.sleep(0.002)
         except Exception as e:
             import traceback;
-            print(f"[HWCtrl] 
+            print(f"[HWCtrl] CRITICAL ERROR: {e}");
+            traceback.print_exc()
+        finally:
+            print("[HWCtrl] Shutting down...")
+            self.shutdown_event.set()
+            if 'lidar_thread' in locals() and lidar_thread.is_alive(): lidar_thread.join(timeout=1)
+            if self.pi and self.pi.connected:
+                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0);
+                self.pi.write(STEPPER_ENABLE_PIN, 1);
+                self.pi.write(STEPPER_SLEEP_PIN, 0);
+                self.pi.set_servo_pulsewidth(SERVO_PIN, 0);
+                self.pi.stop()
+                print("[HWCtrl] pigpio resources released.")
+            if self.ser and self.ser.is_open: self.ser.close()
+
+
+def run_hardware_controller(shared_data):
+    controller = HardwareController(shared_data)
+    controller.run()
