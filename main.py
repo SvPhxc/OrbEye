@@ -3,7 +3,7 @@ from webcam.blob_tracker import run_tracking
 from LiDAR.Kalman_Filter import run_ekf_tracker
 from tracking.tracker import tracking
 from hardware_controller import run_hardware_controller
-from adaptive_tracking import run_adaptive_tracking_mode
+from LiDAR.adaptive_tracking import run_adaptive_tracking_mode
 from GUI import run_gui
 import time, os, signal, sys
 
