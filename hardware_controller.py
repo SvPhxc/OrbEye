@@ -180,8 +180,6 @@ class HardwareController:
                     next_state = "HF_TRACKING"
                 elif self.shared_data["go_to_target"].value:
                     next_state = "GOTO_POSITION"
-                elif self.shared_data["search_mode_active"].value:
-                    next_state = "SEARCHING"
                 elif self.shared_data["background_scan_active"].value:
                     next_state = "BACKGROUND_SCAN"
                 else:
@@ -225,16 +223,12 @@ class HardwareController:
                                     with self.shared_data["satellite_points"].get_lock(): self.shared_data[
                                                                                               "satellite_points"][:] = [
                                         self.internal_pan_pos, self.internal_tilt_pos, dist, strength]
-                                    self.shared_data["satellite_detected"].value, self.shared_data[
-                                        "search_mode_active"].value = True, False
                         except queue.Empty:
                             pass
                         if not self._update_scan_pattern():
                             print(f"[HWCtrl] {current_state} finished.")
                             if current_state == "BACKGROUND_SCAN":
                                 self.shared_data["background_scan_active"].value = False
-                            elif current_state == "SEARCHING":
-                                self.shared_data["search_mode_active"].value = False
                     else:
                         pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
                             self.internal_tilt_pos)
