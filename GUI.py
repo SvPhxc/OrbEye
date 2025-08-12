@@ -98,6 +98,11 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_show_background.clicked.connect(self.toggle_background_plot)
         target_controls.addWidget(self.btn_show_background)
 
+        # Add Simple-Track Button
+        self.btn_simple_track = QtWidgets.QPushButton("Simple-Track")
+        self.btn_simple_track.clicked.connect(self.simple_track)
+        target_controls.addWidget(self.btn_simple_track)
+
         self.btn_acquire = QtWidgets.QPushButton("Acquire (3 pts)")
         self.btn_acquire.clicked.connect(self.accuire_points)
         controls.addWidget(self.btn_acquire)
@@ -287,6 +292,9 @@ class TrackerWindow(QtWidgets.QMainWindow):
             import traceback
             traceback.print_exc()
             print(f"Error: {e}")
+
+    def simple_track(self):
+        self.shared_data["adaptive_tracking_active"].value = True
 
     def accuire_points(self):
         self.shared_data["acquire_points"].value = True
