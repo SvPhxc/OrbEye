@@ -369,7 +369,7 @@ class IntegratedAdaptiveTracker:
         if self.target_history:
             # Small search pattern around last known position
             last_pos = self.target_history[-1]
-            search_radius = 5.0  # degrees
+            search_radius = 10.0  # degrees
             
             # Figure-8 pattern for acquisition
             time_factor = (current_time * 3) % (2 * math.pi)
