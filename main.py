@@ -5,6 +5,7 @@ from LiDAR.lidar_handler import run_lidar
 from LiDAR.Kalman_Filter import run_ekf_tracker
 from tracking.tracker import tracking
 from hardware_controller import run_hardware_controller
+from adaptive_tracking import run_adaptive_tracking_mode
 from GUI import run_gui
 import time, os, signal, sys
 
@@ -26,11 +27,15 @@ def join_or_escalate(proc, name, timeout=8):
         except Exception as e:
             print(f"[main] terminate() {name} failed: {e}")
         proc.join(timeout=2)
+        
+
+
 
 if __name__ == "__main__":
     # ===== Shared memory setup =====
+    adaptive_tracking_active = Value('b', False)
     lidar_data = Array('d', 3)  # [distance, strength, timestamp]
-    backgorund_data = Array('d', 4)
+    background_data = Array('d', 4)
     shutdown_flag = Value('b', False)
     scan_trigger = Value('b', False)
     tilt_up = Value('b', False)
@@ -77,7 +82,7 @@ if __name__ == "__main__":
 
     shared_data = {
         "lidar_data": lidar_data,
-        "background_data": backgorund_data,
+        "background_data": background_data,
         "shutdown": shutdown_flag,
         "direction": direction,
         "target": target,
@@ -119,6 +124,7 @@ if __name__ == "__main__":
         "lidar_track_mode_active": lidar_track_mode_active,
         "save_background_trigger": save_background_trigger,
         "target_reached": target_reached,
+        "adaptive_tracking_active": adaptive_tracking_active
     }
 
     # ===== Start processes (non-daemon; default) =====
@@ -127,6 +133,7 @@ if __name__ == "__main__":
     p2 = Process(target=run_hardware_controller, args=(shared_data))
     p3 = Process(target=run_gui, args=(shared_data, movement_queue))
     p5 = Process(target=run_ekf_tracker, args=(shared_data,))
+    p6 = Process(target=run_adaptive_tracking_mode, args=(shared_data))
 
     for p in (p2, p3, p5):  # p1 if you enable it
         p.daemon = False
@@ -137,6 +144,7 @@ if __name__ == "__main__":
     p3.start()
 
     p5.start()
+    p6.start()
 
     # ===== Handle Ctrl-C / SIGTERM to flip the flag, not kill processes =====
     def _graceful(signum, frame):
@@ -151,6 +159,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("[main] Ctrl+C pressed")
         shutdown_flag.value = True
+    
     finally:
         print("Terminating processes (graceful)...")
         # Unblock motor worker if it’s waiting on the queue
@@ -165,6 +174,7 @@ if __name__ == "__main__":
         join_or_escalate(p5, "EKF")
         join_or_escalate(p2, "HarwareControll")
         join_or_escalate(p3, "GUI")
+        join_or_escalate(p6, "AdaptiveTracking")
 
         print("Program exited cleanly")
         sys.exit(0)

@@ -145,6 +145,10 @@ class HardwareController:
                 dt = time.monotonic() - last_loop_time
                 if dt <= 0.001: time.sleep(0.001); continue
                 last_loop_time = time.monotonic()
+                if self.shared_data["adaptive_tracking_active"].value and not self.shared_data["lidar_track_mode_active"].value:
+                    self.shared_data["lidar_track_mode_active"].value = True
+                if not self.shared_data["adaptive_tracking_active"].value and self.shared_data["lidar_track_mode_active"].value:
+                    self.shared_data["lidar_track_mode_active"].value = False
                 if self.shared_data["lidar_track_mode_active"].value:
                     next_state = "HF_TRACKING"
                 elif self.shared_data["go_to_target"].value:
