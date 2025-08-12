@@ -70,6 +70,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.timer.timeout.connect(self.update_laser_from_pan_tilt)
         self.timer.start(30)  # ~33 fps is plenty
 
+        self.debug_flag_timer = QtCore.QTimer()
+        self.debug_flag_timer.timeout.connect(self.poll_lidar_debug_flag)
+        self.debug_flag_timer.start(10) 
+
         # === Right: Controls ===
         controls = QtWidgets.QVBoxLayout()
         main_layout.addLayout(controls, stretch=1)
@@ -102,6 +106,12 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_simple_track = QtWidgets.QPushButton("Simple-Track")
         self.btn_simple_track.clicked.connect(self.simple_track)
         target_controls.addWidget(self.btn_simple_track)
+
+        # Add Active Lidar-Debug Button
+        self.btn_lidar_debug = QtWidgets.QPushButton("Aktive Lidar Debug")
+        self.btn_lidar_debug.setCheckable(True)
+        self.btn_lidar_debug.clicked.connect(self.lidar_debug)
+        target_controls.addWidget(self.btn_lidar_debug)
 
         self.btn_acquire = QtWidgets.QPushButton("Acquire (3 pts)")
         self.btn_acquire.clicked.connect(self.accuire_points)
@@ -297,6 +307,58 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.shared_data["adaptive_tracking_active"].value = True
         self.shared_data["lidar_track_mode_active"].value = True
 
+    def lidar_debug(self):
+        if self.btn_lidar_debug.isChecked():
+            self.shared_data["active_lidar_debug"].value = True
+        else: self.shared_data["active_lidar_debug"].value = False
+
+    def poll_lidar_debug_flag(self):
+        """Show/hide + update the red sphere based on shared_data['active_lidar_debug']."""
+        flag_obj = self.shared_data.get("active_lidar_debug", False)
+        flag = bool(getattr(flag_obj, "value", flag_obj))
+
+        if flag:
+            if not hasattr(self, "lidar_bg_dot"):
+                md = gl.MeshData.sphere(rows=6, cols=12, radius=0.5)  # small red ball
+                self.lidar_bg_dot = gl.GLMeshItem(meshdata=md, smooth=True, color=(1, 0, 0, 1), shader='shaded')
+                self.view.addItem(self.lidar_bg_dot)
+            self.lidar_bg_dot.show()
+            self.update_lidar_bg_dot()
+        else:
+            if hasattr(self, "lidar_bg_dot"):
+                self.lidar_bg_dot.hide()
+
+    def update_lidar_bg_dot(self):
+        """Place the red sphere using the SAME math as toggle_background_plot()."""
+        try:
+            # LiDAR distance (cm)
+            lidar = self.shared_data.get("lidar_data")
+            if lidar is None:
+                return
+            dist_cm = float(lidar[0])
+            if not (10.0 < dist_cm < 1600.0):
+                self.lidar_bg_dot.hide()
+                return
+
+            # Current pan/tilt (deg)
+            az_deg = float(self.shared_data['stepper_degrees'].value)   # 0..360
+            el_deg = float(self.shared_data['servo_degrees'].value)     # 0..90
+
+            # --- SAME conversion as your background plot ---
+            az_rad = np.radians(az_deg % 360.0)
+            el_rad = np.radians(np.clip(el_deg, 0.0, 90.0))
+            dist_m = dist_cm / 10.0
+            x = dist_m * np.cos(el_rad) * np.cos(az_rad)
+            y = -dist_m * np.cos(el_rad) * np.sin(az_rad)  # note the minus
+            z = dist_m * np.sin(el_rad)
+            # -----------------------------------------------
+
+            self.lidar_bg_dot.resetTransform()
+            self.lidar_bg_dot.translate(x, y, z)
+            self.lidar_bg_dot.show()
+        except Exception as e:
+            print(f"[GUI] _update_lidar_bg_dot error: {e}")
+
     def accuire_points(self):
         self.shared_data["acquire_points"].value = True
 
@@ -375,47 +437,32 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
 
     def toggle_background_plot(self):
-        """ --- NEW: Loads data from file and displays/hides the plot --- """
         if self.background_plot.visible():
             self.background_plot.hide()
             print("[GUI] Background visualization hidden.")
             return
-            
         try:
-            # Load the reshaped data [elevation, azimuth, [strength, range]]
-            bg_data = np.load("background_data.npy")
-            
+            bg_data_path = self.shared_data.get("background_path", "background_data.npy").value
+            bg_data = np.load(bg_data_path)
             points = []
-            # Iterate through the array to convert spherical to Cartesian
-            for reading in bg_data:
-
-                pos, dist_cm = reading[0], reading[1]
-                # Plot only valid points within a reasonable range
-                if 10 < dist_cm < 1600:
-                    # Convert to radians for math
-                     az = int(pos) % 360
-                     el = int(pos) // 360
-                     az_rad = np.radians(az)
-                     el_rad = np.radians(el)
-                     dist_m = dist_cm / 10.0  #Scale to meters for visualization
-
-                     # Spherical to Cartesian conversion
-                     x = dist_m * np.cos(el_rad) * np.cos(az_rad)
-                     y = - dist_m * np.cos(el_rad) * np.sin(az_rad)
-                     z = dist_m * np.sin(el_rad)
-                     points.append([x, y, z])
-
+            for az, el, dist_cm, strength in bg_data:
+                if 10 < dist_cm < 16000:
+                    az_rad, el_rad = np.radians(az), np.radians(el)
+                    dist_m = dist_cm / 100.0
+                    x = dist_m * np.cos(el_rad) * np.cos(az_rad)
+                    y = dist_m * np.cos(el_rad) * np.sin(az_rad)
+                    z = dist_m * np.sin(el_rad)
+                    points.append([x, y, z])
             if points:
                 print(f"[GUI] Plotting {len(points)} background points.")
                 self.background_plot.setData(pos=np.array(points))
                 self.background_plot.show()
             else:
                 print("[GUI] No valid points found in background data file.")
-
         except FileNotFoundError:
-            print("[GUI] Error: 'background_data.npy' not found. Please run a scan first.")
+            print(f"[GUI] Error: '{bg_data_path}' not found. Please run a background scan first.")
         except Exception as e:
-            print(f"[GUI] Error loading background data: {e}")
+            print(f"[GUI] An error occurred while loading or processing background data: {e}")
             
     def update_lidar_display(self):
         lidar_data = self.shared_data.get("lidar_data")
@@ -447,7 +494,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     def background_scan(self):
         print("[GUI] Triggering background scan")
-        self.shared_data["scan_trigger"].value = True
+        self.shared_data["background_scan_active"].value = True
     
     def update_angle_display(self):
         self.lcd_pan.display(self.shared_data['stepper_degrees'].value)
