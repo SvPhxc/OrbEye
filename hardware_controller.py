@@ -1,4 +1,4 @@
-
+# hardware_controller.py (Corrected)
 
 import time
 import serial
@@ -30,9 +30,10 @@ PAN_KP, PAN_KI, PAN_KD = 1.0, 0.05, 0.15
 MAX_TILT_SPEED_DPS = 600.0
 TILT_KP, TILT_KI, TILT_KD = 1.2, 0.1, 0.2
 
-#==============================================================================
+
+# ==============================================================================
 # PID CONTROLLER CLASS (MOVED HERE)
-#==============================================================================
+# ==============================================================================
 
 class PIDController:
     """A generic PID controller class."""
@@ -74,7 +75,9 @@ class PIDController:
         self._integral = 0
         self._last_error = 0
         self._last_time = time.monotonic()
-#==============================================================================
+
+
+# ==============================================================================
 
 class HardwareController:
     def __init__(self, shared_data):
@@ -86,7 +89,8 @@ class HardwareController:
         self.internal_pan_pos = self.shared_data["stepper_degrees"].value
         self.internal_tilt_pos = self.shared_data["servo_degrees"].value
         self.pan_pid = PIDController(PAN_KP, PAN_KI, PAN_KD, output_limits=(-MAX_PAN_SPEED_DPS, MAX_PAN_SPEED_DPS))
-        self.tilt_pid = PIDController(TILT_KP, TILT_KI, TILT_KD, output_limits=(-MAX_TILT_SPEED_DPS, MAX_TILT_SPEED_DPS))
+        self.tilt_pid = PIDController(TILT_KP, TILT_KI, TILT_KD,
+                                      output_limits=(-MAX_TILT_SPEED_DPS, MAX_TILT_SPEED_DPS))
         self.current_scan_az = SCAN_PAN_MIN
         self.current_scan_el = SCAN_TILT_MAX
         self.scan_pan_direction = 1
@@ -97,6 +101,7 @@ class HardwareController:
         print("[HWCtrl-LIDAR] LiDAR reader thread started.")
         while not self.shutdown_event.is_set():
             try:
+                # This blocking read waits for the LiDAR frame header
                 self.ser.read_until(b'\x59\x59')
                 frame = self.ser.read(7)
                 if len(frame) == 7:
@@ -104,7 +109,12 @@ class HardwareController:
                     try:
                         self.lidar_queue.put_nowait((distance, strength, time.time()))
                     except queue.Full:
-                        pass
+                        # Overwrite the last value if the queue is full
+                        try:
+                            self.lidar_queue.get_nowait()
+                            self.lidar_queue.put_nowait((distance, strength, time.time()))
+                        except queue.Empty:
+                            pass  # Should not happen, but safe to handle
             except (serial.SerialException, OSError):
                 if not self.shutdown_event.is_set():
                     print("[HWCtrl-LIDAR] Serial error. Thread stopping.")
@@ -119,13 +129,10 @@ class HardwareController:
             pan_steps_to_move = round(abs(pan_deg_change) / MICROSTEP_ANGLE)
             if pan_steps_to_move > 0:
                 self.pi.write(STEPPER_DIR_PIN, 0 if pan_velocity_dps < 0 else 1)
-                # --- CODE REPAIRED HERE ---
-                # Changed max frequency from 300000 to 250000 to meet the DRV8825's
-                # minimum pulse width requirement of 1.9us. At 300kHz with a 50%
-                # duty cycle, the pulse width is ~1.67us, which is too short.
-                # 250kHz is the max specified frequency in the datasheet.
                 frequency = min(pan_steps_to_move / dt, 250000)
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, frequency, 500000) # 50% duty cycle
+                # --- CODE REPAIRED HERE ---
+                # The frequency argument for hardware_PWM must be an integer.
+                self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(frequency), 500000)  # 50% duty cycle
             else:
                 self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
             self.internal_pan_pos = (self.internal_pan_pos + pan_deg_change) % 360
@@ -136,7 +143,9 @@ class HardwareController:
         tilt_deg_change = tilt_velocity_dps * dt
         self.internal_tilt_pos = max(0, min(90, self.internal_tilt_pos + tilt_deg_change))
         pulse_width = 500 + (self.internal_tilt_pos / 0.09) + (28 / 0.09)
-        self.pi.set_servo_pulsewidth(SERVO_PIN, pulse_width)
+        # --- CODE REPAIRED HERE ---
+        # The pulsewidth argument for set_servo_pulsewidth must be an integer.
+        self.pi.set_servo_pulsewidth(SERVO_PIN, int(pulse_width))
 
     def _update_scan_pattern(self):
         """Calculates the next point in the raster scan pattern."""
@@ -161,80 +170,110 @@ class HardwareController:
             self.pi.write(STEPPER_ENABLE_PIN, 0)
             self.pi.write(STEPPER_SLEEP_PIN, 1)
             print("[HWCtrl] Stepper driver enabled.")
-            self.ser = serial.Serial("/dev/serial0", 115200, timeout=0.1)
+            # --- CODE REPAIRED HERE ---
+            # Using the serial port from shared_data instead of a hardcoded value.
+            self.ser = serial.Serial(self.shared_data["lidar_port"].value, 115200, timeout=0.1)
+            # This command sets the TF-Mini S to a 1000Hz frame rate
             set_rate_command = bytearray([0x5A, 0x06, 0x03, 0xE8, 0x03, 0x4E])
             self.ser.write(set_rate_command)
-            lidar_thread = threading.Thread(target=self._lidar_reader_thread); lidar_thread.daemon = True; lidar_thread.start()
+            time.sleep(0.1)  # Give sensor time to apply settings
+            self.ser.reset_input_buffer()  # Clear any old data
+
+            lidar_thread = threading.Thread(target=self._lidar_reader_thread);
+            lidar_thread.daemon = True;
+            lidar_thread.start()
             print("[HWCtrl] Hardware Controller process is running.")
             last_loop_time = time.monotonic()
             current_state = "IDLE"
             while not self.shared_data["shutdown"].value:
                 dt = time.monotonic() - last_loop_time
-                if dt <= 0: continue
+                if dt <= 0.001:  # Prevent division by zero or extremely high frequencies
+                    time.sleep(0.001)
+                    continue
                 last_loop_time = time.monotonic()
-                if self.shared_data["lidar_track_mode_active"].value: next_state = "HF_TRACKING"
-                elif self.shared_data["go_to_target"].value: next_state = "GOTO_POSITION"
-                elif self.shared_data["background_scan_active"].value: next_state = "BACKGROUND_SCAN"
-                else: next_state = "IDLE"
+
+                # State machine logic...
+                if self.shared_data["lidar_track_mode_active"].value:
+                    next_state = "HF_TRACKING"
+                elif self.shared_data["go_to_target"].value:
+                    next_state = "GOTO_POSITION"
+                elif self.shared_data["background_scan_active"].value:
+                    next_state = "BACKGROUND_SCAN"
+                else:
+                    next_state = "IDLE"
+
                 if next_state != current_state:
                     print(f"[HWCtrl] State change: {current_state} -> {next_state}")
-                    self.pan_pid.reset(); self.tilt_pid.reset()
-                    if next_state in ["BACKGROUND_SCAN", "SEARCHING"]: self.current_scan_az, self.current_scan_el = SCAN_PAN_MIN, SCAN_TILT_MAX; self.scan_pan_direction = 1
+                    self.pan_pid.reset();
+                    self.tilt_pid.reset()
+                    if next_state in ["BACKGROUND_SCAN",
+                                      "SEARCHING"]: self.current_scan_az, self.current_scan_el = SCAN_PAN_MIN, SCAN_TILT_MAX; self.scan_pan_direction = 1
                     current_state = next_state
+
                 pan_vel, tilt_vel = 0, 0
-                target_reached = abs(self.pan_pid.setpoint - self.internal_pan_pos) < TARGET_REACHED_THRESHOLD_DEG and abs(self.tilt_pid.setpoint - self.internal_tilt_pos) < TARGET_REACHED_THRESHOLD_DEG
+                target_reached = abs(
+                    self.pan_pid.setpoint - self.internal_pan_pos) < TARGET_REACHED_THRESHOLD_DEG and abs(
+                    self.tilt_pid.setpoint - self.internal_tilt_pos) < TARGET_REACHED_THRESHOLD_DEG
+
                 if current_state == "HF_TRACKING":
-                    self.pan_pid.set_setpoint(self.shared_data["predicted_azimuth"].value); self.tilt_pid.set_setpoint(self.shared_data["predicted_elevation"].value)
-                    pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(self.internal_tilt_pos)
+                    self.pan_pid.set_setpoint(self.shared_data["predicted_azimuth"].value);
+                    self.tilt_pid.set_setpoint(self.shared_data["predicted_elevation"].value)
+                    pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
+                        self.internal_tilt_pos)
                 elif current_state == "GOTO_POSITION":
-                    self.pan_pid.set_setpoint(self.shared_data["target_azimuth"].value); self.tilt_pid.set_setpoint(self.shared_data["target_elevation"].value)
+                    self.pan_pid.set_setpoint(self.shared_data["target_azimuth"].value);
+                    self.tilt_pid.set_setpoint(self.shared_data["target_elevation"].value)
                     self.shared_data["target_reached"].value = target_reached
-                    if not target_reached: pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(self.internal_tilt_pos)
+                    if not target_reached: pan_vel, tilt_vel = self.pan_pid.update(
+                        self.internal_pan_pos), self.tilt_pid.update(self.internal_tilt_pos)
                 elif current_state in ["BACKGROUND_SCAN", "SEARCHING"]:
-                    self.pan_pid.set_setpoint(self.current_scan_az); self.tilt_pid.set_setpoint(self.current_scan_el)
+                    self.pan_pid.set_setpoint(self.current_scan_az);
+                    self.tilt_pid.set_setpoint(self.current_scan_el)
                     if target_reached:
                         try:
                             dist, strength, _ = self.lidar_queue.get_nowait()
                             if current_state == "BACKGROUND_SCAN":
-                                self.background_data_buffer.append([self.internal_pan_pos, self.internal_tilt_pos, dist, strength])
+                                self.background_data_buffer.append(
+                                    [self.internal_pan_pos, self.internal_tilt_pos, dist, strength])
                             elif current_state == "SEARCHING":
                                 min_r, max_r = self.shared_data["lidar_acceptance_range"];
                                 if (min_r * 100) < dist < (max_r * 100):
-                                    print(f"[HWCtrl-SEARCH] Target FOUND at Az:{self.internal_pan_pos:.1f}, El:{self.internal_tilt_pos:.1f}, Dist:{dist}cm")
-                                    with self.shared_data["satellite_points"].get_lock(): self.shared_data["satellite_points"][:] = [self.internal_pan_pos, self.internal_tilt_pos, dist, strength]
-                        except queue.Empty: pass
+                                    print(
+                                        f"[HWCtrl-SEARCH] Target FOUND at Az:{self.internal_pan_pos:.1f}, El:{self.internal_tilt_pos:.1f}, Dist:{dist}cm")
+                                    with self.shared_data["satellite_points"].get_lock(): self.shared_data[
+                                                                                              "satellite_points"][:] = [
+                                        self.internal_pan_pos, self.internal_tilt_pos, dist, strength]
+                        except queue.Empty:
+                            pass
                         if not self._update_scan_pattern():
                             print(f"[HWCtrl] {current_state} finished.")
-                            if current_state == "BACKGROUND_SCAN": self.shared_data["background_scan_active"].value = False
+                            if current_state == "BACKGROUND_SCAN": self.shared_data[
+                                "background_scan_active"].value = False
                     else:
-                        pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(self.internal_tilt_pos)
+                        pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
+                            self.internal_tilt_pos)
+
                 self._execute_motor_commands(pan_vel, tilt_vel, dt)
+
                 try:
                     dist, strength, ts = self.lidar_queue.get_nowait()
-                    with self.shared_data["lidar_data"].get_lock(): self.shared_data["lidar_data"][:] = [dist, strength, ts]
-                except queue.Empty: pass
-                self.shared_data["stepper_degrees"].value, self.shared_data["servo_degrees"].value = self.internal_pan_pos, self.internal_tilt_pos
+                    with self.shared_data["lidar_data"].get_lock():
+                        self.shared_data["lidar_data"][:] = [dist, strength, ts]
+                except queue.Empty:
+                    pass
+
+                self.shared_data["stepper_degrees"].value, self.shared_data[
+                    "servo_degrees"].value = self.internal_pan_pos, self.internal_tilt_pos
+
                 if self.shared_data["save_background_trigger"].value:
                     if self.background_data_buffer:
                         print(f"[HWCtrl] Saving {len(self.background_data_buffer)} points...")
-                        np.save(self.shared_data["background_path"], np.array(self.background_data_buffer)); self.background_data_buffer = []
+                        # Ensure background_path from shared_data is used correctly
+                        np.save(self.shared_data["background_path"].value, np.array(self.background_data_buffer));
+                        self.background_data_buffer = []
                     self.shared_data["save_background_trigger"].value = False
+
                 time.sleep(0.002)
         except Exception as e:
-            import traceback; print(f"[HWCtrl] CRITICAL ERROR: {e}"); traceback.print_exc()
-        finally:
-            print("[HWCtrl] Shutting down...")
-            self.shutdown_event.set()
-            if 'lidar_thread' in locals() and lidar_thread.is_alive(): lidar_thread.join(timeout=1)
-            if self.pi and self.pi.connected:
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0);
-                self.pi.write(STEPPER_ENABLE_PIN, 1);
-                self.pi.write(STEPPER_SLEEP_PIN, 0);
-                self.pi.set_servo_pulsewidth(SERVO_PIN, 0);
-                self.pi.stop()
-                print("[HWCtrl] pigpio resources released.")
-            if self.ser and self.ser.is_open: self.ser.close()
-
-def run_hardware_controller(shared_data):
-    controller = HardwareController(shared_data)
-    controller.run()
+            import traceback;
+            print(f"[HWCtrl] 
