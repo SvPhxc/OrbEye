@@ -236,4 +236,26 @@ class HardwareController:
                 self.shared_data["stepper_degrees"].value = self.internal_pan_pos
                 # --- FIX #2: Correctly report the internal servo position ---
                 self.shared_data["servo_degrees"].value = self.internal_tilt_pos
-                t
+                time.sleep(0.002)
+
+        except Exception as e:
+            print(f"[HWCtrl] CRITICAL ERROR: {e}");
+            traceback.print_exc()
+        finally:
+            print("[HWCtrl] Shutting down hardware resources...")
+            self.shutdown_event.set()
+            if 'lidar_thread' in locals() and lidar_thread.is_alive(): lidar_thread.join(timeout=1)
+            if self.pi and self.pi.connected:
+                self.pi.wave_tx_stop();
+                self.pi.wave_clear()
+                self.pi.write(STEPPER_ENABLE_PIN, 1);
+                self.pi.write(STEPPER_SLEEP_PIN, 0)
+                self.pi.set_servo_pulsewidth(SERVO_PIN, 0);
+                self.pi.stop()
+                print("[HWCtrl] pigpio resources released.")
+            if self.ser and self.ser.is_open: self.ser.close()
+
+
+def run_hardware_controller(shared_data):
+    controller = HardwareController(shared_data)
+    controller.run()
