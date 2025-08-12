@@ -1,4 +1,4 @@
-# hardware_controller.py (Corrected for Constant-Velocity "Fly-by" Scan)
+# hardware_controller.py (Corrected for Physical Boundary Detection and Target Resync)
 
 import time
 import serial
@@ -15,7 +15,6 @@ STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 TARGET_REACHED_THRESHOLD_DEG = 1.0
-# You can set this speed high, the PID will ensure the motor keeps up.
 SCAN_PAN_SPEED_DPS = 150.0
 
 # --- Define the boundaries and resolution for scanning ---
@@ -25,7 +24,6 @@ SCAN_STEP_DEG = 1.0
 
 # --- PID Tuning Gains ---
 MAX_PAN_SPEED_DPS = 600.0
-# These gains are tuned for responsiveness to a moving target.
 PAN_KP, PAN_KI, PAN_KD = 15.0, 0.08, 0.3
 MAX_TILT_SPEED_DPS = 600.0
 TILT_KP, TILT_KI, TILT_KD = 8.0, 0.02, 0.05
@@ -128,6 +126,7 @@ class HardwareController:
             threading.Thread(target=self._lidar_reader_thread, daemon=True).start()
             print("[HWCtrl] Hardware Controller process is running.")
             last_loop_time, current_state = time.monotonic(), "IDLE"
+            last_physical_pan_pos = self.internal_pan_pos  # Initialize last known position
 
             while not self.shared_data["shutdown"].value:
                 dt = time.monotonic() - last_loop_time
@@ -148,6 +147,7 @@ class HardwareController:
                     if next_state == "BACKGROUND_SCAN":
                         self.current_scan_el, self.scan_pan_direction = SCAN_TILT_MAX, 1
                         self.scan_target_az = self.internal_pan_pos
+                        last_physical_pan_pos = self.internal_pan_pos
                     current_state = next_state
 
                 pan_vel, tilt_vel = 0, 0
@@ -168,39 +168,48 @@ class HardwareController:
                         self.internal_pan_pos), self.tilt_pid.update(self.internal_tilt_pos)
                     if current_state == "GOTO_POSITION": self.shared_data["target_reached"].value = target_reached
 
-                # --- CODE REPAIRED HERE ---
-                # This is the new, constant-velocity "fly-by" reversal logic.
                 elif current_state == "BACKGROUND_SCAN":
                     if self.current_scan_el < SCAN_TILT_MIN:
                         print("[HWCtrl] BACKGROUND_SCAN finished.");
                         self.shared_data["background_scan_active"].value = False
                     else:
-                        # 1. Move the virtual target at a constant speed.
+                        # 1. The virtual target moves continuously to "pull" the motor along.
                         self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
+                        # We don't need to clamp the target; the PID's wrap logic handles it.
 
-                        # 2. Check if the virtual target has hit a boundary.
-                        if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX:
-                            self.scan_target_az = SCAN_PAN_MAX  # Clamp to prevent overshoot
-                            self.scan_pan_direction = -1  # Reverse direction
-                            self.current_scan_el -= SCAN_STEP_DEG
-                            print(
-                                f"[HWCtrl-SCAN] Reversing at {SCAN_PAN_MAX} deg. New elevation: {self.current_scan_el:.1f} deg")
-                        elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN:
-                            self.scan_target_az = SCAN_PAN_MIN  # Clamp to prevent undershoot
-                            self.scan_pan_direction = 1  # Reverse direction
-                            self.current_scan_el -= SCAN_STEP_DEG
-                            print(
-                                f"[HWCtrl-SCAN] Reversing at {SCAN_PAN_MIN} deg. New elevation: {self.current_scan_el:.1f} deg")
-
-                        # 3. Tell the PID to chase the constantly moving target.
+                        # 2. Tell the PID to chase the moving target.
                         self.pan_pid.set_setpoint(self.scan_target_az)
                         pan_vel = self.pan_pid.update(self.internal_pan_pos)
 
-                        # 4. Use the tilt PID to hold its elevation steady.
+                        # 3. Use the tilt PID to hold its elevation steady.
                         self.tilt_pid.set_setpoint(self.current_scan_el)
                         tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
-                self._execute_motor_commands(pan_vel, tilt_vel, dt)
+                # --- CODE REPAIRED HERE ---
+                # Motor commands and data logging are now followed by the reversal check.
+
+                # Store position BEFORE executing commands to compare against the new position
+                last_physical_pan_pos = self.internal_pan_pos
+                self._execute_motor_commands(pan_vel, tilt_vel, dt)  # This updates internal_pan_pos
+
+                # Check for reversal only if we are in the scan state
+                if current_state == "BACKGROUND_SCAN":
+                    row_finished = False
+                    # Detect a physical wrap-around from ~360 to ~0
+                    if self.scan_pan_direction == 1 and self.internal_pan_pos < 90 and last_physical_pan_pos > 270:
+                        row_finished = True
+                    # Detect a physical wrap-around from ~0 to ~360
+                    elif self.scan_pan_direction == -1 and self.internal_pan_pos > 270 and last_physical_pan_pos < 90:
+                        row_finished = True
+
+                    if row_finished:
+                        self.current_scan_el -= SCAN_STEP_DEG
+                        self.scan_pan_direction *= -1
+                        # CRITICAL: Re-sync the virtual target to the physical position
+                        # to prevent the PID from seeing a huge error and "skipping".
+                        self.scan_target_az = self.internal_pan_pos
+                        print(
+                            f"[HWCtrl-SCAN] Physical boundary crossed. Reversing. New elevation: {self.current_scan_el:.1f} deg")
 
                 # Independent data logging
                 try:
@@ -213,8 +222,8 @@ class HardwareController:
                 except queue.Empty:
                     pass
 
-                self.shared_data["stepper_degrees"].value, self.shared_data[
-                    "servo_degrees"].value = self.internal_pan_pos, self.internal_tilt_pos
+                self.shared_data["stepper_degrees"].value = self.internal_pan_pos
+                self.shared_data["servo_degrees"].value = self.internal_tilt_pos
                 if self.shared_data["save_background_trigger"].value:
                     if self.background_data_buffer:
                         print(f"[HWCtrl] Saving {len(self.background_data_buffer)} points...")
