@@ -71,8 +71,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.timer.start(30)  # ~33 fps is plenty
 
         self.debug_flag_timer = QtCore.QTimer()
-        self.debug_flag_timer.timeout.connect(self._poll_lidar_debug_flag)
-        self.debug_flag_timer.start(10)  # check ~20 Hz
+        self.debug_flag_timer.timeout.connect(self.poll_lidar_debug_flag)
+        self.debug_flag_timer.start(10) 
 
         # === Right: Controls ===
         controls = QtWidgets.QVBoxLayout()
