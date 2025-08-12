@@ -433,14 +433,14 @@ class IntegratedAdaptiveTracker:
                 if time.time() - last_mode_check > mode_check_period:
                     if not mode_requested or not self.shared_data["lidar_track_mode_active"].value:
                         mode_requested = self._request_tracking_mode()
-                        self.shared_data["lidar_track_mode_active"].value = True
+                        #self.shared_data["lidar_track_mode_active"].value = True
                     last_mode_check = time.time()
                 
                 # Only process if we have tracking mode
                 if self.shared_data["lidar_track_mode_active"].value:
                     # Get current LiDAR data
                     lidar_data = self._get_current_lidar_data()
-                    print(f"[DEBUG] LiDAR2 data received: {lidar_data}")
+                    
                     
 
                     current_time = time.time()
