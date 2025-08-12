@@ -29,6 +29,13 @@ class TrackerWindow(QtWidgets.QMainWindow):
         global _shared_data
         self.shared_data = _shared_data
 
+        # Lidar accumulated point cloud (static points)
+        self.lidar_cloud = gl.GLScatterPlotItem(pos=np.empty((0,3)), size=4, color=(1, 0, 0, 0.8))
+        self.view.addItem(self.lidar_cloud)
+        self._lidar_cloud_pts = []          # list of np.array([x, y, z])
+        self._last_cloud_pt = None          # for simple decimation
+
+
         # Central widget and layout
         self.central_widget = QtWidgets.QWidget()
         self.setCentralWidget(self.central_widget)
@@ -112,6 +119,11 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_lidar_debug.setCheckable(True)
         self.btn_lidar_debug.clicked.connect(self.lidar_debug)
         target_controls.addWidget(self.btn_lidar_debug)
+
+        # Add Clear Button
+        self.btn_clear_lidar = QtWidgets.QPushButton("Clear Lidar Cloud")
+        self.btn_clear_lidar.clicked.connect(self.clear_lidar_cloud)
+        controls.addWidget(self.btn_clear_lidar)
 
         self.btn_acquire = QtWidgets.QPushButton("Acquire (3 pts)")
         self.btn_acquire.clicked.connect(self.accuire_points)
@@ -303,6 +315,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
             traceback.print_exc()
             print(f"Error: {e}")
 
+    def clear_lidar_cloud(self):
+        self._lidar_cloud_pts.clear()
+        self.lidar_cloud.setData(pos=np.empty((0,3)))
+
     def simple_track(self):
         self.shared_data["adaptive_tracking_active"].value = True
         self.shared_data["lidar_track_mode_active"].value = True
@@ -329,7 +345,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
                 self.lidar_bg_dot.hide()
 
     def update_lidar_bg_dot(self):
-        """Place the red sphere using the SAME math as toggle_background_plot()."""
+        """Place the red sphere at the current LiDAR hit and accumulate static points."""
         try:
             # LiDAR distance (cm)
             lidar = self.shared_data.get("lidar_data")
@@ -344,19 +360,48 @@ class TrackerWindow(QtWidgets.QMainWindow):
             az_deg = float(self.shared_data['stepper_degrees'].value)   # 0..360
             el_deg = float(self.shared_data['servo_degrees'].value)     # 0..90
 
-            # --- SAME conversion as your background plot ---
+            # Convert to 3D coordinates (meters)
             az_rad = np.radians(az_deg % 360.0)
             el_rad = np.radians(np.clip(el_deg, 0.0, 90.0))
             dist_m = dist_cm / 10.0
             x = dist_m * np.cos(el_rad) * np.cos(az_rad)
-            y = -dist_m * np.cos(el_rad) * np.sin(az_rad)  # note the minus
+            y = dist_m * np.cos(el_rad) * np.sin(az_rad)  # match background plot & laser math
             z = dist_m * np.sin(el_rad)
-            # -----------------------------------------------
+            p = np.array([x, y, z], dtype=float)
 
+            # Move the red cursor sphere
             self.lidar_bg_dot.resetTransform()
-            self.lidar_bg_dot.translate(x, y, z)
-            print("plotted debug")
+            self.lidar_bg_dot.translate(*p)
             self.lidar_bg_dot.show()
+
+            # --- Accumulate static points ---
+            # Ensure storage exists
+            if not hasattr(self, "_lidar_cloud_pts"):
+                self._lidar_cloud_pts = []
+                self._last_cloud_pt = None
+                self.lidar_cloud = gl.GLScatterPlotItem(
+                    pos=np.empty((0, 3)), size=4, color=(1, 0, 0, 0.8)
+                )
+                self.view.addItem(self.lidar_cloud)
+
+            # Append point if moved enough from last saved point
+            add_point = False
+            if self._last_cloud_pt is None:
+                add_point = True
+            else:
+                if np.linalg.norm(p - self._last_cloud_pt) > 0.05:  # > 5 cm
+                    add_point = True
+
+            if add_point:
+                self._lidar_cloud_pts.append(p)
+                # Keep memory bounded
+                if len(self._lidar_cloud_pts) > 50000:
+                    self._lidar_cloud_pts = self._lidar_cloud_pts[-50000:]
+                self.lidar_cloud.setData(pos=np.vstack(self._lidar_cloud_pts))
+                self._last_cloud_pt = p
+
+            print(f"LiDAR debug point added at {p}")
+
         except Exception as e:
             print(f"[GUI] _update_lidar_bg_dot error: {e}")
 
