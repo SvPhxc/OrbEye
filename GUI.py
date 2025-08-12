@@ -2,24 +2,24 @@
 
 import sys
 import numpy as np
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtWidgets import QVBoxLayout, QPushButton, QCheckBox
 import pyqtgraph.opengl as gl
 
 
 class TrackerWindow(QtWidgets.QMainWindow):
-    def __init__(self, shared_data, movement_queue):
+    def __init__(self, shared_data):
         super().__init__()
-        self.setWindowTitle("LockedIn Martin - Hardware Controller GUI")
+        self.setWindowTitle("Martin Systems - Lidar Tracker GUI")
         self.resize(1300, 700)
         self.shared_data = shared_data
         self.central_widget = QtWidgets.QWidget()
         self.setCentralWidget(self.central_widget)
         main_layout = QtWidgets.QHBoxLayout(self.central_widget)
 
-        # --- 3D View Setup ---
-        self.view = gl.GLViewWidget();
-        self.view.setCameraPosition(distance=30);
+        # 3D View Setup
+        self.view = gl.GLViewWidget()
+        self.view.setCameraPosition(distance=30)
         main_layout.addWidget(self.view, stretch=3)
         grid = gl.GLGridItem();
         grid.scale(10, 10, 1);
@@ -34,8 +34,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.station = gl.GLMeshItem(meshdata=md, smooth=True, color=(0, 0, 1, 1), shader='shaded');
         self.view.addItem(self.station)
 
-        # --- Controls Layout ---
-        controls_layout = QtWidgets.QVBoxLayout();
+        # Controls Layout
+        controls_layout = QVBoxLayout();
         main_layout.addLayout(controls_layout, stretch=1)
         controls_layout.addWidget(QtWidgets.QLabel("CONTROLLER STATUS"))
         self.status_label = QtWidgets.QLabel("Status: IDLE");
@@ -44,27 +44,26 @@ class TrackerWindow(QtWidgets.QMainWindow):
         controls_layout.addWidget(self.create_separator())
 
         mode_box = QtWidgets.QGroupBox("Mode Control");
-        mode_layout = QtWidgets.QVBoxLayout()
-        self.btn_scan = QtWidgets.QPushButton("Start Background Scan");
+        mode_layout = QVBoxLayout()
+        self.btn_scan = QPushButton("Start/Stop Background Scan");
         self.btn_scan.setCheckable(True);
         self.btn_scan.clicked.connect(self.on_scan_toggled);
         mode_layout.addWidget(self.btn_scan)
-        # --- FIX: Removed the obsolete "Save Scan" and "Search" buttons ---
-        self.chk_hf_tracking = QtWidgets.QCheckBox("Enable High-Frequency Tracking");
+        self.chk_hf_tracking = QCheckBox("Enable High-Frequency Tracking");
         self.chk_hf_tracking.toggled.connect(self.on_hf_track_toggled);
         mode_layout.addWidget(self.chk_hf_tracking)
         mode_box.setLayout(mode_layout);
         controls_layout.addWidget(mode_box)
 
         manual_box = QtWidgets.QGroupBox("Manual Control");
-        manual_layout = QtWidgets.QVBoxLayout()
+        manual_layout = QVBoxLayout()
         manual_layout.addWidget(QtWidgets.QLabel("Target Azimuth (°)"));
         self.az_input = QtWidgets.QLineEdit("90");
         manual_layout.addWidget(self.az_input)
         manual_layout.addWidget(QtWidgets.QLabel("Target Elevation (°)"));
         self.el_input = QtWidgets.QLineEdit("45");
         manual_layout.addWidget(self.el_input)
-        self.btn_go = QtWidgets.QPushButton("Go To Position");
+        self.btn_go = QPushButton("Go To Position");
         self.btn_go.clicked.connect(self.on_go_clicked);
         manual_layout.addWidget(self.btn_go)
         manual_box.setLayout(manual_layout);
@@ -100,17 +99,14 @@ class TrackerWindow(QtWidgets.QMainWindow):
         controls_layout.addLayout(lcd_layout);
         controls_layout.addStretch()
 
-        self.btn_shutdown = QtWidgets.QPushButton("Shutdown");
+        self.btn_shutdown = QPushButton("Shutdown");
         self.btn_shutdown.setStyleSheet("background-color: #C41E3A; color: white; font-weight: bold;");
         self.btn_shutdown.clicked.connect(self.Pshutdown);
         controls_layout.addWidget(self.btn_shutdown)
 
-        self.timer_3d = QtCore.QTimer(self);
-        self.timer_3d.timeout.connect(self.update_laser_from_pan_tilt);
-        self.timer_3d.start(33)
-        self.timer_readouts = QtCore.QTimer(self);
-        self.timer_readouts.timeout.connect(self.update_readouts);
-        self.timer_readouts.start(100)
+        self.timer_ui = QtCore.QTimer(self);
+        self.timer_ui.timeout.connect(self.update_ui);
+        self.timer_ui.start(100)
 
     def create_lcd(self):
         lcd = QtWidgets.QLCDNumber();
@@ -132,77 +128,76 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     def on_hf_track_toggled(self, checked):
         self.shared_data["lidar_track_mode_active"].value = checked
-        if not checked:
-            self.shared_data["ekf_running"].value = False
+
+    def stop_and_plot_ekf(self):
+        self.shared_data["generate_plot_on_stop"].value = True; self.shared_data[
+            "lidar_track_mode_active"].value = False
+
+    def on_debug_mode_toggled(self, en):
+        self.shared_data["debug_mode"].value = bool(en); self.shared_data["lidar_acceptance_range"][:] = [0.2,
+                                                                                                          2.0] if en else [
+            3.0, 50.0]
 
     def on_go_clicked(self):
         try:
-            az, el = float(self.az_input.text()), float(self.el_input.text())
-            self.shared_data["target_azimuth"].value = az
-            self.shared_data["target_elevation"].value = el
+            self.shared_data["target_azimuth"].value = float(self.az_input.text())
+            self.shared_data["target_elevation"].value = float(self.el_input.text())
             self.shared_data["go_to_target"].value = True
         except ValueError:
-            print("[GUI] Invalid input")
+            print("[GUI] Invalid go-to coordinates.")
 
-    def update_readouts(self):
-        self.lcd_pan.display(self.shared_data['stepper_degrees'].value)
-        self.lcd_tilt.display(self.shared_data['servo_degrees'].value)
+    def update_ui(self):
+        # Update LCDs
+        self.lcd_pan.display(f"{self.shared_data['stepper_degrees'].value:.2f}")
+        self.lcd_tilt.display(f"{self.shared_data['servo_degrees'].value:.2f}")
         self.lcd_range.display(self.shared_data['lidar_data'][0])
         self.lcd_strength.display(self.shared_data['lidar_data'][1])
 
-        acquirer_status = self.shared_data["acquirer_status"].value
-        if acquirer_status == 1:
-            self.status_label.setText("Status: ACQUIRING...");
-            self.status_label.setStyleSheet("color: #FFA500;")
+        # Update Status Label
+        if self.shared_data["acquirer_status"].value == 1:
+            self.status_label.setText("Status: ACQUIRING..."), self.status_label.setStyleSheet("color: #FFA500;")
         elif self.shared_data["lidar_track_mode_active"].value:
-            self.status_label.setText("Status: TRACKING");
-            self.status_label.setStyleSheet("color: #D22B2B;")
-        # --- FIX: Removed check for "search_mode_active" ---
+            self.status_label.setText("Status: TRACKING"), self.status_label.setStyleSheet("color: #D22B2B;")
+        elif self.shared_data["background_scan_active"].value:
+            self.status_label.setText("Status: SCANNING..."), self.status_label.setStyleSheet("color: #007FFF;")
         elif self.shared_data["go_to_target"].value:
-            status_text = "MOVING" if not self.shared_data["target_reached"].value else "HOLDING"
-            self.status_label.setText(f"Status: {status_text}");
-            self.status_label.setStyleSheet("color: #33F;")
+            status_text = "MOVING" if not self.shared_data[
+                "target_reached"].value else "HOLDING"; self.status_label.setText(
+                f"Status: {status_text}"), self.status_label.setStyleSheet("color: #33F;")
         else:
-            self.status_label.setText("Status: IDLE");
-            self.status_label.setStyleSheet("color: #808080;")
-            if acquirer_status in [2, 3]: self.shared_data["acquirer_status"].value = 0
+            self.status_label.setText("Status: IDLE"), self.status_label.setStyleSheet("color: #808080;")
 
-    def Pshutdown(self):
-        self.shared_data["shutdown"].value = True
-        QtCore.QTimer.singleShot(100, QtWidgets.QApplication.instance().quit)
-
-    def closeEvent(self, event):
-        self.Pshutdown();
-        super().closeEvent(event)
-
-    def stop_and_plot_ekf(self):
-        self.shared_data["generate_plot_on_stop"].value = True
-        self.shared_data["ekf_running"].value = False
-        self.shared_data["lidar_track_mode_active"].value = False
-
-    def on_debug_mode_toggled(self, enabled):
-        self.shared_data["debug_mode"].value = bool(enabled)
-        min_r, max_r = (0.2, 2.0) if enabled else (3.0, 50.0)
-        self.shared_data["lidar_acceptance_range"][0], self.shared_data["lidar_acceptance_range"][1] = min_r, max_r
-
-    def update_laser_from_pan_tilt(self):
+        # Update 3D view
         try:
             az, el, dist_cm = self.shared_data['stepper_degrees'].value, self.shared_data['servo_degrees'].value, \
             self.shared_data['lidar_data'][0]
             length_m = dist_cm / 100.0 if 10.0 <= dist_cm <= 16000.0 else 15.0
             az_rad, el_rad = np.radians(az), np.radians(el)
-            x = length_m * np.cos(el_rad) * np.cos(az_rad)
-            y = length_m * np.cos(el_rad) * np.sin(az_rad)
-            z = length_m * np.sin(el_rad)
+            x, y, z = length_m * np.cos(el_rad) * np.cos(az_rad), length_m * np.cos(el_rad) * np.sin(
+                az_rad), length_m * np.sin(el_rad)
             tip = np.array([x, y, z])
             self.laser.setData(pos=np.vstack((np.zeros(3), tip)))
             self.satellite.setData(pos=tip.reshape(1, 3))
         except Exception:
             pass
 
+    def Pshutdown(self):
+        print("[GUI] Shutdown requested.")
+        self.shared_data["shutdown"].value = True
+        self.timer_ui.stop()
+        # Give main a moment to process the shutdown flag before quitting the app
+        QtCore.QTimer.singleShot(250, QtWidgets.QApplication.instance().quit)
 
-def run_gui(shared_data, movement_queue):
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
-    window = TrackerWindow(shared_data, movement_queue)
+    def closeEvent(self, event):
+        self.Pshutdown()
+        super().closeEvent(event)
+
+
+def run_gui(shared_data):
+    if not QtWidgets.QApplication.instance():
+        app = QtWidgets.QApplication(sys.argv)
+    else:
+        app = QtWidgets.QApplication.instance()
+    window = TrackerWindow(shared_data)
     window.show()
     sys.exit(app.exec_())
