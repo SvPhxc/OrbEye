@@ -31,7 +31,7 @@ class IntegratedAdaptiveTracker:
         self.prediction_horizon = 0.15  # seconds ahead to predict
         
         # Detection parameters
-        self.detection_threshold = 10000  # LiDAR strength threshold
+        self.detection_threshold = 9000  # LiDAR strength threshold
         self.min_detections_for_track = 3
         self.max_time_without_detection = 1.5  # seconds
         
@@ -417,7 +417,7 @@ class IntegratedAdaptiveTracker:
         print("[AdaptiveTracker] Tracking loop started")
         loop_hz = 15  # 15 Hz update rate
         loop_period = 1.0 / loop_hz
-        
+        print(f"[DEBUG] LiDAR data received: {lidar_data}")
         last_status_time = 0
         status_period = 2.0  # Print status every 2 seconds
         
@@ -440,7 +440,8 @@ class IntegratedAdaptiveTracker:
                 if self.shared_data["lidar_track_mode_active"].value:
                     # Get current LiDAR data
                     lidar_data = self._get_current_lidar_data()
-                    print(f"[DEBUG] LiDAR data received: {lidar_data}")
+                    print(f"[DEBUG] LiDAR2 data received: {lidar_data}")
+                    
 
                     current_time = time.time()
                     
