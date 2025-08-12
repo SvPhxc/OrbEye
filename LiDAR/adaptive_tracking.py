@@ -24,7 +24,7 @@ class IntegratedAdaptiveTracker:
         self.tracking_confidence = 0
         self.search_radius = 15.0  # Initial search radius in degrees
         self.max_search_radius = 45.0
-        
+        self.shared_data["go_to_target"].value = True
         # Motion prediction
         self.angular_velocity_pan = 0.0  # degrees/second
         self.angular_velocity_tilt = 0.0
@@ -231,6 +231,7 @@ class IntegratedAdaptiveTracker:
         
     def _update_target_position(self, lidar_data, current_time):
         """Update target position from LiDAR data."""
+        print(lidar_data)
         if len(lidar_data) < 3:
             return
             
