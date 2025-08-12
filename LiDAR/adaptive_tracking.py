@@ -440,6 +440,8 @@ class IntegratedAdaptiveTracker:
                 if self.shared_data["lidar_track_mode_active"].value:
                     # Get current LiDAR data
                     lidar_data = self._get_current_lidar_data()
+                    print(f"[DEBUG] LiDAR data received: {lidar_data}")
+
                     current_time = time.time()
                     
                     # Update target position from LiDAR data
