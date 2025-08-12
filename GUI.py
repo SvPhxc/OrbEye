@@ -355,6 +355,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
             self.lidar_bg_dot.resetTransform()
             self.lidar_bg_dot.translate(x, y, z)
+            print("plotted debug")
             self.lidar_bg_dot.show()
         except Exception as e:
             print(f"[GUI] _update_lidar_bg_dot error: {e}")
