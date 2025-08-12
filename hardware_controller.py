@@ -19,7 +19,7 @@ class PIDController:
         dt = time.monotonic() - self._last_time
         if dt <= 0: return self._last_output
         error = self.setpoint - current_value
-        if abs(self.setpoint - 180) < 170 and abs(error) > 180: # Handle wrap-around for pan
+        if abs(error) > 180:  # Handle wrap-around for pan
             error = _shortest_angular_delta(self.setpoint, current_value)
         self._integral += error*dt; self._integral=max(-self.anti_windup_limit,min(self.anti_windup_limit,self._integral))
         derivative = (error-self._last_error)/dt
@@ -31,9 +31,9 @@ class PIDController:
     def reset(self): self._integral, self._last_error, self._last_time = 0,0,time.monotonic()
 
 SERVO_PIN=13; STEPPER_PULSE_PIN=19; STEPPER_DIR_PIN=3; STEPPER_ENABLE_PIN=4; STEPPER_SLEEP_PIN=6
-MICROSTEP_ANGLE=0.05625; TARGET_REACHED_THRESHOLD_DEG=0.3; SCAN_TILT_MIN, SCAN_TILT_MAX=0,90
-MAX_PAN_SPEED_DPS=450.; PAN_KP,PAN_KI,PAN_KD=6.0,0.05,0.15
-MAX_TILT_SPEED_DPS=600.; TILT_KP,TILT_KI,TILT_KD=6.2,0.1,0.2
+MICROSTEP_ANGLE=0.05625; TARGET_REACHED_THRESHOLD_DEG=0.05; SCAN_TILT_MIN, SCAN_TILT_MAX=0,90
+MAX_PAN_SPEED_DPS=450.; PAN_KP,PAN_KI,PAN_KD=5.5,0.1,0.8
+MAX_TILT_SPEED_DPS=600.; TILT_KP,TILT_KI,TILT_KD=6.0,0.0,0.0
 
 class HardwareController:
     def __init__(self, shared_data):
