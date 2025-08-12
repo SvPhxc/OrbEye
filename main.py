@@ -1,7 +1,5 @@
 from multiprocessing import Process, Queue, Array, Value
 from webcam.blob_tracker import run_tracking
-from motors.motor_controller import run_motor_control
-from LiDAR.lidar_handler import run_lidar
 from LiDAR.Kalman_Filter import run_ekf_tracker
 from tracking.tracker import tracking
 from hardware_controller import run_hardware_controller
@@ -66,6 +64,10 @@ if __name__ == "__main__":
     go_to_target = Value('b', False)
     save_background_trigger = Value('b', False)
     target_reached = Value('b', False)
+    target_azimuth = Value('d', 0.0)
+    target_elevation = Value('d', 0.0)
+    stepper_degrees = Value('d', 0.0)  # Current position reported by HW Controller
+    servo_degrees = Value('d', 90.0)
     background_path = "background_data.npy"
 
     direction = Value('i', -1)
