@@ -1,9 +1,4 @@
-==============================================================================
-hardware_controller.py (Corrected)
-------------------------------------------------------------------------------
-A unified, high-performance hardware control process.
-This version includes the PIDController class directly to avoid import errors.
-==============================================================================
+
 
 import time
 import serial
