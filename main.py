@@ -6,6 +6,7 @@ from hardware_controller import run_hardware_controller
 from LiDAR.adaptive_tracking import run_adaptive_tracking_mode
 from GUI import run_gui
 import time, os, signal, sys
+from ctypes import c_wchar_p
 
 def join_or_escalate(proc, name, timeout=8):
     if proc is None: 
@@ -69,7 +70,7 @@ if __name__ == "__main__":
     stepper_degrees = Value('d', 0.0)  # Current position reported by HW Controller
     servo_degrees = Value('d', 90.0)
     active_lidar_debug = Value('b', False)
-    background_path = "background_data.npy"
+    background_path = Value(c_wchar_p, "background_data.npy")
 
     direction = Value('i', -1)
     target = Value('i', -1)
