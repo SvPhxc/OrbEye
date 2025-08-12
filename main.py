@@ -68,6 +68,7 @@ if __name__ == "__main__":
     target_elevation = Value('d', 0.0)
     stepper_degrees = Value('d', 0.0)  # Current position reported by HW Controller
     servo_degrees = Value('d', 90.0)
+    active_lidar_debug = Value('b', False)
     background_path = "background_data.npy"
 
     direction = Value('i', -1)
@@ -126,7 +127,8 @@ if __name__ == "__main__":
         "lidar_track_mode_active": lidar_track_mode_active,
         "save_background_trigger": save_background_trigger,
         "target_reached": target_reached,
-        "adaptive_tracking_active": adaptive_tracking_active
+        "adaptive_tracking_active": adaptive_tracking_active,
+        "active_lidar_debug": active_lidar_debug
     }
 
     # ===== Start processes (non-daemon; default) =====
