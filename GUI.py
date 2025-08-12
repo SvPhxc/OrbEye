@@ -143,25 +143,26 @@ class TrackerWindow(QtWidgets.QMainWindow):
             return
 
         try:
-            # Load the reshaped data [elevation, azimuth, [strength, range]]
-            bg_data = np.load("background_data.npy")
+            # Load the background data file. The path should ideally come
+            # from shared_data for consistency.
+            bg_data_path = self.shared_data.get("background_path", "background_data.npy").value
+            bg_data = np.load(bg_data_path)
 
             points = []
-            # Iterate through the array to convert spherical to Cartesian
-            for reading in bg_data:
-                pos, dist_cm = reading[0], reading[1]
+            # The saved data structure is [azimuth, elevation, distance_cm, strength]
+            # We iterate through it correctly now.
+            for az, el, dist_cm, strength in bg_data:
                 # Plot only valid points within a reasonable range
-                if 10 < dist_cm < 1600:
-                    # Convert to radians for math
-                    az = int(pos) % 360
-                    el = int(pos) // 360
+                if 10 < dist_cm < 16000: # Using a wide, safe range
+                    # Convert angles to radians for trigonometric functions
                     az_rad = np.radians(az)
                     el_rad = np.radians(el)
-                    dist_m = dist_cm / 10.0  # Scale to meters for visualization
+                    # Convert distance from cm to meters for visualization
+                    dist_m = dist_cm / 100.0
 
-                    # Spherical to Cartesian conversion
+                    # Spherical to Cartesian coordinate conversion
                     x = dist_m * np.cos(el_rad) * np.cos(az_rad)
-                    y = -dist_m * np.cos(el_rad) * np.sin(az_rad)
+                    y = -dist_m * np.cos(el_rad) * np.sin(az_rad) # Retaining original coordinate system
                     z = dist_m * np.sin(el_rad)
                     points.append([x, y, z])
 
@@ -173,10 +174,9 @@ class TrackerWindow(QtWidgets.QMainWindow):
                 print("[GUI] No valid points found in background data file.")
 
         except FileNotFoundError:
-            print("[GUI] Error: 'background_data.npy' not found. Please run a scan first.")
+            print(f"[GUI] Error: '{bg_data_path}' not found. Please run a background scan first.")
         except Exception as e:
-            print(f"[GUI] Error loading background data: {e}")
-
+            print(f"[GUI] An error occurred while loading or processing background data: {e}")
     # --- NEW: Handlers for arrow buttons, from script 1 ---
     def set_tilt_up(self):
         self.shared_data['tilt_up'].value = True
