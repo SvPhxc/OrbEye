@@ -1,8 +1,9 @@
 # ==============================================================================
-# hardware_controller.py (Corrected, Self-Contained Version)
+# hardware_controller.py (Corrected with Wave Chaining)
 # ------------------------------------------------------------------------------
 # A unified, high-performance hardware control process.
-# This version includes the PIDController class directly to avoid import errors.
+# This version uses pigpio wave chaining for precise stepper motor control
+# to eliminate overshooting caused by missed steps.
 # ==============================================================================
 
 import time
@@ -11,8 +12,6 @@ import pigpio
 import threading
 import queue
 import numpy as np
-
-# The PIDController class is now inside this file, so no import is needed.
 
 # --- Hardware & Scan Constants ---
 SERVO_PIN = 13
@@ -36,7 +35,7 @@ TILT_KP, TILT_KI, TILT_KD = 1.2, 0.1, 0.2
 
 
 # ==============================================================================
-# PID CONTROLLER CLASS (MOVED HERE)
+# PID CONTROLLER CLASS
 # ==============================================================================
 class PIDController:
     """A generic PID controller class."""
@@ -81,8 +80,8 @@ class PIDController:
 
 
 # ==============================================================================
-
-
+# HARDWARE CONTROLLER CLASS
+# ==============================================================================
 class HardwareController:
     def __init__(self, shared_data):
         self.shared_data = shared_data
@@ -120,24 +119,69 @@ class HardwareController:
         print("[HWCtrl-LIDAR] LiDAR reader thread shut down.")
 
     def _execute_motor_commands(self, pan_velocity_dps, tilt_velocity_dps, dt):
-        """Translates desired velocities into hardware commands."""
-        # Pan Stepper
+        """
+        Translates desired velocities into hardware commands.
+        Uses pigpio wave chaining for precise stepper motor control.
+        """
+        # --- Pan Stepper (Wave Chain Control) ---
         pan_deg_change = pan_velocity_dps * dt
-        if abs(pan_deg_change) > 0.001:
-            pan_steps_to_move = round(abs(pan_deg_change) / MICROSTEP_ANGLE)
-            if pan_steps_to_move > 0:
-                self.pi.write(STEPPER_DIR_PIN, 0 if pan_velocity_dps < 0 else 1)
-                frequency = min(pan_steps_to_move / dt, 300000)
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, frequency, 500000)
-            else:
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
-            self.internal_pan_pos = (self.internal_pan_pos + pan_deg_change) % 360
-        else:
-            self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
 
-        # Tilt Servo
+        # Only create a wave if there's significant movement and a wave is not already busy
+        if abs(pan_deg_change) > 0.001 and not self.pi.wave_tx_busy():
+            num_steps = round(abs(pan_deg_change) / MICROSTEP_ANGLE)
+
+            if num_steps > 0:
+                # 1. Set Direction
+                self.pi.write(STEPPER_DIR_PIN, 0 if pan_velocity_dps < 0 else 1)
+
+                # 2. Calculate pulse timing based on velocity
+                #    Velocity (steps/sec) = dps / degrees_per_step
+                steps_per_second = abs(pan_velocity_dps) / MICROSTEP_ANGLE
+
+                # Delay between steps (in microseconds) for a 50% duty cycle
+                if steps_per_second > 0:
+                    half_pulse_delay_us = int(500000 / steps_per_second)
+                else:
+                    half_pulse_delay_us = 2500  # A reasonably slow default speed
+
+                # Enforce the minimum pulse duration from datasheet (e.g., 1.9us)
+                # We use 2us for a small safety margin.
+                half_pulse_delay_us = max(2, half_pulse_delay_us)
+
+                # 3. Create the waveform (a single pulse)
+                self.pi.wave_clear()  # Clear any previous fragments
+                self.pi.wave_add_generic([
+                    pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, half_pulse_delay_us),  # Pulse ON
+                    pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, half_pulse_delay_us)  # Pulse OFF
+                ])
+
+                # 4. Build the chain of pulses
+                pulse_wave_id = self.pi.wave_create()
+
+                if pulse_wave_id >= 0:
+                    # Construct the chain to repeat the pulse `num_steps` times
+                    # [255, 0] is the loop start marker
+                    # [pulse_wave_id] is the wave to transmit
+                    # [255, 1, x, y] is the loop instruction (repeat x*256+y times)
+                    chain = [
+                        255, 0,
+                        pulse_wave_id,
+                        255, 1, num_steps & 255, num_steps >> 8
+                    ]
+
+                    # 5. Transmit the wave chain
+                    self.pi.wave_chain(chain)
+
+                    # The wave is now chained and will be deleted by pigpio automatically
+                    # after transmission, so we don't need wave_delete here.
+
+            # Update internal position tracker
+            self.internal_pan_pos = (self.internal_pan_pos + pan_deg_change) % 360
+
+        # --- Tilt Servo (Unchanged) ---
         tilt_deg_change = tilt_velocity_dps * dt
         self.internal_tilt_pos = max(0, min(90, self.internal_tilt_pos + tilt_deg_change))
+        # Note: This servo calculation might need review for accuracy, but is separate from the stepper issue
         pulse_width = 500 + (self.internal_tilt_pos / 0.09) + (28 / 0.09)
         self.pi.set_servo_pulsewidth(SERVO_PIN, pulse_width)
 
@@ -232,7 +276,10 @@ class HardwareController:
                     else:
                         pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
                             self.internal_tilt_pos)
+
+                # This single call now handles both motors precisely
                 self._execute_motor_commands(pan_vel, tilt_vel, dt)
+
                 try:
                     dist, strength, ts = self.lidar_queue.get_nowait()
                     with self.shared_data["lidar_data"].get_lock():
@@ -249,13 +296,17 @@ class HardwareController:
                     self.shared_data["save_background_trigger"].value = False
                 time.sleep(0.002)
         except Exception as e:
-            import traceback; print(f"[HWCtrl] CRITICAL ERROR: {e}"); traceback.print_exc()
+            import traceback;
+            print(f"[HWCtrl] CRITICAL ERROR: {e}");
+            traceback.print_exc()
         finally:
             print("[HWCtrl] Shutting down...")
             self.shutdown_event.set()
             if 'lidar_thread' in locals() and lidar_thread.is_alive(): lidar_thread.join(timeout=1)
             if self.pi and self.pi.connected:
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0);
+                self.pi.wave_tx_stop()  # Stop any active waves
+                self.pi.wave_clear()  # Clear all waveforms
+                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)  # Ensure PWM is off as a failsafe
                 self.pi.write(STEPPER_ENABLE_PIN, 1);
                 self.pi.write(STEPPER_SLEEP_PIN, 0);
                 self.pi.set_servo_pulsewidth(SERVO_PIN, 0);
