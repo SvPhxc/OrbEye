@@ -11,10 +11,8 @@ import traceback
 from hardware_controller import run_hardware_controller
 from GUI import run_gui
 # --- Placeholder imports for other modules to make the system runnable ---
-from acquirer import run_acquirer
-from active_tracker import run_active_tracker
-from kalman_filter import run_ekf_tracker
-from heatmap_tracker import run_heatmap_tracker
+
+
 
 def join_or_escalate(proc, name, timeout=5):
     """Helper function to gracefully terminate processes."""
@@ -103,10 +101,6 @@ if __name__ == "__main__":
     print("[main] Initializing processes...")
     processes = {
         "HardwareController": Process(target=run_hardware_controller, args=(shared_data,)),
-        "Acquirer": Process(target=run_acquirer, args=(shared_data,)),
-        "ActiveTracker": Process(target=run_active_tracker, args=(shared_data,)),
-        "HeatmapTracker": Process(target=run_heatmap_tracker, args=(shared_data,)),
-        "EKF": Process(target=run_ekf_tracker, args=(shared_data,)),
         "GUI": Process(target=run_gui, args=(shared_data,)),
     }
 
@@ -140,10 +134,6 @@ if __name__ == "__main__":
     finally:
         print("\n[main] Starting shutdown sequence...")
         join_or_escalate(processes["GUI"], "GUI")
-        join_or_escalate(processes["Acquirer"], "Acquirer")
-        join_or_escalate(processes["ActiveTracker"], "ActiveTracker")
-        join_or_escalate(processes["HeatmapTracker"], "HeatmapTracker")
-        join_or_escalate(processes["EKF"], "EKF")
         join_or_escalate(processes["HardwareController"], "HardwareController")
         print("[main] All processes have been terminated. Program exited cleanly.")
         sys.exit(0)

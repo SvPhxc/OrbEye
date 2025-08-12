@@ -1,5 +1,3 @@
-# hardware_controller.py (Corrected with Turnaround Zones for Robust Scanning)
-
 import time
 import serial
 import pigpio
@@ -53,16 +51,17 @@ class PIDController:
         self._integral += error * dt
         self._integral = max(-self.anti_windup_limit, min(self.anti_windup_limit, self._integral))
         output = (self.Kp * error) + (self.Ki * self._integral) + (self.Kd * (error - self._last_error) / dt)
-        self._last_error, self._last_time, self._last_output = error, time.monotonic(), max(self.output_limits[0],
-                                                                                            min(self.output_limits[1],
-                                                                                                output))
+        self._last_error, self.last_time, self._last_output = error, time.monotonic(), max(self.output_limits[0],
+                                                                                           min(self.output_limits[1],
+                                                                                               output))
         return self._last_output
 
     def set_setpoint(self, new_setpoint):
         self.setpoint = new_setpoint
 
     def reset(self):
-        self._integral, self._last_error = 0, 0; self._last_time = time.monotonic()
+        self._integral, self._last_error = 0, 0;
+        self._last_time = time.monotonic()
 
 
 # ==============================================================================
@@ -163,9 +162,9 @@ class HardwareController:
                     pass
                 elif current_state == "GOTO_POSITION" or current_state == "HF_TRACKING":
                     target_az = self.shared_data["target_azimuth"].value if current_state == "GOTO_POSITION" else \
-                    self.shared_data["predicted_azimuth"].value
+                        self.shared_data["predicted_azimuth"].value
                     target_el = self.shared_data["target_elevation"].value if current_state == "GOTO_POSITION" else \
-                    self.shared_data["predicted_elevation"].value
+                        self.shared_data["predicted_elevation"].value
                     self.pan_pid.set_setpoint(target_az);
                     self.tilt_pid.set_setpoint(target_el)
                     pan_error = abs(self._get_shortest_pan_error(target_az, self.internal_pan_pos))
@@ -174,11 +173,23 @@ class HardwareController:
                         self.internal_pan_pos), self.tilt_pid.update(self.internal_tilt_pos)
                     if current_state == "GOTO_POSITION": self.shared_data["target_reached"].value = target_reached
 
-                # --- CODE REPAIRED HERE ---
-                # This is the new, robust scan logic with turnaround zones.
                 elif current_state == "BACKGROUND_SCAN":
+                    # --- CODE MODIFIED HERE FOR AUTO-SAVE ---
                     if self.current_scan_el < SCAN_TILT_MIN:
-                        print("[HWCtrl] BACKGROUND_SCAN finished.");
+                        print("[HWCtrl] BACKGROUND_SCAN finished.")
+
+                        # Automatically save the data upon completion.
+                        if self.background_data_buffer:
+                            print(f"[HWCtrl] Auto-saving {len(self.background_data_buffer)} background scan points...")
+                            try:
+                                np.save(self.shared_data["background_path"].value,
+                                        np.array(self.background_data_buffer))
+                                print(f"[HWCtrl] Data saved to {self.shared_data['background_path'].value}")
+                                self.background_data_buffer = []  # Clear buffer after saving
+                            except Exception as e:
+                                print(f"[HWCtrl] ERROR saving background data: {e}")
+
+                        # Now, signal that the scan is no longer active.
                         self.shared_data["background_scan_active"].value = False
 
                     elif self.scan_is_turning:
@@ -225,12 +236,9 @@ class HardwareController:
 
                 self.shared_data["stepper_degrees"].value, self.shared_data[
                     "servo_degrees"].value = self.internal_pan_pos, self.internal_tilt_pos
-                if self.shared_data["save_background_trigger"].value:
-                    if self.background_data_buffer:
-                        print(f"[HWCtrl] Saving {len(self.background_data_buffer)} points...")
-                        np.save(self.shared_data["background_path"].value, np.array(self.background_data_buffer));
-                        self.background_data_buffer = []
-                    self.shared_data["save_background_trigger"].value = False
+
+                # --- CODE MODIFIED HERE ---
+                # The manual save trigger has been removed from here.
 
                 time.sleep(0.002)
         except Exception as e:
