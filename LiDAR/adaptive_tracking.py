@@ -16,14 +16,15 @@ class TrackingState(Enum):
 class IntegratedAdaptiveTracker:
     def __init__(self, shared_data):
         self.shared_data = shared_data
-        
+        self.min_target_distance = 20 # cm (e.g., ignore targets closer than 50cm)
+        self.max_target_distance = 500 # cm (e.g., ignore targets farther than 5m)
         # Target tracking variables
         self.state = TrackingState.SEARCHING
         self.target_history = deque(maxlen=10)  # Store last 10 target positions
         self.last_detection_time = 0
         self.tracking_confidence = 0
-        self.search_radius = 15.0  # Initial search radius in degrees
-        self.max_search_radius = 45.0
+        self.search_radius = 30.0  # Initial search radius in degrees
+        self.max_search_radius = 60.0
         self.shared_data["go_to_target"].value = True
         # Motion prediction
         self.angular_velocity_pan = 0.0  # degrees/second
@@ -231,14 +232,13 @@ class IntegratedAdaptiveTracker:
         
     def _update_target_position(self, lidar_data, current_time):
         """Update target position from LiDAR data."""
-        print(lidar_data)
         if len(lidar_data) < 3:
             return
             
         distance, strength, lidar_timestamp = lidar_data
         current_pan, current_tilt = self._safe_get_current_position()
         
-        if strength >= self.detection_threshold:
+        if strength >= self.detection_threshold and self.min_target_distance <= distance <= self.max_target_distance:
             # Valid target detection
             target_pos = {
                 'pan': current_pan,
