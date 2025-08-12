@@ -1,4 +1,4 @@
-# hardware_controller.py
+# hardware_controller.py (Corrected Logic for Stepper Movement)
 
 import time
 import serial
@@ -90,27 +90,52 @@ class HardwareController:
         print("[HWCtrl-LIDAR] LiDAR reader thread shut down.")
 
     def _execute_motor_commands(self, pan_velocity_dps, tilt_velocity_dps, dt):
+        """
+        Translates desired velocities into hardware commands.
+        Uses pigpio wave chaining for precise stepper motor control. (Corrected Logic)
+        """
         # --- Pan Stepper (Wave Chain Control) ---
         pan_deg_change = pan_velocity_dps * dt
-        if abs(pan_deg_change) > 0.001 and not self.pi.wave_tx_busy():
+
+        # Only create a wave if there's significant movement to be made
+        if abs(pan_deg_change) > 0.001:
             num_steps = round(abs(pan_deg_change) / MICROSTEP_ANGLE)
+
             if num_steps > 0:
+                # IMPORTANT FIX: Wait for any previous wave to finish before sending a new one.
+                # This prevents command starvation and ensures smooth, continuous motion.
+                while self.pi.wave_tx_busy():
+                    time.sleep(0.001)  # Wait briefly for the hardware to be free
+
+                # 1. Set Direction
                 self.pi.write(STEPPER_DIR_PIN, 0 if pan_velocity_dps < 0 else 1)
-                steps_per_sec = abs(pan_velocity_dps) / MICROSTEP_ANGLE
-                half_pulse_us = int(500000 / steps_per_sec) if steps_per_sec > 0 else 2500
-                half_pulse_us = max(2, half_pulse_us)  # Enforce 2us min (datasheet: 1.9us)
+
+                # 2. Calculate pulse timing based on velocity
+                steps_per_second = abs(pan_velocity_dps) / MICROSTEP_ANGLE
+                half_pulse_delay_us = int(500000 / steps_per_second) if steps_per_second > 0 else 2500
+                half_pulse_delay_us = max(2, half_pulse_delay_us)  # Enforce 2us min
+
+                # 3. Create the waveform (a single pulse)
                 self.pi.wave_clear()
                 self.pi.wave_add_generic([
-                    pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, half_pulse_us),
-                    pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, half_pulse_us)
+                    pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, half_pulse_delay_us),
+                    pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, half_pulse_delay_us)
                 ])
                 pulse_wave_id = self.pi.wave_create()
+
+                # 4. Build and transmit the chain
                 if pulse_wave_id >= 0:
-                    chain = [255, 0, pulse_wave_id, 255, 1, num_steps & 255, num_steps >> 8]
+                    chain = [
+                        255, 0,
+                        pulse_wave_id,
+                        255, 1, num_steps & 255, num_steps >> 8
+                    ]
                     self.pi.wave_chain(chain)
+
+            # Update internal position tracker
             self.internal_pan_pos = (self.internal_pan_pos + pan_deg_change) % 360
 
-        # --- Tilt Servo ---
+        # --- Tilt Servo (Unchanged) ---
         tilt_deg_change = tilt_velocity_dps * dt
         self.internal_tilt_pos = max(0, min(90, self.internal_tilt_pos + tilt_deg_change))
         pulse_width = 500 + (self.internal_tilt_pos / 0.09) + (28 / 0.09)
@@ -134,9 +159,8 @@ class HardwareController:
             self.pi.set_mode(STEPPER_SLEEP_PIN, pigpio.OUTPUT)
             self.pi.write(STEPPER_ENABLE_PIN, 0)
             self.pi.write(STEPPER_SLEEP_PIN, 1)
-            self.ser = serial.Serial(self.shared_data["lidar_port"].value, 115200, timeout=0.1)
-            set_rate_command = bytearray([0x5A, 0x06, 0x03, 0xE8, 0x03, 0x4E])
-            self.ser.write(set_rate_command)
+            self.ser = serial.Serial(self.shared_data["lidar_port"], 115200, timeout=0.1)
+            self.ser.write(b'\x42\x57\x02\x00\x00\x00\x01\x06')
             lidar_thread = threading.Thread(target=self._lidar_reader_thread, daemon=True)
             lidar_thread.start()
             print("[HWCtrl] Hardware Controller process is running.")
@@ -148,7 +172,6 @@ class HardwareController:
                 if dt <= 0.001: time.sleep(0.001); continue
                 last_loop_time = time.monotonic()
 
-                # State Machine Logic
                 next_state = "IDLE"
                 if self.shared_data["lidar_track_mode_active"].value:
                     next_state = "HF_TRACKING"
@@ -164,7 +187,7 @@ class HardwareController:
                     if next_state == "BACKGROUND_SCAN":
                         self.current_scan_az, self.current_scan_el = SCAN_PAN_MIN, SCAN_TILT_MAX
                         self.scan_pan_direction = 1
-                        self.background_data_buffer = []  # Clear buffer for new scan
+                        self.background_data_buffer = []
                     current_state = next_state
 
                 pan_vel, tilt_vel = 0, 0
@@ -173,14 +196,21 @@ class HardwareController:
                 target_reached = abs(pan_err) < TARGET_REACHED_THRESHOLD_DEG and abs(
                     tilt_err) < TARGET_REACHED_THRESHOLD_DEG
 
-                if current_state == "GOTO_POSITION":
+                if current_state == "HF_TRACKING":
+                    self.pan_pid.set_setpoint(self.shared_data["predicted_azimuth"].value)
+                    self.tilt_pid.set_setpoint(self.shared_data["predicted_elevation"].value)
+                    pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
+                        self.internal_tilt_pos)
+
+                elif current_state == "GOTO_POSITION":
                     self.pan_pid.set_setpoint(self.shared_data["target_azimuth"].value)
                     self.tilt_pid.set_setpoint(self.shared_data["target_elevation"].value)
                     if not target_reached:
                         pan_vel, tilt_vel = self.pan_pid.update(self.internal_pan_pos), self.tilt_pid.update(
                             self.internal_tilt_pos)
                     else:
-                        self.shared_data["go_to_target"].value = False  # Reached target, switch off
+                        if self.shared_data["go_to_target"].value:
+                            self.shared_data["go_to_target"].value = False
                     self.shared_data["target_reached"].value = target_reached
 
                 elif current_state == "BACKGROUND_SCAN":
@@ -207,7 +237,6 @@ class HardwareController:
                                         f"[HWCtrl] Auto-saving {len(self.background_data_buffer)} points to {filename}...")
                                     np.save(filename, np.array(self.background_data_buffer))
                                     self.background_data_buffer = []
-                                    print("[HWCtrl] Save complete.")
                                 except Exception as e:
                                     print(f"[HWCtrl] CRITICAL ERROR during auto-save: {e}")
 
@@ -221,7 +250,7 @@ class HardwareController:
                     pass
 
                 self.shared_data["stepper_degrees"].value = self.internal_pan_pos
-                self.shared_data["servo_degrees"].value = self.internal_tilt_pos
+                self.shared_data["servo_degrees"].value = a_value
                 time.sleep(0.002)
 
         except Exception as e:
