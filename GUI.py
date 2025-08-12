@@ -29,12 +29,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
         global _shared_data
         self.shared_data = _shared_data
 
-        # Lidar accumulated point cloud (static points)
-        self.lidar_cloud = gl.GLScatterPlotItem(pos=np.empty((0,3)), size=4, color=(1, 0, 0, 0.8))
-        self.view.addItem(self.lidar_cloud)
-        self._lidar_cloud_pts = []          # list of np.array([x, y, z])
-        self._last_cloud_pt = None          # for simple decimation
-
 
         # Central widget and layout
         self.central_widget = QtWidgets.QWidget()
@@ -51,6 +45,11 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         self.background_plot = gl.GLScatterPlotItem(size=5, color=(0.5, 0.5, 1, 0.5))
         self.view.addItem(self.background_plot)
+
+        self.lidar_cloud = gl.GLScatterPlotItem(pos=np.empty((0,3)), size=4, color=(1, 0, 0, 0.8))
+        self.view.addItem(self.lidar_cloud)
+        self._lidar_cloud_pts = []
+        self._last_cloud_pt = None
 
         # Satellite object
         self.satellite = gl.GLScatterPlotItem(pos=np.array([[0, 0, 0]]), color=(1, 0, 0, 1), size=10)

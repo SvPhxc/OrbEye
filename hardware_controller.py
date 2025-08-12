@@ -184,7 +184,7 @@ class HardwareController:
                             try:
                                 np.save(self.shared_data["background_path"].value,
                                         np.array(self.background_data_buffer))
-                                print(f"[HWCtrl] Data saved to {self.shared_data['background_path']}")
+                                print(f"[HWCtrl] Data saved to {self.shared_data['background_path'].value}")
                                 self.background_data_buffer = []  # Clear buffer after saving
                             except Exception as e:
                                 print(f"[HWCtrl] ERROR saving background data: {e}")
