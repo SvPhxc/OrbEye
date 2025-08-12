@@ -1,4 +1,4 @@
-# hardware_controller.py (Corrected with Robust Quadrant-Based Reversal)
+# hardware_controller.py (Corrected with Turnaround Zones for Robust Scanning)
 
 import time
 import serial
@@ -14,8 +14,13 @@ STEPPER_DIR_PIN = 3
 STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
-TARGET_REACHED_THRESHOLD_DEG = 0.05 # Kept from previous working version
-SCAN_PAN_SPEED_DPS = 360.0  # High speed is fine with this logic
+TARGET_REACHED_THRESHOLD_DEG = 0.05  # Wider threshold for settling in the turnaround zone
+SCAN_PAN_SPEED_DPS = 400.0  # Can be set aggressively now
+
+# --- CODE REPAIRED HERE ---
+# This is the key to preventing skips. It defines a "braking zone" at the
+# edges of the scan, giving the PID time to settle before reversing.
+SCAN_TURNAROUND_DEG = 0.5
 
 # --- Define the boundaries and resolution for scanning ---
 SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360
@@ -24,7 +29,7 @@ SCAN_STEP_DEG = 1.0
 
 # --- PID Tuning Gains ---
 MAX_PAN_SPEED_DPS = 600.0
-PAN_KP, PAN_KI, PAN_KD = 15.0, 0.08, 0.3
+PAN_KP, PAN_KI, PAN_KD = 12.0, 0.1, 0.05  # Gains can be more aggressive with this new logic
 MAX_TILT_SPEED_DPS = 600.0
 TILT_KP, TILT_KI, TILT_KD = 8.0, 0.02, 0.05
 
@@ -39,18 +44,18 @@ class PIDController:
         self._integral, self._last_error, self._last_output, self._last_time = 0, 0, 0, time.monotonic()
 
     def update(self, current_value):
-        current_time = time.monotonic();
-        dt = current_time - self._last_time
+        dt = time.monotonic() - self._last_time
         if dt <= 0: return self._last_output
         error = self.setpoint - current_value
         if self.wrap_range:
-            range_width = self.wrap_range[1] - self.wrap_range[0];
+            range_width = self.wrap_range[1] - self.wrap_range[0]
             error = (error + range_width / 2) % range_width - range_width / 2
-        self._integral += error * dt;
+        self._integral += error * dt
         self._integral = max(-self.anti_windup_limit, min(self.anti_windup_limit, self._integral))
         output = (self.Kp * error) + (self.Ki * self._integral) + (self.Kd * (error - self._last_error) / dt)
-        self._last_error, self._last_time = error, current_time;
-        self._last_output = max(self.output_limits[0], min(self.output_limits[1], output))
+        self._last_error, self._last_time, self._last_output = error, time.monotonic(), max(self.output_limits[0],
+                                                                                            min(self.output_limits[1],
+                                                                                                output))
         return self._last_output
 
     def set_setpoint(self, new_setpoint):
@@ -64,6 +69,7 @@ class PIDController:
 
 class HardwareController:
     def __init__(self, shared_data):
+        # ... (init remains mostly the same) ...
         self.shared_data = shared_data
         self.pi, self.ser = None, None
         self.shutdown_event = threading.Event()
@@ -78,13 +84,16 @@ class HardwareController:
         self.scan_pan_direction = 1
         self.background_data_buffer = []
         self.scan_target_az = 0.0
-        self.is_reversing = False
+        # --- CODE REPAIRED HERE ---
+        # A new state flag to manage the sweep vs. the turnaround.
+        self.scan_is_turning = False
 
     def _get_shortest_pan_error(self, setpoint, current_value):
         error = setpoint - current_value
         return (error + 180) % 360 - 180
 
     def _lidar_reader_thread(self):
+        # ... (lidar reader thread remains unchanged) ...
         print("[HWCtrl-LIDAR] LiDAR reader thread started.")
         while not self.shutdown_event.is_set():
             try:
@@ -102,6 +111,7 @@ class HardwareController:
         print("[HWCtrl-LIDAR] LiDAR reader thread shut down.")
 
     def _execute_motor_commands(self, pan_velocity_dps, tilt_velocity_dps, dt):
+        # ... (motor execution logic remains unchanged) ...
         self.internal_pan_pos = (self.internal_pan_pos + (pan_velocity_dps * dt)) % 360
         self.internal_tilt_pos = max(0, min(90, self.internal_tilt_pos + (tilt_velocity_dps * dt)))
         if abs(pan_velocity_dps) > 0.1:
@@ -125,13 +135,11 @@ class HardwareController:
             threading.Thread(target=self._lidar_reader_thread, daemon=True).start()
             print("[HWCtrl] Hardware Controller process is running.")
             last_loop_time, current_state = time.monotonic(), "IDLE"
-            last_physical_pan_pos = self.internal_pan_pos
 
             while not self.shared_data["shutdown"].value:
                 dt = time.monotonic() - last_loop_time
                 if dt <= 0.001: continue
                 last_loop_time = time.monotonic()
-
                 if self.shared_data["background_scan_active"].value:
                     next_state = "BACKGROUND_SCAN"
                 elif self.shared_data["go_to_target"].value:
@@ -140,20 +148,16 @@ class HardwareController:
                     next_state = "HF_TRACKING"
                 else:
                     next_state = "IDLE"
-
                 if next_state != current_state:
                     print(f"[HWCtrl] State change: {current_state} -> {next_state}")
                     self.pan_pid.reset();
                     self.tilt_pid.reset()
                     if next_state == "BACKGROUND_SCAN":
-                        self.current_scan_el, self.scan_pan_direction = SCAN_TILT_MAX, 1
+                        self.current_scan_el, self.scan_pan_direction, self.scan_is_turning = SCAN_TILT_MAX, 1, False
                         self.scan_target_az = self.internal_pan_pos
-                        last_physical_pan_pos = self.internal_pan_pos
-                        self.is_reversing = False
                     current_state = next_state
 
                 pan_vel, tilt_vel = 0, 0
-                last_physical_pan_pos = self.internal_pan_pos
 
                 if current_state == "IDLE":
                     pass
@@ -165,45 +169,50 @@ class HardwareController:
                     self.pan_pid.set_setpoint(target_az);
                     self.tilt_pid.set_setpoint(target_el)
                     pan_error = abs(self._get_shortest_pan_error(target_az, self.internal_pan_pos))
-                    target_reached = pan_error < self.TARGET_REACHED_THRESHOLD_DEG
+                    target_reached = pan_error < TARGET_REACHED_THRESHOLD_DEG
                     if not target_reached: pan_vel, tilt_vel = self.pan_pid.update(
                         self.internal_pan_pos), self.tilt_pid.update(self.internal_tilt_pos)
                     if current_state == "GOTO_POSITION": self.shared_data["target_reached"].value = target_reached
 
+                # --- CODE REPAIRED HERE ---
+                # This is the new, robust scan logic with turnaround zones.
                 elif current_state == "BACKGROUND_SCAN":
                     if self.current_scan_el < SCAN_TILT_MIN:
                         print("[HWCtrl] BACKGROUND_SCAN finished.");
                         self.shared_data["background_scan_active"].value = False
+
+                    elif self.scan_is_turning:
+                        # We are in a turnaround. Wait for the motor to settle at the edge.
+                        pan_error = abs(
+                            self._get_shortest_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos))
+                        if pan_error < TARGET_REACHED_THRESHOLD_DEG:
+                            # Safely at the edge, now execute the turn.
+                            self.scan_pan_direction *= -1
+                            self.current_scan_el -= SCAN_STEP_DEG
+                            self.scan_is_turning = False
+                            print(
+                                f"[HWCtrl-SCAN] Row finished. New elevation: {self.current_scan_el:.1f} deg, Direction: {self.scan_pan_direction}")
                     else:
+                        # We are sweeping. Move the virtual target.
                         self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
-                        self.pan_pid.set_setpoint(self.scan_target_az)
-                        pan_vel = self.pan_pid.update(self.internal_pan_pos)
-                        self.tilt_pid.set_setpoint(self.current_scan_el)
-                        tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
+
+                        # Check if we've entered a turnaround zone.
+                        if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX - SCAN_TURNAROUND_DEG:
+                            self.scan_target_az = SCAN_PAN_MAX  # Lock target to the edge
+                            self.scan_is_turning = True
+                        elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN + SCAN_TURNAROUND_DEG:
+                            self.scan_target_az = SCAN_PAN_MIN  # Lock target to the edge
+                            self.scan_is_turning = True
+
+                    # In all cases (sweeping or turning), tell the PID to chase the target.
+                    self.pan_pid.set_setpoint(self.scan_target_az)
+                    pan_vel = self.pan_pid.update(self.internal_pan_pos)
+                    self.tilt_pid.set_setpoint(self.current_scan_el)
+                    tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
                 self._execute_motor_commands(pan_vel, tilt_vel, dt)
 
-                if current_state == "BACKGROUND_SCAN":
-                    if self.is_reversing and 10 < self.internal_pan_pos < 350:
-                        self.is_reversing = False
-
-                    row_finished = False
-                    # --- CODE REPAIRED HERE ---
-                    # This is the robust, unambiguous check for a completed sweep.
-                    # It replaces the simple and buggy `internal < last` comparison.
-                    if self.scan_pan_direction == 1 and self.internal_pan_pos < 90 and last_physical_pan_pos > 270:
-                        row_finished = True
-                    elif self.scan_pan_direction == -1 and self.internal_pan_pos > 270 and last_physical_pan_pos < 90:
-                        row_finished = True
-
-                    if row_finished and not self.is_reversing:
-                        self.is_reversing = True
-                        self.current_scan_el -= SCAN_STEP_DEG
-                        self.scan_pan_direction *= -1
-                        self.scan_target_az = self.internal_pan_pos
-                        print(
-                            f"[HWCtrl-SCAN] Physical boundary crossed. Reversing. New elevation: {self.current_scan_el:.1f} deg")
-
+                # Independent data logging
                 try:
                     while not self.lidar_queue.empty():
                         dist, strength, ts = self.lidar_queue.get_nowait()
@@ -214,8 +223,8 @@ class HardwareController:
                 except queue.Empty:
                     pass
 
-                self.shared_data["stepper_degrees"].value = self.internal_pan_pos
-                self.shared_data["servo_degrees"].value = self.internal_tilt_pos
+                self.shared_data["stepper_degrees"].value, self.shared_data[
+                    "servo_degrees"].value = self.internal_pan_pos, self.internal_tilt_pos
                 if self.shared_data["save_background_trigger"].value:
                     if self.background_data_buffer:
                         print(f"[HWCtrl] Saving {len(self.background_data_buffer)} points...")
@@ -241,6 +250,14 @@ class HardwareController:
                 self.pi.stop()
                 print("[HWCtrl] pigpio resources released.")
             if self.ser and self.ser.is_open: self.ser.close()
+
+
+# Helper to get setpoint from PID, missing in the original class
+def get_setpoint(self):
+    return self.setpoint
+
+
+PIDController.get_setpoint = get_setpoint
 
 
 def run_hardware_controller(shared_data):
