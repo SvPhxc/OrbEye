@@ -511,7 +511,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
             self.shared_data["target_azimuth"].value = az
             self.shared_data["target_elevation"].value = el
             self.shared_data["go_to_target"].value = True  # trigger!
-            sleep(3.6)
+            time.sleep(3.6)
         except ValueError:
             print("Invalid input: please enter numeric values")
         self.shared_data["go_to_zero"].value = True
