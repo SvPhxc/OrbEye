@@ -135,7 +135,7 @@ if __name__ == "__main__":
     p2 = Process(target=run_hardware_controller, args=(shared_data))
     p3 = Process(target=run_gui, args=(shared_data, movement_queue))
     p5 = Process(target=run_ekf_tracker, args=(shared_data,))
-    p6 = Process(target=run_adaptive_tracking_mode, args=(shared_data))
+    p6 = Process(target=run_adaptive_tracking_mode, args=(shared_data,))
 
     for p in (p2, p3, p5, p6):  # p1 if you enable it
         p.daemon = False
