@@ -1,5 +1,3 @@
-# hardware_controller.py (Corrected Logic for Stepper Movement)
-
 import time
 import serial
 import pigpio
@@ -97,42 +95,24 @@ class HardwareController:
         # --- Pan Stepper (Wave Chain Control) ---
         pan_deg_change = pan_velocity_dps * dt
 
-        # Only create a wave if there's significant movement to be made
         if abs(pan_deg_change) > 0.001:
             num_steps = round(abs(pan_deg_change) / MICROSTEP_ANGLE)
-
             if num_steps > 0:
-                # IMPORTANT FIX: Wait for any previous wave to finish before sending a new one.
-                # This prevents command starvation and ensures smooth, continuous motion.
                 while self.pi.wave_tx_busy():
-                    time.sleep(0.001)  # Wait briefly for the hardware to be free
-
-                # 1. Set Direction
+                    time.sleep(0.001)
                 self.pi.write(STEPPER_DIR_PIN, 0 if pan_velocity_dps < 0 else 1)
-
-                # 2. Calculate pulse timing based on velocity
                 steps_per_second = abs(pan_velocity_dps) / MICROSTEP_ANGLE
                 half_pulse_delay_us = int(500000 / steps_per_second) if steps_per_second > 0 else 2500
-                half_pulse_delay_us = max(2, half_pulse_delay_us)  # Enforce 2us min
-
-                # 3. Create the waveform (a single pulse)
+                half_pulse_delay_us = max(2, half_pulse_delay_us)
                 self.pi.wave_clear()
                 self.pi.wave_add_generic([
                     pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, half_pulse_delay_us),
                     pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, half_pulse_delay_us)
                 ])
                 pulse_wave_id = self.pi.wave_create()
-
-                # 4. Build and transmit the chain
                 if pulse_wave_id >= 0:
-                    chain = [
-                        255, 0,
-                        pulse_wave_id,
-                        255, 1, num_steps & 255, num_steps >> 8
-                    ]
+                    chain = [255, 0, pulse_wave_id, 255, 1, num_steps & 255, num_steps >> 8]
                     self.pi.wave_chain(chain)
-
-            # Update internal position tracker
             self.internal_pan_pos = (self.internal_pan_pos + pan_deg_change) % 360
 
         # --- Tilt Servo (Unchanged) ---
@@ -159,7 +139,10 @@ class HardwareController:
             self.pi.set_mode(STEPPER_SLEEP_PIN, pigpio.OUTPUT)
             self.pi.write(STEPPER_ENABLE_PIN, 0)
             self.pi.write(STEPPER_SLEEP_PIN, 1)
-            self.ser = serial.Serial(self.shared_data["/dev/serial0"], 115200, timeout=0.1)
+
+            # --- FIX #1: Correctly initialize the serial port ---
+            self.ser = serial.Serial("/dev/serial0", 115200, timeout=0.1)
+
             set_rate_command = bytearray([0x5A, 0x06, 0x03, 0xE8, 0x03, 0x4E])
             self.ser.write(set_rate_command)
             lidar_thread = threading.Thread(target=self._lidar_reader_thread, daemon=True)
@@ -251,27 +234,6 @@ class HardwareController:
                     pass
 
                 self.shared_data["stepper_degrees"].value = self.internal_pan_pos
-                self.shared_data["servo_degrees"].value = a_value
-                time.sleep(0.002)
-
-        except Exception as e:
-            print(f"[HWCtrl] CRITICAL ERROR: {e}");
-            traceback.print_exc()
-        finally:
-            print("[HWCtrl] Shutting down hardware resources...")
-            self.shutdown_event.set()
-            if 'lidar_thread' in locals() and lidar_thread.is_alive(): lidar_thread.join(timeout=1)
-            if self.pi and self.pi.connected:
-                self.pi.wave_tx_stop();
-                self.pi.wave_clear()
-                self.pi.write(STEPPER_ENABLE_PIN, 1);
-                self.pi.write(STEPPER_SLEEP_PIN, 0)
-                self.pi.set_servo_pulsewidth(SERVO_PIN, 0);
-                self.pi.stop()
-                print("[HWCtrl] pigpio resources released.")
-            if self.ser and self.ser.is_open: self.ser.close()
-
-
-def run_hardware_controller(shared_data):
-    controller = HardwareController(shared_data)
-    controller.run()
+                # --- FIX #2: Correctly report the internal servo position ---
+                self.shared_data["servo_degrees"].value = self.internal_tilt_pos
+                t
