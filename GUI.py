@@ -50,12 +50,22 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_scan.clicked.connect(self.on_scan_toggled)
         mode_layout.addWidget(self.btn_scan)
 
-        # --- NEW: "Show/Hide Background" button ---
+        # --- NEW: Auto-Track Button ---
+        self.btn_auto_track = QPushButton("Start/Stop Auto Tracking")
+        self.btn_auto_track.setCheckable(True)
+        self.btn_auto_track.setStyleSheet("""
+            QPushButton:checked { background-color: #D22B2B; color: white; font-weight: bold; }
+            QPushButton:!checked { background-color: #4CBB17; color: white; font-weight: bold; }
+        """)
+        self.btn_auto_track.clicked.connect(self.on_auto_track_toggled)
+        mode_layout.addWidget(self.btn_auto_track)
+        # ----------------------------
+
         self.btn_show_background = QPushButton("Show/Hide Background Data")
         self.btn_show_background.clicked.connect(self.toggle_background_plot)
         mode_layout.addWidget(self.btn_show_background)
 
-        self.chk_hf_tracking = QCheckBox("Enable High-Frequency Tracking")
+        self.chk_hf_tracking = QCheckBox("Enable High-Frequency Tracking (Old)")
         self.chk_hf_tracking.toggled.connect(self.on_hf_track_toggled)
         mode_layout.addWidget(self.chk_hf_tracking)
         mode_box.setLayout(mode_layout)
@@ -73,7 +83,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_go.clicked.connect(self.on_go_clicked)
         manual_layout.addWidget(self.btn_go)
 
-        # --- NEW: D-pad layout for arrow controls ---
         dpad_layout = QtWidgets.QGridLayout()
         btn_up = QtWidgets.QPushButton("↑")
         btn_down = QtWidgets.QPushButton("↓")
@@ -85,12 +94,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
         dpad_layout.addWidget(btn_down, 2, 1)
         manual_layout.addLayout(dpad_layout)
 
-        # Connect new buttons
         btn_up.clicked.connect(self.set_tilt_up)
         btn_down.clicked.connect(self.set_tilt_down)
         btn_left.clicked.connect(self.set_pan_left)
         btn_right.clicked.connect(self.set_pan_right)
-        # --- End of new D-pad section ---
 
         manual_box.setLayout(manual_layout)
         controls_layout.addWidget(manual_box)
@@ -134,7 +141,11 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.timer_ui.timeout.connect(self.update_ui)
         self.timer_ui.start(100)
 
-    # --- NEW: Function to toggle background plot, from script 1 ---
+    def on_auto_track_toggled(self, checked):
+        """Activates or deactivates the new tracker_logic process."""
+        self.shared_data["auto_track_active"].value = checked
+        print(f"[GUI] Auto-tracking {'enabled' if checked else 'disabled'}.")
+
     def toggle_background_plot(self):
         """ Loads data from file and displays/hides the plot """
         if self.background_plot.visible():
@@ -143,26 +154,18 @@ class TrackerWindow(QtWidgets.QMainWindow):
             return
 
         try:
-            # Load the background data file. The path should ideally come
-            # from shared_data for consistency.
             bg_data_path = self.shared_data.get("background_path", "background_data.npy").value
             bg_data = np.load(bg_data_path)
 
             points = []
-            # The saved data structure is [azimuth, elevation, distance_cm, strength]
-            # We iterate through it correctly now.
             for az, el, dist_cm, strength in bg_data:
-                # Plot only valid points within a reasonable range
-                if 10 < dist_cm < 16000: # Using a wide, safe range
-                    # Convert angles to radians for trigonometric functions
+                if 10 < dist_cm < 16000:
                     az_rad = np.radians(az)
                     el_rad = np.radians(el)
-                    # Convert distance from cm to meters for visualization
                     dist_m = dist_cm / 100.0
 
-                    # Spherical to Cartesian coordinate conversion
                     x = dist_m * np.cos(el_rad) * np.cos(az_rad)
-                    y = -dist_m * np.cos(el_rad) * np.sin(az_rad) # Retaining original coordinate system
+                    y = -dist_m * np.cos(el_rad) * np.sin(az_rad)
                     z = dist_m * np.sin(el_rad)
                     points.append([x, y, z])
 
@@ -177,7 +180,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
             print(f"[GUI] Error: '{bg_data_path}' not found. Please run a background scan first.")
         except Exception as e:
             print(f"[GUI] An error occurred while loading or processing background data: {e}")
-    # --- NEW: Handlers for arrow buttons, from script 1 ---
+
     def set_tilt_up(self):
         self.shared_data['tilt_up'].value = True
 
@@ -234,18 +237,28 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.lcd_range.display(self.shared_data['lidar_data'][0])
         self.lcd_strength.display(self.shared_data['lidar_data'][1])
 
-        # Update Status Label
-        if self.shared_data["acquirer_status"].value == 1:
-            self.status_label.setText("Status: ACQUIRING..."), self.status_label.setStyleSheet("color: #FFA500;")
+        # Update Status Label - MODIFIED to prioritize the new auto-tracker
+        tracker_status = self.shared_data["tracker_status"].value
+        if self.shared_data["auto_track_active"].value:
+            if tracker_status == 1:
+                self.status_label.setText("Status: ACQUIRING"), self.status_label.setStyleSheet("color: #FFA500; font-weight: bold;")
+            elif tracker_status == 2:
+                self.status_label.setText("Status: TRACKING"), self.status_label.setStyleSheet("color: #D22B2B; font-weight: bold;")
+            elif tracker_status == 3:
+                self.status_label.setText("Status: RE-ACQUIRING"), self.status_label.setStyleSheet("color: #FFD700; font-weight: bold;")
+            else: # Status 0, when auto-track has just been activated
+                 self.status_label.setText("Status: STARTING..."), self.status_label.setStyleSheet("color: #007FFF; font-weight: bold;")
+        elif self.shared_data["acquirer_status"].value == 1:
+            self.status_label.setText("Status: ACQUIRING (EKF)..."), self.status_label.setStyleSheet("color: #FFA500;")
         elif self.shared_data["lidar_track_mode_active"].value:
-            self.status_label.setText("Status: TRACKING"), self.status_label.setStyleSheet("color: #D22B2B;")
+            self.status_label.setText("Status: TRACKING (OLD)"), self.status_label.setStyleSheet("color: #D22B2B;")
         elif self.shared_data["background_scan_active"].value:
             self.status_label.setText("Status: SCANNING..."), self.status_label.setStyleSheet("color: #007FFF;")
         elif self.shared_data["go_to_target"].value:
             status_text = "MOVING" if not self.shared_data["target_reached"].value else "HOLDING"
             self.status_label.setText(f"Status: {status_text}"), self.status_label.setStyleSheet("color: #33F;")
         else:
-            self.status_label.setText("Status: IDLE"), self.status_label.setStyleSheet("color: #808080;")
+            self.status_label.setText("Status: IDLE"), self.status_label.setStyleSheet("color: #808080; font-weight: bold;")
 
         # Update 3D view
         try:
@@ -253,8 +266,9 @@ class TrackerWindow(QtWidgets.QMainWindow):
             self.shared_data['lidar_data'][0]
             length_m = dist_cm / 100.0 if 10.0 <= dist_cm <= 16000.0 else 15.0
             az_rad, el_rad = np.radians(az), np.radians(el)
-            x, y, z = length_m * np.cos(el_rad) * np.cos(az_rad), length_m * np.cos(el_rad) * np.sin(
-                az_rad), length_m * np.sin(el_rad)
+            x = length_m * np.cos(el_rad) * np.cos(az_rad)
+            y = -length_m * np.cos(el_rad) * np.sin(az_rad) # Retaining original coordinate system
+            z = length_m * np.sin(el_rad)
             tip = np.array([x, y, z])
             self.laser.setData(pos=np.vstack((np.zeros(3), tip)))
             self.satellite.setData(pos=tip.reshape(1, 3))
@@ -265,7 +279,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
         print("[GUI] Shutdown requested.")
         self.shared_data["shutdown"].value = True
         self.timer_ui.stop()
-        # Give main a moment to process the shutdown flag before quitting the app
         QtCore.QTimer.singleShot(250, QtWidgets.QApplication.instance().quit)
 
     def closeEvent(self, event):
