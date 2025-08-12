@@ -219,8 +219,9 @@ class IntegratedAdaptiveTracker:
         tilt_deg = max(0, min(90, tilt_deg))
         
         # Set predicted positions for hardware controller
-        self.shared_data["predicted_azimuth"].value = pan_deg
-        self.shared_data["predicted_elevation"].value = tilt_deg
+        self.shared_data["target_azimuth"].value = pan_deg
+        self.shared_data["target_elevation"].value = tilt_deg
+        self.shared_data["go_to_target"].value = True
         
         # Cache what we sent
         self.last_target_pan = pan_deg
