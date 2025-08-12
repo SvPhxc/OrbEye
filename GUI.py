@@ -127,8 +127,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.chk_reactive_mode = QCheckBox("Enable Reactive Mode (No Prediction)")
         self.chk_reactive_mode.toggled.connect(self.on_reactive_mode_toggled)
 
-        def on_reactive_mode_toggled(self, checked):
-            self.shared_data["reactive_mode"].value = checked
 
         self.btn_shutdown = QPushButton("Shutdown")
         self.btn_shutdown.setStyleSheet("background-color: #C41E3A; color: white; font-weight: bold;")
@@ -139,6 +137,9 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.timer_ui = QtCore.QTimer(self)
         self.timer_ui.timeout.connect(self.update_ui)
         self.timer_ui.start(100)
+
+    def on_reactive_mode_toggled(self, checked):
+        self.shared_data["reactive_mode"].value = checked
 
     # --- NEW: Function to toggle background plot, from script 1 ---
     def toggle_background_plot(self):
