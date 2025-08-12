@@ -29,7 +29,7 @@ class IntegratedAdaptiveTracker:
         # Motion prediction
         self.angular_velocity_pan = 0.0  # degrees/second
         self.angular_velocity_tilt = 0.0
-        self.prediction_horizon = 0.15  # seconds ahead to predict
+        self.prediction_horizon = 0.5  # seconds ahead to predict
         
         # Detection parameters
         self.detection_threshold = 9000  # LiDAR strength threshold
@@ -63,7 +63,7 @@ class IntegratedAdaptiveTracker:
     def _is_system_ready_for_tracking(self):
         """Check if the system is in a state where we can safely request tracking mode."""
         # Don't interfere if hardware is busy with critical operations
-        if self.shared_data["stepper_busy"].value:
+        if not self.shared_data["target_reached"].value:
             return False
             
         # Don't interfere if other high-priority modes are active
@@ -150,11 +150,11 @@ class IntegratedAdaptiveTracker:
         """Safely get initial position for search center."""
         # Wait for hardware to not be busy before reading position
         timeout = time.time() + 2.0
-        while self.shared_data["stepper_busy"].value and time.time() < timeout:
+        while not self.shared_data["target_reached"].value and time.time() < timeout:
             time.sleep(0.1)
             
         # Set initial search center to current position (if available)
-        if not self.shared_data["stepper_busy"].value:
+        if  self.shared_data["target_reached"].value:
             self.search_center_pan = self.shared_data["stepper_degrees"].value
             self.search_center_tilt = max(30, min(60, self.shared_data["servo_degrees"].value))
         else:
@@ -183,7 +183,7 @@ class IntegratedAdaptiveTracker:
     def _safe_get_current_position(self):
         """Safely get current motor positions - respects hardware state."""
         # Don't read position if hardware is busy to avoid inconsistent reads
-        if self.shared_data["stepper_busy"].value:
+        if not self.shared_data["target_reached"].value:
             # Return last known position if hardware is busy
             if hasattr(self, '_last_known_pan') and hasattr(self, '_last_known_tilt'):
                 return self._last_known_pan, self._last_known_tilt
@@ -208,7 +208,7 @@ class IntegratedAdaptiveTracker:
             return False
             
         # Don't send commands if hardware is busy
-        if self.shared_data["stepper_busy"].value:
+        if not self.shared_data["target_reached"].value:
             return False
             
         # Don't send same target repeatedly (reduces command spam)
@@ -415,7 +415,7 @@ class IntegratedAdaptiveTracker:
     def _tracking_loop(self):
         """Main tracking loop running in separate thread."""
         print("[AdaptiveTracker] Tracking loop started")
-        loop_hz = 15  # 15 Hz update rate
+        loop_hz = 30  # 15 Hz update rate
         loop_period = 1.0 / loop_hz
         last_status_time = 0
         status_period = 2.0  # Print status every 2 seconds
