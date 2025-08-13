@@ -86,8 +86,8 @@ if __name__ == "__main__":
         "acquirer_azimuth_step": Value('d', 10.0),  # Step size for azimuth in degrees
         "acquirer_elevation_step": Value('d', 10.0),  #
         "tracking_logic_ready": Value('b', False),  # Flag to indicate if tracking logic is ready to process acquired points
+        "reactive_mode": Value('b', False),  # Flag to indicate if reactive mode is active
 
-        
 
         # --- Active Tracker (High-Frequency Hunt) ---
         "lidar_track_mode_active": Value('b', False),
