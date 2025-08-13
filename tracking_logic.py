@@ -277,7 +277,7 @@ class HandTracker:
     then re-centers on that point and repeats.
     """
 
-    def __init__(self, dither_angle=5.0, arrival_tolerance=0.5, timeout=2.0):
+    def __init__(self, dither_angle=1.0, arrival_tolerance=0.5, timeout=2.0):
         self.dither_angle = dither_angle
         self.arrival_tolerance = arrival_tolerance
         self.timeout = timeout
@@ -316,21 +316,20 @@ class HandTracker:
                 self.target = {'az': current_az, 'el': current_el, 'dist': measurement[0], 'strength': measurement[1]}
                 self.last_seen_time = current_time
                 self.state = HandTrackerState.CENTERING
-                print(
-                    f"[HandTracker] Acquired initial target at Az={self.target['az']:.1f}, El={self.target['el']:.1f}. Centering.")
-
+                print(f"[HandTracker] Acquired initial target at Az={self.target['az']:.1f}, El={self.target['el']:.1f}. Centering.")
+        
         elif self.state in [HandTrackerState.CENTERING, HandTrackerState.DITHERING]:
             if is_target_lost:
                 print("[HandTracker] Target lost (timeout). Returning to IDLE.")
                 self.reset()
                 return
-
+            
             if measurement:
                 self.last_seen_time = current_time
 
             if self.state == HandTrackerState.CENTERING:
                 self._do_centering(current_az, current_el, shared_data)
-
+            
             elif self.state == HandTrackerState.DITHERING:
                 self._do_dithering(current_az, current_el, measurement, shared_data)
 
@@ -358,11 +357,10 @@ class HandTracker:
 
             # Find the point with the highest strength
             best_point = max(self.dither_results, key=lambda item: item[2])
-
+            
             self.target['az'], self.target['el'], self.target['strength'], self.target['dist'] = best_point
-            print(
-                f"[HandTracker] Dither complete. New best point: Az={best_point[0]:.1f}, El={best_point[1]:.1f}, Str={best_point[2]}")
-
+            print(f"[HandTracker] Dither complete. New best point: Az={best_point[0]:.1f}, El={best_point[1]:.1f}, Str={best_point[2]}")
+            
             # Go back to centering on the new best point
             self.state = HandTrackerState.CENTERING
             return
@@ -371,7 +369,7 @@ class HandTracker:
         offset_az, offset_el = self.dither_pattern[self.dither_index]
         commanded_az = self.target['az'] + offset_az
         commanded_el = self.target['el'] + offset_el
-
+        
         command_motors_to_target(commanded_az, commanded_el, shared_data)
 
         # Check if we've arrived at the dither point
@@ -385,8 +383,7 @@ class HandTracker:
                 # Score is based on strength. Could be strength/distance for other use cases.
                 score = strength
                 self.dither_results.append((current_az, current_el, score, dist))
-                print(
-                    f"[HandTracker] Dither point {self.dither_index}: Az={current_az:.1f}, El={current_el:.1f}, Str={strength}")
+                print(f"[HandTracker] Dither point {self.dither_index}: Az={current_az:.1f}, El={current_el:.1f}, Str={strength}")
             else:
                 # No valid return at this dither point
                 self.dither_results.append((current_az, current_el, 0, 0))
@@ -571,7 +568,7 @@ def run_tracking_logic(shared_data):
     orbital_ekf = OrbitalEKF()
     acquirer = Acquirer()
     reactive_tracker = ReactiveTracker()
-    hand_tracker = HandTracker()  # Instantiate the new hand tracker
+    hand_tracker = HandTracker() # Instantiate the new hand tracker
 
     state = TrackingState.IDLE
     last_prediction_time = time.time()
@@ -611,8 +608,7 @@ def run_tracking_logic(shared_data):
                     hand_tracker.reset()
 
                 # Process measurement in debug mode
-                is_valid_target = measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist,
-                                                                                       strength)
+                is_valid_target = measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength)
                 measurement_data = (dist, strength) if is_valid_target else None
                 hand_tracker.update(current_az, current_el, measurement_data, shared_data)
 
