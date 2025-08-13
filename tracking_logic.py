@@ -277,7 +277,7 @@ class HandTracker:
     then re-centers on that point and repeats.
     """
 
-    def __init__(self, dither_angle=1.0, arrival_tolerance=0.5, timeout=2.0):
+    def __init__(self, dither_angle=10.0, arrival_tolerance=0.5, timeout=2.0):
         self.dither_angle = dither_angle
         self.arrival_tolerance = arrival_tolerance
         self.timeout = timeout
@@ -712,7 +712,7 @@ def run_tracking_logic(shared_data):
                     last_prediction_time = current_time
 
             # Sleep to prevent CPU overload
-            time.sleep(0.05)  # 20Hz main loop
+            time.sleep(0.01)  # 20Hz main loop
 
         except Exception as e:
             print(f"[TrackingLogic] Error in main loop: {e}")
