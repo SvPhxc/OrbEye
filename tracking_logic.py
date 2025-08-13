@@ -437,7 +437,7 @@ def run_tracking_logic(shared_data):
     clutter_filter = ClutterFilter(shared_data.get("background_path", "background_data.npy").value)
     orbital_ekf = OrbitalEKF()
     acquirer = Acquirer()
-    
+
     reactive_tracker = ReactiveTracker()
 
     state = TrackingState.IDLE
@@ -491,7 +491,7 @@ def run_tracking_logic(shared_data):
 
                     print(f"[HandTracker] Commanding target: Az={target_az:.1f}°, El={target_el:.1f}°")
 
-            elif shared_data.get("reactive_mode", Value('b', False)).value:
+            elif shared_data["reactive_mode"].value:
                 if state != TrackingState.REACTIVE_MODE:
                     print("[TrackingLogic] Switching to REACTIVE_MODE (Non-predictive tracking)")
                     state = TrackingState.REACTIVE_MODE
