@@ -168,7 +168,8 @@ class HardwareController:
                     self.pan_pid.set_setpoint(target_az);
                     self.tilt_pid.set_setpoint(target_el)
                     pan_error = abs(self._get_shortest_pan_error(target_az, self.internal_pan_pos))
-                    target_reached = pan_error < TARGET_REACHED_THRESHOLD_DEG
+                    tilt_error = abs(target_el - self.internal_tilt_pos)
+                    target_reached = pan_error < TARGET_REACHED_THRESHOLD_DEG and tilt_error < TARGET_REACHED_THRESHOLD_DEG
                     if not target_reached: pan_vel, tilt_vel = self.pan_pid.update(
                         self.internal_pan_pos), self.tilt_pid.update(self.internal_tilt_pos)
                     if current_state == "GOTO_POSITION": self.shared_data["target_reached"].value = target_reached
@@ -220,6 +221,19 @@ class HardwareController:
                     pan_vel = self.pan_pid.update(self.internal_pan_pos)
                     self.tilt_pid.set_setpoint(self.current_scan_el)
                     tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
+
+                else: #HF_TRACKING
+                    # In high-frequency tracking mode, we use the predicted values directly.
+                    pan_vel = self.pan_pid.update(self.shared_data["predicted_azimuth"].value
+                        if self.shared_data["predicted_azimuth"].value is not None else 0)
+                    tilt_vel = self.tilt_pid.update(self.shared_data["predicted_elevation"].value
+                        if self.shared_data["predicted_elevation"].value is not None else 0)
+                # Execute the motor commands
+                    pan_vel = max(-MAX_PAN_SPEED_DPS, min(MAX_PAN_SPEED_DPS, pan_vel))
+                    tilt_vel = max(-MAX_TILT_SPEED_DPS, min(MAX_TILT_SPEED_DPS, tilt_vel))
+              
+
+
 
                 self._execute_motor_commands(pan_vel, tilt_vel, dt)
 
