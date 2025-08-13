@@ -275,7 +275,7 @@ class HandTracker:
     by using a continuous scanning motion instead of a slow "move-wait-measure" dither.
     """
 
-    def __init__(self, scan_radius=15, scan_points=8, time_per_waypoint=0.03, timeout=0.5):
+    def __init__(self, scan_radius=10, scan_points=12, time_per_waypoint=0.02, timeout=0.5):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
         self.time_per_waypoint = time_per_waypoint
