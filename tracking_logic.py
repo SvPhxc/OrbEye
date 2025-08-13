@@ -476,7 +476,7 @@ def run_tracking_logic(shared_data):
 
                     print(f"[HandTracker] Target: Az={target_az:.1f}°, El={target_el:.1f}°")
 
-            elif shared_data.get("reactive_mode", Value('b', False)).value:
+            elif shared_data["reactive_mode"].value:
                 if state != TrackingState.REACTIVE_MODE:
                     print("[TrackingLogic] Switching to REACTIVE_MODE (Non-predictive tracking)")
                     state = TrackingState.REACTIVE_MODE
