@@ -425,7 +425,7 @@ def run_tracking_logic(shared_data):
     clutter_filter = ClutterFilter(shared_data.get("background_path", "background_data.npy").value)
     orbital_ekf = OrbitalEKF()
     acquirer = Acquirer()
-    hand_tracker = HandTracker()
+
     reactive_tracker = ReactiveTracker()
 
     state = TrackingState.IDLE
@@ -573,3 +573,4 @@ def run_tracking_logic(shared_data):
     print("[TrackingLogic] Shutting down...")
 
 
+# For testing/standalone operation
