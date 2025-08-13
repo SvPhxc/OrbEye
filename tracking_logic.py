@@ -264,6 +264,138 @@ class Acquirer:
         return state
 
 
+class HandTrackerState(Enum):
+    IDLE = 0
+    CENTERING = 1
+    DITHERING = 2
+
+
+class HandTracker:
+    """
+    Tracks a close-range target (like a hand) by dithering to find the strongest signal.
+    It actively moves the gimbal in a small pattern to find the peak signal strength,
+    then re-centers on that point and repeats.
+    """
+
+    def __init__(self, dither_angle=1.0, arrival_tolerance=0.5, timeout=2.0):
+        self.dither_angle = dither_angle
+        self.arrival_tolerance = arrival_tolerance
+        self.timeout = timeout
+        self.state = HandTrackerState.IDLE
+        self.target = {'az': 0, 'el': 0, 'strength': 0, 'dist': 0}
+        self.last_seen_time = 0
+        self.dither_index = 0
+        self.dither_results = []
+
+        # 8-point pattern + original center
+        d = self.dither_angle
+        self.dither_pattern = [(0, 0), (0, d), (d, d), (d, 0), (d, -d), (0, -d), (-d, -d), (-d, 0), (-d, d)]
+
+    def reset(self):
+        """Resets the tracker to its initial state."""
+        self.state = HandTrackerState.IDLE
+        self.last_seen_time = 0
+        print("[HandTracker] Reset.")
+
+    def update(self, current_az, current_el, measurement, shared_data):
+        """
+        Main update loop for the hand tracker.
+
+        Args:
+            current_az (float): The current azimuth of the gimbal.
+            current_el (float): The current elevation of the gimbal.
+            measurement (tuple or None): A tuple of (dist, strength) if a valid measurement was received, else None.
+            shared_data (dict): The shared data dictionary for motor control.
+        """
+        current_time = time.time()
+        is_target_lost = (current_time - self.last_seen_time > self.timeout)
+
+        # --- State Machine ---
+        if self.state == HandTrackerState.IDLE:
+            if measurement:
+                self.target = {'az': current_az, 'el': current_el, 'dist': measurement[0], 'strength': measurement[1]}
+                self.last_seen_time = current_time
+                self.state = HandTrackerState.CENTERING
+                print(
+                    f"[HandTracker] Acquired initial target at Az={self.target['az']:.1f}, El={self.target['el']:.1f}. Centering.")
+
+        elif self.state in [HandTrackerState.CENTERING, HandTrackerState.DITHERING]:
+            if is_target_lost:
+                print("[HandTracker] Target lost (timeout). Returning to IDLE.")
+                self.reset()
+                return
+
+            if measurement:
+                self.last_seen_time = current_time
+
+            if self.state == HandTrackerState.CENTERING:
+                self._do_centering(current_az, current_el, shared_data)
+
+            elif self.state == HandTrackerState.DITHERING:
+                self._do_dithering(current_az, current_el, measurement, shared_data)
+
+    def _do_centering(self, current_az, current_el, shared_data):
+        """State logic for moving to the best known point."""
+        command_motors_to_target(self.target['az'], self.target['el'], shared_data)
+
+        az_err = abs(current_az - self.target['az'])
+        el_err = abs(current_el - self.target['el'])
+
+        if az_err < self.arrival_tolerance and el_err < self.arrival_tolerance:
+            print("[HandTracker] Centered. Starting dither pattern.")
+            self.state = HandTrackerState.DITHERING
+            self.dither_index = 0
+            self.dither_results = []
+
+    def _do_dithering(self, current_az, current_el, measurement, shared_data):
+        """State logic for executing the dither pattern and finding the best point."""
+        if self.dither_index >= len(self.dither_pattern):
+            # Pattern complete, evaluate results
+            if not self.dither_results:
+                print("[HandTracker] Dither produced no results. Re-centering on last known point.")
+                self.state = HandTrackerState.CENTERING
+                return
+
+            # Find the point with the highest strength
+            best_point = max(self.dither_results, key=lambda item: item[2])
+
+            self.target['az'], self.target['el'], self.target['strength'], self.target['dist'] = best_point
+            print(
+                f"[HandTracker] Dither complete. New best point: Az={best_point[0]:.1f}, El={best_point[1]:.1f}, Str={best_point[2]}")
+
+            # Go back to centering on the new best point
+            self.state = HandTrackerState.CENTERING
+            return
+
+        # --- Execute current dither step ---
+        offset_az, offset_el = self.dither_pattern[self.dither_index]
+        commanded_az = self.target['az'] + offset_az
+        commanded_el = self.target['el'] + offset_el
+
+        command_motors_to_target(commanded_az, commanded_el, shared_data)
+
+        # Check if we've arrived at the dither point
+        az_err = abs(current_az - commanded_az)
+        el_err = abs(current_el - commanded_el)
+
+        if az_err < self.arrival_tolerance and el_err < self.arrival_tolerance:
+            # Arrived at point, take measurement
+            if measurement:
+                dist, strength = measurement
+                # Score is based on strength. Could be strength/distance for other use cases.
+                score = strength
+                self.dither_results.append((current_az, current_el, score, dist))
+                print(
+                    f"[HandTracker] Dither point {self.dither_index}: Az={current_az:.1f}, El={current_el:.1f}, Str={strength}")
+            else:
+                # No valid return at this dither point
+                self.dither_results.append((current_az, current_el, 0, 0))
+                print(f"[HandTracker] Dither point {self.dither_index}: No return.")
+
+            # Move to the next point
+            self.dither_index += 1
+
+
 class ReactiveTracker:
     """Non-predictive tracker for immediate, reactive tracking of any target."""
 
@@ -426,7 +558,8 @@ def command_motors_to_target(azimuth, elevation, shared_data):
     with shared_data["go_to_target"].get_lock():
         shared_data["go_to_target"].value = True
 
-    print(f"[TrackingLogic] Commanding motors to Az={azimuth:.1f}°, El={elevation:.1f}°")
+    # This print is now less frequent as it's called inside the trackers
+    # print(f"[TrackingLogic] Commanding motors to Az={azimuth:.1f}°, El={elevation:.1f}°")
 
 
 def run_tracking_logic(shared_data):
@@ -437,8 +570,8 @@ def run_tracking_logic(shared_data):
     clutter_filter = ClutterFilter(shared_data.get("background_path", "background_data.npy").value)
     orbital_ekf = OrbitalEKF()
     acquirer = Acquirer()
-
     reactive_tracker = ReactiveTracker()
+    hand_tracker = HandTracker()  # Instantiate the new hand tracker
 
     state = TrackingState.IDLE
     last_prediction_time = time.time()
@@ -449,7 +582,7 @@ def run_tracking_logic(shared_data):
 
     print("[TrackingLogic] Ready and running...")
     print("[TrackingLogic] Available modes:")
-    print("  - debug_mode=True: Hand tracking (simple smoothing)")
+    print("  - debug_mode=True: Hand tracking (dithering to find strongest point)")
     print("  - reactive_mode=True: Reactive tracking (no prediction)")
     print("  - Normal mode: Advanced orbital tracking with prediction")
 
@@ -475,21 +608,20 @@ def run_tracking_logic(shared_data):
                 if state != TrackingState.DEBUG_MODE:
                     print("[TrackingLogic] Switching to DEBUG_MODE (Hand Tracking)")
                     state = TrackingState.DEBUG_MODE
+                    hand_tracker.reset()
 
                 # Process measurement in debug mode
-                if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
-                    target_az, target_el = hand_tracker.update(current_az, current_el, dist, strength)
+                is_valid_target = measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist,
+                                                                                       strength)
+                measurement_data = (dist, strength) if is_valid_target else None
+                hand_tracker.update(current_az, current_el, measurement_data, shared_data)
 
-                    # Command motors directly
-                    command_motors_to_target(target_az, target_el, shared_data)
-
-                    # Also update predicted values for consistency
+                # For UI display consistency, show the hand tracker's target
+                if hand_tracker.state != HandTrackerState.IDLE:
                     with shared_data["predicted_azimuth"].get_lock():
-                        shared_data["predicted_azimuth"].value = target_az
+                        shared_data["predicted_azimuth"].value = hand_tracker.target['az']
                     with shared_data["predicted_elevation"].get_lock():
-                        shared_data["predicted_elevation"].value = target_el
-
-                    print(f"[HandTracker] Commanding target: Az={target_az:.1f}°, El={target_el:.1f}°")
+                        shared_data["predicted_elevation"].value = hand_tracker.target['el']
 
             elif shared_data["reactive_mode"].value:
                 if state != TrackingState.REACTIVE_MODE:
@@ -593,5 +725,3 @@ def run_tracking_logic(shared_data):
             time.sleep(0.1)
 
     print("[TrackingLogic] Shutting down...")
-
-
