@@ -77,6 +77,17 @@ if __name__ == "__main__":
         "acquirer_status": Value('i', 0),  # 0:idle, 1:running, 2:done, 3:failed
         "points_buffer": Array('d', [0.0] * 15),  # az,el,dist,str,ts for 3 points
         "points_count": Value('i', 0),
+        "acquirer_timeout": Value('d', 5.0),  # Timeout for acquiring points
+        "acquirer_max_points": Value('i', 3),  # Max points to acquire
+        "acquirer_min_distance": Value('d', 3.0),  # Minimum distance to consider a point valid
+        "acquirer_max_distance": Value('d', 50.0),  # Maximum distance to consider a point valid
+        "acquirer_azimuth": Value('d', 0.0),  # Azimuth of the acquirer
+        "acquirer_elevation": Value('d', 0.0),  # Elevation of the acquirer
+        "acquirer_azimuth_step": Value('d', 10.0),  # Step size for azimuth in degrees
+        "acquirer_elevation_step": Value('d', 10.0),  #
+        "tracking_logic_ready": Value('b', False),  # Flag to indicate if tracking logic is ready to process acquired points
+
+        
 
         # --- Active Tracker (High-Frequency Hunt) ---
         "lidar_track_mode_active": Value('b', False),
