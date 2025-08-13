@@ -277,7 +277,7 @@ class HandTracker:
     then re-centers on that point and repeats.
     """
 
-    def __init__(self, dither_angle=1.0, arrival_tolerance=0.5, timeout=2.0):
+    def __init__(self, dither_angle=5.0, arrival_tolerance=0.5, timeout=2.0):
         self.dither_angle = dither_angle
         self.arrival_tolerance = arrival_tolerance
         self.timeout = timeout
