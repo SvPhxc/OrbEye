@@ -417,6 +417,18 @@ class ReactiveTracker:
         return self.target_az, self.target_el
 
 
+def command_motors_to_target(azimuth, elevation, shared_data):
+    """Command the motor controller to move to a specific target position."""
+    with shared_data["target_azimuth"].get_lock():
+        shared_data["target_azimuth"].value = azimuth
+    with shared_data["target_elevation"].get_lock():
+        shared_data["target_elevation"].value = elevation
+    with shared_data["go_to_target"].get_lock():
+        shared_data["go_to_target"].value = True
+
+    print(f"[TrackingLogic] Commanding motors to Az={azimuth:.1f}°, El={elevation:.1f}°")
+
+
 def run_tracking_logic(shared_data):
     """Main tracking logic process."""
     print("[TrackingLogic] Starting tracking logic process...")
@@ -425,7 +437,7 @@ def run_tracking_logic(shared_data):
     clutter_filter = ClutterFilter(shared_data.get("background_path", "background_data.npy").value)
     orbital_ekf = OrbitalEKF()
     acquirer = Acquirer()
-
+    hand_tracker = HandTracker()
     reactive_tracker = ReactiveTracker()
 
     state = TrackingState.IDLE
@@ -468,15 +480,18 @@ def run_tracking_logic(shared_data):
                 if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
                     target_az, target_el = hand_tracker.update(current_az, current_el, dist, strength)
 
-                    # Update shared data
+                    # Command motors directly
+                    command_motors_to_target(target_az, target_el, shared_data)
+
+                    # Also update predicted values for consistency
                     with shared_data["predicted_azimuth"].get_lock():
                         shared_data["predicted_azimuth"].value = target_az
                     with shared_data["predicted_elevation"].get_lock():
                         shared_data["predicted_elevation"].value = target_el
 
-                    print(f"[HandTracker] Target: Az={target_az:.1f}°, El={target_el:.1f}°")
+                    print(f"[HandTracker] Commanding target: Az={target_az:.1f}°, El={target_el:.1f}°")
 
-            elif shared_data["reactive_mode"].value:
+            elif shared_data.get("reactive_mode", Value('b', False)).value:
                 if state != TrackingState.REACTIVE_MODE:
                     print("[TrackingLogic] Switching to REACTIVE_MODE (Non-predictive tracking)")
                     state = TrackingState.REACTIVE_MODE
@@ -486,13 +501,17 @@ def run_tracking_logic(shared_data):
                 if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
                     target_az, target_el = reactive_tracker.update(current_az, current_el, dist, strength)
 
-                    # Update shared data
+                    # Command motors directly
+                    command_motors_to_target(target_az, target_el, shared_data)
+
+                    # Also update predicted values for consistency
                     with shared_data["predicted_azimuth"].get_lock():
                         shared_data["predicted_azimuth"].value = target_az
                     with shared_data["predicted_elevation"].get_lock():
                         shared_data["predicted_elevation"].value = target_el
 
-                    print(f"[ReactiveTracker] Target: Az={target_az:.1f}°, El={target_el:.1f}°, Strength={strength}")
+                    print(
+                        f"[ReactiveTracker] Commanding target: Az={target_az:.1f}°, El={target_el:.1f}°, Strength={strength}")
 
             else:
                 # Advanced orbital tracking mode
@@ -551,13 +570,16 @@ def run_tracking_logic(shared_data):
                     if prediction is not None:
                         pred_az, pred_el, pred_dist = prediction
 
-                        # Update shared data
+                        # Update shared data with predictions
                         with shared_data["predicted_azimuth"].get_lock():
                             shared_data["predicted_azimuth"].value = pred_az
                         with shared_data["predicted_elevation"].get_lock():
                             shared_data["predicted_elevation"].value = pred_el
 
-                        print(f"[OrbitalEKF] Prediction: Az={pred_az:.1f}°, El={pred_el:.1f}°")
+                        # Command motors to predicted position
+                        command_motors_to_target(pred_az, pred_el, shared_data)
+
+                        print(f"[OrbitalEKF] Commanding prediction: Az={pred_az:.1f}°, El={pred_el:.1f}°")
 
                     last_prediction_time = current_time
 
@@ -573,4 +595,3 @@ def run_tracking_logic(shared_data):
     print("[TrackingLogic] Shutting down...")
 
 
-# For testing/standalone operation
