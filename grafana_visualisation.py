@@ -112,32 +112,51 @@ def generate_tle():
         "inclination": 51.6461
     }
 
-
-
-
-
-
-
 def publish_data_to_aws(shared_data):
-    # Simple approach - direct payloads
-    simple_topics = {
-        #"tracker/orbit/cpf": shared_data["cpf"].value,
-        "tracker/lidar/distance": shared_data["lidar_data"][0],
-        "tracker/lidar/intensity": shared_data["lidar_data"][1],
-        #"tracker/orbit/nps": shared_data["nps"].value,
-        "tracker/tracker/pan_angle": shared_data["stepper_degrees"].value,
-        "tracker/tracker/tilt_angle": shared_data["servo_degrees"].value
-        #"tracker/orbit/altitude": shared_data["altitude"].value
-        #"tracker/orbit/tle": generate_tle(),
-        #"tracker/position/x": round(random.uniform(-7000.0, 7000.0), 2),
-        #"tracker/position/y": round(random.uniform(-7000.0, 7000.0), 2),
-        #"tracker/position/z": round(random.uniform(-7000.0, 7000.0), 2)
-    }
-    for topic, payload in simple_topics.items():
-        publish_simple(topic, payload)
-        time.sleep(1)
-    print("\nAll messages published!")
-    mqtt_connection.disconnect().result()
+    # Establish the connection once before the main loop.
+    # We will assume 'mqtt_connection' is an accessible global object.
+    mqtt_connection.connect().result()
+    print("MQTT connection established.")
+
+    try:
+        while True:
+            # Simple approach - direct payloads
+            simple_topics = {
+                #"tracker/orbit/cpf": shared_data["cpf"].value,
+                "tracker/lidar/distance": shared_data["lidar_data"][0],
+                "tracker/lidar/intensity": shared_data["lidar_data"][1],
+                #"tracker/orbit/nps": shared_data["nps"].value,
+                "tracker/tracker/pan_angle": shared_data["stepper_degrees"].value,
+                "tracker/tracker/tilt_angle": shared_data["servo_degrees"].value
+                #"tracker/orbit/altitude": shared_data["altitude"].value
+                #"tracker/orbit/tle": generate_tle(),
+                #"tracker/position/x": round(random.uniform(-7000.0, 7000.0), 2),
+                #"tracker/position/y": round(random.uniform(-7000.0, 7000.0), 2),
+                #"tracker/position/z": round(random.uniform(-7000.0, 7000.0), 2)
+            }
+            
+            for topic, payload in simple_topics.items():
+                publish_simple(topic, payload)
+            
+            print("\nAll messages published for this cycle.")
+
+            # A longer pause here to control the overall publishing frequency
+            time.sleep(5) 
+
+    except KeyboardInterrupt:
+        print("\n\nUser terminated the process.")
+    except Exception as e:
+        print(f"\nAn error occurred: {e}")
+    finally:
+        print("Disconnecting from MQTT...")
+        mqtt_connection.disconnect().result()
+        print("Disconnected.")
+
+
+
+
+
+
 
 
 # # Original approach with fixed logic
