@@ -112,26 +112,32 @@ def generate_tle():
         "inclination": 51.6461
     }
 
-# ==== TEST BOTH APPROACHES ====
 
 
-# Simple approach - direct payloads
-simple_topics = {
-    "tracker/orbit/cpf": generate_cpf(),
-    "tracker/lidar/distance": round(random.uniform(300.0, 500.0), 2),
-    "tracker/lidar/intensity": round(random.uniform(100.0, 300.0), 2),
-    "tracker/orbit/nps": generate_nps(),
-    "tracker/tracker/pan_angle": round(random.uniform(0.0, 180.0), 2),
-    "tracker/tracker/tilt_angle": round(random.uniform(0.0, 90.0), 2),
-    "tracker/orbit/tle": generate_tle(),
-    "tracker/position/x": round(random.uniform(-7000.0, 7000.0), 2),
-    "tracker/position/y": round(random.uniform(-7000.0, 7000.0), 2),
-    "tracker/position/z": round(random.uniform(-7000.0, 7000.0), 2)
-}
 
-for topic, payload in simple_topics.items():
-    publish_simple(topic, payload)
-    time.sleep(1)
+
+
+
+def publish_data_to_aws(shared_data):
+    # Simple approach - direct payloads
+    simple_topics = {
+        #"tracker/orbit/cpf": shared_data["cpf"].value,
+        "tracker/lidar/distance": shared_data["lidar_data"][0],
+        "tracker/lidar/intensity": shared_data["lidar_data"][1],
+        #"tracker/orbit/nps": shared_data["nps"].value,
+        "tracker/tracker/pan_angle": shared_data["stepper_degrees"].value,
+        "tracker/tracker/tilt_angle": shared_data["servo_degrees"].value
+        #"tracker/orbit/altitude": shared_data["altitude"].value
+        #"tracker/orbit/tle": generate_tle(),
+        #"tracker/position/x": round(random.uniform(-7000.0, 7000.0), 2),
+        #"tracker/position/y": round(random.uniform(-7000.0, 7000.0), 2),
+        #"tracker/position/z": round(random.uniform(-7000.0, 7000.0), 2)
+    }
+    for topic, payload in simple_topics.items():
+        publish_simple(topic, payload)
+        time.sleep(1)
+    print("\nAll messages published!")
+    mqtt_connection.disconnect().result()
 
 
 # # Original approach with fixed logic
@@ -139,5 +145,4 @@ for topic, payload in simple_topics.items():
 #     publish_original(f"original/{topic}", value)
 #     time.sleep(1)
 
-print("\nAll messages published!")
-mqtt_connection.disconnect().result()
+

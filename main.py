@@ -4,6 +4,7 @@ from LiDAR.Kalman_Filter import run_ekf_tracker
 from tracking.tracker import tracking
 from hardware_controller import run_hardware_controller
 from LiDAR.adaptive_tracking import run_adaptive_tracking_mode
+from grafana_visualisation import publish_data_to_aws
 from GUI import run_gui
 import time, os, signal, sys
 from ctypes import c_wchar_p
@@ -32,6 +33,7 @@ def join_or_escalate(proc, name, timeout=8):
 
 if __name__ == "__main__":
     # ===== Shared memory setup =====
+    grafana_visualisation = True # Set to False if you don't want to use it
     adaptive_tracking_active = Value('b', False)
     lidar_data = Array('d', 3)  # [distance, strength, timestamp]
     background_data = Array('d', 4)
@@ -85,6 +87,7 @@ if __name__ == "__main__":
     satellite_detected = Value('b', False)
 
     shared_data = {
+        "grafana_visualisation": grafana_visualisation,
         "lidar_data": lidar_data,
         "background_data": background_data,
         "shutdown": shutdown_flag,
@@ -138,6 +141,8 @@ if __name__ == "__main__":
     p2 = Process(target=run_hardware_controller, args=(shared_data,))
     p5 = Process(target=run_ekf_tracker, args=(shared_data,))
     p6 = Process(target=run_adaptive_tracking_mode, args=(shared_data,))
+    p7 = Process(target=publish_data_to_aws, args=(shared_data,))
+    
 
     # this one is already fine because it has two items → a real tuple
     p3 = Process(target=run_gui, args=(shared_data, movement_queue))
@@ -152,6 +157,7 @@ if __name__ == "__main__":
 
     p5.start()
     p6.start()
+    p7.start()
 
     # ===== Handle Ctrl-C / SIGTERM to flip the flag, not kill processes =====
     def _graceful(signum, frame):
@@ -182,6 +188,7 @@ if __name__ == "__main__":
         join_or_escalate(p2, "HarwareControll")
         join_or_escalate(p3, "GUI")
         join_or_escalate(p6, "AdaptiveTracking")
+        join_or_escalate(p7, "GrafanaVisualisation")
 
         print("Program exited cleanly")
         sys.exit(0)
