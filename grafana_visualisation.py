@@ -118,10 +118,16 @@ def publish_data_to_aws(shared_data):
             if not shared_data["shutdown"].value:
                 # Simple approach - direct payloads
                 simple_topics = {
-                    "tracker/lidar/distance": shared_data["lidar_data"][0],
-                    "tracker/lidar/intensity": shared_data["lidar_data"][1],
-                    "tracker/tracker/pan_angle": shared_data["stepper_degrees"].value,
-                    "tracker/tracker/tilt_angle": shared_data["servo_degrees"].value
+                    "tracker/lidar/distance": rpund(shared_data["lidar_data"][0],2),
+                    "tracker/lidar/intensity": round(shared_data["lidar_data"][1],2),
+                    "tracker/tracker/pan_angle": round(shared_data["stepper_degrees"].value,2),
+                    "tracker/tracker/tilt_angle": round(shared_data["servo_degrees"].value,2)
+                    #"tracker/orbit/cpf": shared_data["cpf"].value,
+                    #"tracker/orbit/altitude": shared_data["altitude"].value,
+                    #"tracker/orbit/tle": generate_tle(),
+                    #"tracker/position/x": round(random.uniform(-7000.0, 7000.0), 2),
+                    #"tracker/position/y": round(random.uniform(-7000.0, 7000.0), 2),
+                    #"tracker/position/z": round(random.uniform(-7000.0, 7000.0), 2)
                 }
                 
                 for topic, payload in simple_topics.items():
