@@ -113,10 +113,6 @@ def generate_tle():
     }
 
 def publish_data_to_aws(shared_data):
-    # Establish the connection once before the main loop.
-    # We will assume 'mqtt_connection' is an accessible global object.
-    mqtt_connection.connect().result()
-    print("MQTT connection established.")
 
     try:
         while True:
@@ -152,16 +148,5 @@ def publish_data_to_aws(shared_data):
         mqtt_connection.disconnect().result()
         print("Disconnected.")
 
-
-
-
-
-
-
-
-# # Original approach with fixed logic
-# for topic, value in simple_topics.items():
-#     publish_original(f"original/{topic}", value)
-#     time.sleep(1)
 
 
