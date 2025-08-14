@@ -114,7 +114,7 @@ def generate_tle():
 
 # ==== TEST BOTH APPROACHES ====
 
-print("=== Testing Simple Approach ===")
+
 # Simple approach - direct payloads
 simple_topics = {
     "tracker/orbit/cpf": generate_cpf(),
@@ -133,11 +133,11 @@ for topic, payload in simple_topics.items():
     publish_simple(topic, payload)
     time.sleep(1)
 
-print("\n=== Testing Original Approach (Fixed) ===")
-# Original approach with fixed logic
-for topic, value in simple_topics.items():
-    publish_original(f"original/{topic}", value)
-    time.sleep(1)
+
+# # Original approach with fixed logic
+# for topic, value in simple_topics.items():
+#     publish_original(f"original/{topic}", value)
+#     time.sleep(1)
 
 print("\nAll messages published!")
 mqtt_connection.disconnect().result()
