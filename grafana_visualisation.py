@@ -113,32 +113,29 @@ def generate_tle():
     }
 
 def publish_data_to_aws(shared_data):
-
     try:
         while True:
-            # Simple approach - direct payloads
-            simple_topics = {
-                #"tracker/orbit/cpf": shared_data["cpf"].value,
-                "tracker/lidar/distance": shared_data["lidar_data"][0],
-                "tracker/lidar/intensity": shared_data["lidar_data"][1],
-                #"tracker/orbit/nps": shared_data["nps"].value,
-                "tracker/tracker/pan_angle": shared_data["stepper_degrees"].value,
-                "tracker/tracker/tilt_angle": shared_data["servo_degrees"].value
-                #"tracker/orbit/altitude": shared_data["altitude"].value
-                #"tracker/orbit/tle": generate_tle(),
-                #"tracker/position/x": round(random.uniform(-7000.0, 7000.0), 2),
-                #"tracker/position/y": round(random.uniform(-7000.0, 7000.0), 2),
-                #"tracker/position/z": round(random.uniform(-7000.0, 7000.0), 2)
-            }
-            
-            for topic, payload in simple_topics.items():
-                publish_simple(topic, payload)
-            
-            print("\nAll messages published for this cycle.")
+            if not shared_data["shutdown"].value:
+                # Simple approach - direct payloads
+                simple_topics = {
+                    "tracker/lidar/distance": shared_data["lidar_data"][0],
+                    "tracker/lidar/intensity": shared_data["lidar_data"][1],
+                    "tracker/tracker/pan_angle": shared_data["stepper_degrees"].value,
+                    "tracker/tracker/tilt_angle": shared_data["servo_degrees"].value
+                }
+                
+                for topic, payload in simple_topics.items():
+                    publish_simple(topic, payload)
+                
+                print("\nAll messages published for this cycle.")
+            else:
+                print("Shutdown flag is set. Exiting data publishing loop.")
+                # Exit the while loop
+                break
 
             # A longer pause here to control the overall publishing frequency
             time.sleep(5) 
-
+            
     except KeyboardInterrupt:
         print("\n\nUser terminated the process.")
     except Exception as e:
