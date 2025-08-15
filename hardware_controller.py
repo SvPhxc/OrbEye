@@ -231,7 +231,7 @@ class HardwareController:
                 # Execute the motor commands
                     pan_vel = max(-MAX_PAN_SPEED_DPS, min(MAX_PAN_SPEED_DPS, pan_vel))
                     tilt_vel = max(-MAX_TILT_SPEED_DPS, min(MAX_TILT_SPEED_DPS, tilt_vel))
-              
+
 
 
 
