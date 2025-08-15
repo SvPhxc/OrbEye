@@ -271,18 +271,20 @@ class HandTrackerState(Enum):
 
 class HandTracker:
     """
-    An optimized tracker that rapidly finds and follows a target's strongest signal
-    by using a continuous scanning motion and immediately stopping on target loss.
+    A predictive tracker that anticipates a target's movement by extrapolating its
+    velocity from the previous scan cycle.
     """
 
-    def __init__(self, scan_radius=5, scan_points=4, time_per_waypoint=0.055, timeout=1):
+    def __init__(self, scan_radius=5, scan_points=12, time_per_waypoint=0.04, timeout=1.5, prediction_factor=0.75):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
         self.time_per_waypoint = time_per_waypoint
         self.timeout = timeout
+        self.prediction_factor = prediction_factor  # Factor to extrapolate movement
 
         self.state = HandTrackerState.IDLE
         self.best_point = {'az': 0, 'el': 0, 'strength': 0, 'dist': 0, 'time': 0}
+        self.previous_best_point = None  # Stores the best point from the last scan
         self.scan_path = []
         self.scan_index = 0
         self.last_waypoint_time = 0
@@ -292,6 +294,7 @@ class HandTracker:
         self.state = HandTrackerState.IDLE
         self.best_point['strength'] = 0
         self.best_point['time'] = 0
+        self.previous_best_point = None
         print("[HandTracker] Reset.")
 
     def _generate_scan_path(self, center_az, center_el):
@@ -302,17 +305,14 @@ class HandTracker:
             az_offset = self.scan_radius * math.cos(angle)
             el_offset = self.scan_radius * math.sin(angle)
             self.scan_path.append((center_az + az_offset, center_el + el_offset))
-        print(f"[HandTracker] Generated new scan path centered at Az={center_az:.1f}, El={center_el:.1f}")
+
+        # Normalize the center azimuth for the print statement
+        norm_az = center_az % 360
+        print(f"[HandTracker] Generated new scan path centered at Az={norm_az:.1f}, El={center_el:.1f}")
 
     def update(self, current_az, current_el, measurement, shared_data):
         """
         Main update loop. Manages state and executes scanning logic.
-
-        Args:
-            current_az (float): The current azimuth of the gimbal.
-            current_el (float): The current elevation of the gimbal.
-            measurement (tuple or None): (dist, strength) from LiDAR if valid, else None.
-            shared_data (dict): The shared data dictionary for motor control.
         """
         current_time = time.time()
 
@@ -320,52 +320,70 @@ class HandTracker:
         if self.state == HandTrackerState.IDLE:
             if measurement:
                 dist, strength = measurement
-                # Acquire initial target and switch to SCANNING
                 self.state = HandTrackerState.SCANNING
                 self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
                                    'time': current_time}
+                # Initialize previous point to establish a baseline for prediction
+                self.previous_best_point = self.best_point.copy()
                 self._generate_scan_path(current_az, current_el)
                 self.scan_index = 0
                 self.last_waypoint_time = current_time
                 print(f"[HandTracker] Acquired target. Starting scan at Az={current_az:.1f}, El={current_el:.1f}")
 
         elif self.state == HandTrackerState.SCANNING:
-            # Check for target loss
             if current_time - self.best_point['time'] > self.timeout:
                 print("[HandTracker] Target lost (timeout). Returning to IDLE and last known good position.")
-                # **NEW**: Immediately command motors to last known good point
                 command_motors_to_target(self.best_point['az'], self.best_point['el'], shared_data)
                 self.reset()
                 return
 
-            # Process new measurement in real-time
             if measurement:
                 dist, strength = measurement
-                # If this point is better than our best known point, update it
-                if strength > self.best_point['strength']:
-                    self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
-                                       'time': current_time}
+                if self.best_point['dist']- 100 <= dist <= self.best_point['dist'] + 100:
+                    if strength > self.best_point['strength']:
+                        self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
+                                        'time': current_time}
 
-            # --- Continuous Scan Logic ---
-            # Move to the next waypoint at a fixed interval, without waiting
             if current_time - self.last_waypoint_time >= self.time_per_waypoint:
-                # Command motor to the current waypoint in the path
                 command_az, command_el = self.scan_path[self.scan_index]
                 command_motors_to_target(command_az, command_el, shared_data)
 
-                # Move to the next waypoint for the next cycle
                 self.scan_index += 1
                 self.last_waypoint_time = current_time
 
-                # Check if a full scan cycle is complete
                 if self.scan_index >= len(self.scan_path):
                     self.scan_index = 0
-                    # Re-center the scan on the best point found during the last cycle
-                    print(
-                        f"[HandTracker] Scan complete. Re-centering on best point: Az={self.best_point['az']:.1f}, El={self.best_point['el']:.1f}, Str={self.best_point['strength']}")
-                    self._generate_scan_path(self.best_point['az'], self.best_point['el'])
-                    # Slightly decay strength to ensure we can find a new peak if the target moves
-                    self.best_point['strength'] *= 0.7
+
+                    # --- PREDICTION LOGIC ---
+                    next_center_az = self.best_point['az']
+                    next_center_el = self.best_point['el']
+
+                    if self.previous_best_point and self.previous_best_point['strength'] > 0:
+                        # Calculate displacement (velocity vector)
+                        delta_az = self.best_point['az'] - self.previous_best_point['az']
+                        # Handle azimuth wrap-around for correct delta calculation
+                        if delta_az > 180:
+                            delta_az -= 360
+                        elif delta_az < -180:
+                            delta_az += 360
+
+                        delta_el = self.best_point['el'] - self.previous_best_point['el']
+
+                        # Extrapolate the next position
+                        predicted_az = self.best_point['az'] + (delta_az * self.prediction_factor)
+                        predicted_el = self.best_point['el'] + (delta_el * self.prediction_factor)
+
+                        next_center_az = predicted_az
+                        next_center_el = predicted_el
+
+                    # Update previous point for the next cycle's prediction
+                    self.previous_best_point = self.best_point.copy()
+
+                    # Generate new scan path around the predicted center
+                    self._generate_scan_path(next_center_az, next_center_el)
+
+                    # Slightly decay strength to ensure we can find a new peak
+                    self.best_point['strength'] *= 0.9
 
 
 class ReactiveTracker:
@@ -540,7 +558,7 @@ def run_tracking_logic(shared_data):
     orbital_ekf = OrbitalEKF()
     acquirer = Acquirer()
     reactive_tracker = ReactiveTracker()
-    hand_tracker = HandTracker()  # Instantiate the new, faster hand tracker
+    hand_tracker = HandTracker()  # Instantiate the predictive hand tracker
 
     state = TrackingState.IDLE
     last_prediction_time = time.time()
@@ -551,7 +569,7 @@ def run_tracking_logic(shared_data):
 
     print("[TrackingLogic] Ready and running...")
     print("[TrackingLogic] Available modes:")
-    print("  - debug_mode=True: High-speed hand tracking")
+    print("  - debug_mode=True: Predictive high-speed hand tracking")
     print("  - reactive_mode=True: Reactive tracking (no prediction)")
     print("  - Normal mode: Advanced orbital tracking with prediction")
 
@@ -575,7 +593,7 @@ def run_tracking_logic(shared_data):
             # State machine logic - Priority order: Debug > Reactive > Advanced
             if shared_data["debug_mode"].value:
                 if state != TrackingState.DEBUG_MODE:
-                    print("[TrackingLogic] Switching to DEBUG_MODE (High-Speed Hand Tracking)")
+                    print("[TrackingLogic] Switching to DEBUG_MODE (Predictive Hand Tracking)")
                     state = TrackingState.DEBUG_MODE
                     hand_tracker.reset()
 
@@ -605,70 +623,3 @@ def run_tracking_logic(shared_data):
 
                     with shared_data["predicted_azimuth"].get_lock():
                         shared_data["predicted_azimuth"].value = target_az
-                    with shared_data["predicted_elevation"].get_lock():
-                        shared_data["predicted_elevation"].value = target_el
-                    print(
-                        f"[ReactiveTracker] Commanding target: Az={target_az:.1f}°, El={target_el:.1f}°, Strength={strength}")
-
-            else:
-                # Advanced orbital tracking mode
-                if shared_data["acquire_points"].value:
-                    if state != TrackingState.ACQUIRING:
-                        print("[TrackingLogic] Switching to ACQUIRING mode")
-                        state = TrackingState.ACQUIRING
-                        acquirer = Acquirer()
-                        shared_data["acquirer_status"].value = 1
-
-                    if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
-                        if acquirer.add_measurement(current_az, current_el, dist, current_time):
-                            initial_state = acquirer.compute_initial_state()
-                            if initial_state is not None:
-                                orbital_ekf.state = initial_state
-                                orbital_ekf.initialized = True
-                                shared_data["ekf_initialized"].value = True
-                                shared_data["acquire_points"].value = False
-                                shared_data["acquirer_status"].value = 0
-                                print(f"[TrackingLogic] IOD complete, EKF initialized. Initial state: {initial_state}")
-
-                elif shared_data["lidar_track_mode_active"].value and orbital_ekf.initialized:
-                    if state != TrackingState.TRACKING:
-                        print("[TrackingLogic] Switching to TRACKING mode (Predictive)")
-                        state = TrackingState.TRACKING
-
-                    if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
-                        orbital_ekf.update([current_az, current_el, dist], strength)
-                        print(
-                            f"[OrbitalEKF] Updated: Az={current_az:.1f}°, El={current_el:.1f}°, D={dist:.0f}cm, S={strength}")
-
-                else:
-                    if state != TrackingState.IDLE:
-                        print("[TrackingLogic] Switching to IDLE mode")
-                        state = TrackingState.IDLE
-
-            # Continuous prediction for orbital tracking only
-            if orbital_ekf.initialized and state == TrackingState.TRACKING:
-                if current_time - last_prediction_time >= prediction_interval:
-                    dt = current_time - orbital_ekf.last_update_time
-                    orbital_ekf.predict(min(dt, 1.0))
-
-                    prediction = orbital_ekf.get_predicted_position(0.5)
-                    if prediction is not None:
-                        pred_az, pred_el, pred_dist = prediction
-                        with shared_data["predicted_azimuth"].get_lock():
-                            shared_data["predicted_azimuth"].value = pred_az
-                        with shared_data["predicted_elevation"].get_lock():
-                            shared_data["predicted_elevation"].value = pred_el
-                        command_motors_to_target(pred_az, pred_el, shared_data)
-                        print(f"[OrbitalEKF] Commanding prediction: Az={pred_az:.1f}°, El={pred_el:.1f}°")
-                    last_prediction_time = current_time
-
-            # **NEW** Faster main loop for maximum hand tracking responsiveness
-            time.sleep(0.01)  # 100Hz main loop
-
-        except Exception as e:
-            print(f"[TrackingLogic] Error in main loop: {e}")
-            import traceback
-            traceback.print_exc()
-            time.sleep(0.1)
-
-    print("[TrackingLogic] Shutting down...")
