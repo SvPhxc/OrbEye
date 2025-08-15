@@ -144,7 +144,7 @@ class HandTrackerState(Enum):
 class HandTrackerKalmanFilter:
     """A 4-state Kalman Filter for tracking Az/El position and velocity."""
 
-    def __init__(self, process_noise=10.0, measurement_noise=25.0):
+    def __init__(self, process_noise=40.0, measurement_noise=25.0):
         self.dim_x = 4  # State: [az, el, vel_az, vel_el]
         self.dim_z = 2  # Measurement: [az, el]
 
