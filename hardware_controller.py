@@ -27,9 +27,9 @@ SCAN_STEP_DEG = 1.0
 
 # --- PID Tuning Gains ---
 MAX_PAN_SPEED_DPS = 1000.0
-PAN_KP, PAN_KI, PAN_KD = 20.0, 0.00, 0.00  # Gains can be more aggressive with this new logic
+PAN_KP, PAN_KI, PAN_KD = 20.0, 0.001, 0.005  # Gains can be more aggressive with this new logic
 MAX_TILT_SPEED_DPS = 600.0
-TILT_KP, TILT_KI, TILT_KD = 8.0, 0.01, 0.05
+TILT_KP, TILT_KI, TILT_KD = 8.0, 0.005, 0.005
 
 
 # ==============================================================================
