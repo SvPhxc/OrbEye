@@ -275,7 +275,7 @@ class HandTracker:
     by using a continuous scanning motion and immediately stopping on target loss.
     """
 
-    def __init__(self, scan_radius=5, scan_points=16, time_per_waypoint=0.045, timeout=1):
+    def __init__(self, scan_radius=5, scan_points=4, time_per_waypoint=0.055, timeout=1):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
         self.time_per_waypoint = time_per_waypoint
@@ -365,7 +365,7 @@ class HandTracker:
                         f"[HandTracker] Scan complete. Re-centering on best point: Az={self.best_point['az']:.1f}, El={self.best_point['el']:.1f}, Str={self.best_point['strength']}")
                     self._generate_scan_path(self.best_point['az'], self.best_point['el'])
                     # Slightly decay strength to ensure we can find a new peak if the target moves
-                    self.best_point['strength'] *= 0.9
+                    self.best_point['strength'] *= 0.7
 
 
 class ReactiveTracker:
