@@ -410,8 +410,12 @@ class HandTracker:
                         # --- NEW: Save best point to shared data ---
                         if "tracking_history" in shared_data:
                             point_data = [self.best_point['az'], self.best_point['el'], self.best_point['dist'],
-                                          self.best_point['strength']]
+                                          self.best_point['strength'], self.best_point['time']]
                             shared_data["tracking_history"].append(point_data)
+                            # When you decide it's time to generate the TLE
+                            if len(shared_data["tracking_history"]) >= 30:  # Example: trigger after 5 points
+                                print("[Tracking Logic] Triggering TLE generation.")
+                                shared_data["generate_tle"].value = True
 
                         self.previous_best_point = self.best_point.copy()
                         self._generate_scan_path(next_center_az, next_center_el)
