@@ -269,19 +269,47 @@ class HandTrackerState(Enum):
     SCANNING = 1
 
 
+import time
+import math
+from enum import Enum
+
+
+# --- Helper objects for the class to be self-contained ---
+
+class HandTrackerState(Enum):
+    """Defines the possible states for the HandTracker."""
+    IDLE = 0
+    SCANNING = 1
+    COASTING = 2
+
+
+def command_motors_to_target(azimuth, elevation, shared_data):
+    """
+    Dummy function to represent motor commands. In a real system,
+    this would interact with the shared_data dictionary to control hardware.
+    """
+    # In a real implementation, this would likely set values in shared_data
+    # print(f"Commanding motors to Az={azimuth:.1f}, El={elevation:.1f}")
+    pass
+
+
+# --- Modified HandTracker Class ---
+
 class HandTracker:
     """
-    High-performance predictive tracker with velocity smoothing and dynamic rate adjustment.
+    High-performance predictive tracker with velocity smoothing, dynamic rate adjustment,
+    and a predictive "coasting" search mode for target reacquisition.
     """
 
-    def __init__(self, scan_radius=7.5, scan_points=12, time_per_waypoint=0.025, timeout=1, prediction_factor=0.75,
-                 velocity_smoothing_factor=0.6):
+    def __init__(self, scan_radius=7.5, scan_points=12, time_per_waypoint=0.025, timeout=1.0, coast_timeout=1.5,
+                 prediction_factor=0.75, velocity_smoothing_factor=0.6):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
         self.time_per_waypoint = time_per_waypoint
         self.timeout = timeout
+        self.coast_timeout = coast_timeout  # NEW: How long to search before giving up
         self.prediction_factor = prediction_factor
-        self.velocity_smoothing_factor = velocity_smoothing_factor  # --- NEW: For smoothing predictions
+        self.velocity_smoothing_factor = velocity_smoothing_factor
 
         self.state = HandTrackerState.IDLE
         self.best_point = {'az': 0, 'el': 0, 'strength': 0, 'dist': 0, 'time': 0}
@@ -290,8 +318,13 @@ class HandTracker:
         self.scan_index = 0
         self.last_waypoint_time = 0
 
-        # --- NEW: State for smoothed velocity ---
+        # State for smoothed velocity
         self.smoothed_velocity = {'az': 0.0, 'el': 0.0}
+
+        # --- NEW: State variables for coasting ---
+        self.coast_start_time = 0
+        self.last_coast_update_time = 0
+        self.coasting_target_pos = {'az': 0.0, 'el': 0.0}
 
     def reset(self):
         """Resets the tracker to its initial state."""
@@ -299,7 +332,8 @@ class HandTracker:
         self.best_point['strength'] = 0
         self.best_point['time'] = 0
         self.previous_best_point = None
-        self.smoothed_velocity = {'az': 0.0, 'el': 0.0}  # Reset velocity
+        self.smoothed_velocity = {'az': 0.0, 'el': 0.0}
+        self.coast_start_time = 0
         print("[HandTracker] Reset.")
 
     def _generate_scan_path(self, center_az, center_el):
@@ -310,7 +344,6 @@ class HandTracker:
             az_offset = self.scan_radius * math.cos(angle)
             el_offset = self.scan_radius * math.sin(angle)
             self.scan_path.append((center_az + az_offset, center_el + el_offset))
-
         norm_az = center_az % 360
         print(f"[HandTracker] Generated new scan path centered at Az={norm_az:.1f}, El={center_el:.1f}")
 
@@ -330,10 +363,13 @@ class HandTracker:
                 print(f"[HandTracker] Acquired target. Starting scan at Az={current_az:.1f}, El={current_el:.1f}")
 
         elif self.state == HandTrackerState.SCANNING:
+            # --- TRANSITION TO COASTING on target loss ---
             if current_time - self.best_point['time'] > self.timeout:
-                print("[HandTracker] Target lost (timeout). Returning to IDLE and last known good position.")
-                command_motors_to_target(self.best_point['az'], self.best_point['el'], shared_data)
-                self.reset()
+                print("[HandTracker] Target lost. Entering COASTING mode.")
+                self.state = HandTrackerState.COASTING
+                self.coast_start_time = current_time
+                self.last_coast_update_time = current_time
+                self.coasting_target_pos = {'az': self.best_point['az'], 'el': self.best_point['el']}
                 return
 
             if measurement:
@@ -342,57 +378,79 @@ class HandTracker:
                     self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
                                        'time': current_time}
 
-            # --- MODIFIED: Dynamic Rate Adjustment ---
-            # This logic ensures the scan speed is consistent, even if the main loop is slow.
+            # Dynamic Rate Adjustment
             time_since_last_waypoint = current_time - self.last_waypoint_time
             if time_since_last_waypoint >= self.time_per_waypoint:
-
-                # Calculate how many waypoints we should have advanced
                 waypoints_to_advance = max(1, int(time_since_last_waypoint / self.time_per_waypoint))
                 self.last_waypoint_time = current_time
-
                 for _ in range(waypoints_to_advance):
-                    # Command the motor to the current waypoint
                     command_az, command_el = self.scan_path[self.scan_index]
                     command_motors_to_target(command_az, command_el, shared_data)
+                    self.scan_index = (self.scan_index + 1)
 
-                    self.scan_index += 1
-
-                    # Check if a full scan cycle is complete
                     if self.scan_index >= len(self.scan_path):
                         self.scan_index = 0
-
-                        # --- MODIFIED: Prediction with Velocity Smoothing ---
-                        next_center_az = self.best_point['az']
-                        next_center_el = self.best_point['el']
+                        next_center_az, next_center_el = self.best_point['az'], self.best_point['el']
 
                         if self.previous_best_point and self.previous_best_point['strength'] > 0:
-                            # 1. Calculate raw, instantaneous velocity
                             raw_delta_az = self.best_point['az'] - self.previous_best_point['az']
                             if raw_delta_az > 180:
                                 raw_delta_az -= 360
                             elif raw_delta_az < -180:
                                 raw_delta_az += 360
                             raw_delta_el = self.best_point['el'] - self.previous_best_point['el']
-
-                            # 2. Apply smoothing (Exponential Moving Average)
                             s = self.velocity_smoothing_factor
                             self.smoothed_velocity['az'] = (s * self.smoothed_velocity['az']) + ((1 - s) * raw_delta_az)
                             self.smoothed_velocity['el'] = (s * self.smoothed_velocity['el']) + ((1 - s) * raw_delta_el)
-
-                            # 3. Extrapolate using the smoothed velocity
-                            predicted_az = self.best_point['az'] + (
+                            next_center_az = self.best_point['az'] + (
                                         self.smoothed_velocity['az'] * self.prediction_factor)
-                            predicted_el = self.best_point['el'] + (
+                            next_center_el = self.best_point['el'] + (
                                         self.smoothed_velocity['el'] * self.prediction_factor)
 
-                            next_center_az = predicted_az
-                            next_center_el = predicted_el
+                        # --- NEW: Save best point to shared data ---
+                        if "tracking_history" in shared_data:
+                            point_data = [self.best_point['az'], self.best_point['el'], self.best_point['dist'],
+                                          self.best_point['strength']]
+                            shared_data["tracking_history"].append(point_data)
 
                         self.previous_best_point = self.best_point.copy()
                         self._generate_scan_path(next_center_az, next_center_el)
                         self.best_point['strength'] *= 0.7
 
+        # --- NEW: COASTING STATE LOGIC ---
+        elif self.state == HandTrackerState.COASTING:
+            # Failure: Coasted for too long without finding the target
+            if current_time - self.coast_start_time > self.coast_timeout:
+                print("[HandTracker] Coasting failed to reacquire target. Resetting.")
+                self.reset()
+                return
+
+            # Success: Found a target while coasting
+            if measurement:
+                dist, strength = measurement
+                print("[HandTracker] Reacquired target during coast! Resuming scan.")
+                self.state = HandTrackerState.SCANNING
+                self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
+                                   'time': current_time}
+                # Center new scan on the reacquired point
+                self._generate_scan_path(current_az, current_el)
+                self.scan_index = 0
+                self.last_waypoint_time = current_time
+                return
+
+            # Still coasting: Predict and move along the last known velocity vector
+            dt = current_time - self.last_coast_update_time
+            self.last_coast_update_time = current_time
+
+            # Calculate the predicted change in position
+            predicted_delta_az = self.smoothed_velocity['az'] * (dt / (self.scan_points * self.time_per_waypoint))
+            predicted_delta_el = self.smoothed_velocity['el'] * (dt / (self.scan_points * self.time_per_waypoint))
+
+            # Update the coasting target position
+            self.coasting_target_pos['az'] += predicted_delta_az
+            self.coasting_target_pos['el'] += predicted_delta_el
+
+            command_motors_to_target(self.coasting_target_pos['az'], self.coasting_target_pos['el'], shared_data)
 
 class ReactiveTracker:
     """Non-predictive tracker for immediate, reactive tracking of any target."""
