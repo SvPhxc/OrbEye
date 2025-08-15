@@ -275,7 +275,7 @@ class HandTracker:
     velocity from the previous scan cycle.
     """
 
-    def __init__(self, scan_radius=5, scan_points=12, time_per_waypoint=0.04, timeout=1.5, prediction_factor=0.75):
+    def __init__(self, scan_radius=7, scan_points=8, time_per_waypoint=0.04, timeout=1.5, prediction_factor=0.5):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
         self.time_per_waypoint = time_per_waypoint
