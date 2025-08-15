@@ -383,7 +383,7 @@ class HandTracker:
                     self._generate_scan_path(next_center_az, next_center_el)
 
                     # Slightly decay strength to ensure we can find a new peak
-                    self.best_point['strength'] *= 0.9
+                    self.best_point['strength'] *= 0.7
 
 
 class ReactiveTracker:
