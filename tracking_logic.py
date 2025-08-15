@@ -211,7 +211,7 @@ class HandTracker:
     High-performance tracker using a Kalman Filter for robust and smooth prediction.
     """
 
-    def __init__(self, scan_radius=1.2, scan_points=12, time_per_waypoint=0.03, timeout=1.5):
+    def __init__(self, scan_radius=8, scan_points=8, time_per_waypoint=0.03, timeout=1.5):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
         self.time_per_waypoint = time_per_waypoint
