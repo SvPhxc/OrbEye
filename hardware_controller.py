@@ -12,8 +12,8 @@ STEPPER_DIR_PIN = 3
 STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
-TARGET_REACHED_THRESHOLD_DEG = 0.9  # Wider threshold for settling in the turnaround zone
-SCAN_PAN_SPEED_DPS = 600.0  # Can be set aggressively now
+TARGET_REACHED_THRESHOLD_DEG = 0.5  # Wider threshold for settling in the turnaround zone
+SCAN_PAN_SPEED_DPS = 1000.0  # Can be set aggressively now
 
 # --- CODE REPAIRED HERE ---
 # This is the key to preventing skips. It defines a "braking zone" at the
@@ -27,9 +27,9 @@ SCAN_STEP_DEG = 1.0
 
 # --- PID Tuning Gains ---
 MAX_PAN_SPEED_DPS = 1000.0
-PAN_KP, PAN_KI, PAN_KD = 12.0, 0.00, 0.05  # Gains can be more aggressive with this new logic
+PAN_KP, PAN_KI, PAN_KD = 20.0, 0.00, 0.00  # Gains can be more aggressive with this new logic
 MAX_TILT_SPEED_DPS = 600.0
-TILT_KP, TILT_KI, TILT_KD = 12.0, 0.00, 0.05
+TILT_KP, TILT_KI, TILT_KD = 20.0, 0.00, 0.00
 
 
 # ==============================================================================

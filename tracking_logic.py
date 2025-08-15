@@ -274,8 +274,8 @@ class HandTracker:
     High-performance predictive tracker with velocity smoothing and dynamic rate adjustment.
     """
 
-    def __init__(self, scan_radius=5, scan_points=8, time_per_waypoint=0.03, timeout=1, prediction_factor=0.75,
-                 velocity_smoothing_factor=0.6):
+    def __init__(self, scan_radius=8, scan_points=12, time_per_waypoint=0.025, timeout=1, prediction_factor=1,
+                 velocity_smoothing_factor=0.5):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
         self.time_per_waypoint = time_per_waypoint
