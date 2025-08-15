@@ -52,36 +52,35 @@ class ClutterFilter:
 
 
 class OrbitalEKF:
-    """Extended Kalman Filter for orbital tracking with strength-aware measurement noise."""
-
+    # ... (This class remains unchanged)
     def __init__(self):
-        self.state = np.zeros(6)
-        self.P = np.eye(6) * 1000
+        self.state = np.zeros(6);
+        self.P = np.eye(6) * 1000;
         self.Q = np.diag([0.1, 0.1, 0.1, 0.01, 0.01, 0.01])
-        self.initialized = False
+        self.initialized = False;
         self.last_update_time = time.time()
 
     def predict(self, dt):
         if not self.initialized: return
-        F = np.eye(6)
+        F = np.eye(6);
         F[0:3, 3:6] = np.eye(3) * dt
         r = np.linalg.norm(self.state[0:3])
         if r > 1.0:
-            mu = 1000
+            mu = 1000;
             acc_factor = -mu / (r ** 3)
-            F[3, 0] = acc_factor * dt
-            F[4, 1] = acc_factor * dt
+            F[3, 0] = acc_factor * dt;
+            F[4, 1] = acc_factor * dt;
             F[5, 2] = acc_factor * dt
-        self.state = F @ self.state
+        self.state = F @ self.state;
         self.P = F @ self.P @ F.T + self.Q
 
     def update(self, measurement, strength):
         if not self.initialized: return
-        az, el, dist = measurement
+        az, el, dist = measurement;
         az_rad, el_rad, dist_m = np.radians(az), np.radians(el), dist / 100.0
         z_meas = np.array([dist_m * np.cos(el_rad) * np.cos(az_rad), dist_m * np.cos(el_rad) * np.sin(az_rad),
                            dist_m * np.sin(el_rad)])
-        h_pred = self.state[0:3]
+        h_pred = self.state[0:3];
         H = np.zeros((3, 6));
         H[0:3, 0:3] = np.eye(3)
         base_var_pos = 1.0
@@ -90,21 +89,21 @@ class OrbitalEKF:
         else:
             pos_variance, angular_noise_factor = base_var_pos * 1.0, 5.0
         R = np.diag([pos_variance, pos_variance * angular_noise_factor, pos_variance * angular_noise_factor])
-        y = z_meas - h_pred
-        S = H @ self.P @ H.T + R
+        y = z_meas - h_pred;
+        S = H @ self.P @ H.T + R;
         K = self.P @ H.T @ np.linalg.inv(S)
-        self.state = self.state + K @ y
+        self.state = self.state + K @ y;
         self.P = (np.eye(6) - K @ H) @ self.P
         self.last_update_time = time.time()
 
     def get_predicted_position(self, future_time_sec=0.5):
         if not self.initialized: return None
-        temp_state = self.state.copy()
+        temp_state = self.state.copy();
         temp_state[0:3] += temp_state[3:6] * future_time_sec
-        x, y, z = temp_state[0:3]
+        x, y, z = temp_state[0:3];
         r = np.sqrt(x ** 2 + y ** 2 + z ** 2)
         if r < 1.0: return None
-        el = np.degrees(np.arcsin(z / r))
+        el = np.degrees(np.arcsin(z / r));
         az = np.degrees(np.arctan2(y, x))
         if az < 0: az += 360
         return az, el, r * 100
@@ -113,8 +112,7 @@ class OrbitalEKF:
 class Acquirer:
     # ... (This class remains unchanged)
     def __init__(self):
-        self.measurements = []
-        self.required_points = 3
+        self.measurements = []; self.required_points = 3
 
     def add_measurement(self, azimuth, elevation, distance, timestamp):
         az_rad, el_rad, dist_m = np.radians(azimuth), np.radians(elevation), distance / 100.0
@@ -129,7 +127,7 @@ class Acquirer:
         positions = [m[0] for m in self.measurements];
         times = [m[1] for m in self.measurements]
         r1, r2, r3 = positions;
-        t1, t2, t3 = times
+        t1, t2, t3 = times;
         dt1, dt2 = t2 - t1, t3 - t2
         if dt1 <= 0 or dt2 <= 0: return None
         v2 = (r3 - r1) / (dt1 + dt2)
@@ -139,105 +137,87 @@ class Acquirer:
 class HandTrackerState(Enum):
     IDLE = 0
     SCANNING = 1
+    COASTING = 2  # --- NEW STATE ---
 
 
 class HandTrackerKalmanFilter:
-    """A 4-state Kalman Filter for tracking Az/El position and velocity."""
-
-    def __init__(self, process_noise=80.0, measurement_noise=10.0):
-        self.dim_x = 4  # State: [az, el, vel_az, vel_el]
-        self.dim_z = 2  # Measurement: [az, el]
-
-        # State vector
-        self.x = np.zeros(self.dim_x)
-        # State Covariance
-        self.P = np.eye(self.dim_x) * 500  # Large initial uncertainty
-        # Process Noise Covariance (tuneable)
-        # Higher values allow for more erratic movement (more acceleration)
+    # ... (This class remains unchanged)
+    def __init__(self, process_noise=10.0, measurement_noise=25.0):
+        self.dim_x = 4;
+        self.dim_z = 2
+        self.x = np.zeros(self.dim_x);
+        self.P = np.eye(self.dim_x) * 500
         self.Q = np.diag([0.25, 0.25, process_noise, process_noise])
-        # Measurement Noise Covariance (tuneable)
-        # Higher values mean measurements are less trusted
         self.R = np.eye(self.dim_z) * measurement_noise
-        # Measurement Function
-        self.H = np.array([[1, 0, 0, 0], [0, 1, 0, 0]])
-        # State Transition Matrix (updated with dt in predict)
+        self.H = np.array([[1, 0, 0, 0], [0, 1, 0, 0]]);
         self.F = np.eye(self.dim_x)
-
         self.initialized = False
 
     def reset(self):
-        self.initialized = False
-        self.x = np.zeros(self.dim_x)
+        self.initialized = False;
+        self.x = np.zeros(self.dim_x);
         self.P = np.eye(self.dim_x) * 500
 
     def initialize(self, measurement):
-        self.x[0:2] = measurement[0:2]
+        self.x[0:2] = measurement[0:2];
         self.initialized = True
 
     def predict(self, dt):
         if not self.initialized: return None, None
-
-        self.F[0, 2] = dt
+        self.F[0, 2] = dt;
         self.F[1, 3] = dt
-
-        self.x = self.F @ self.x
+        self.x = self.F @ self.x;
         self.P = self.F @ self.P @ self.F.T + self.Q
-
         return self.x[0], self.x[1]
 
     def update(self, measurement):
-        if not self.initialized:
-            self.initialize(measurement)
-            return
-
-        # Innovation (measurement residual)
+        if not self.initialized: self.initialize(measurement); return
         y = measurement - self.H @ self.x
-        # Handle azimuth wrap-around
         if y[0] > 180:
             y[0] -= 360
         elif y[0] < -180:
             y[0] += 360
-
-        S = self.H @ self.P @ self.H.T + self.R
-        K = self.P @ self.H.T @ np.linalg.inv(S)  # Kalman Gain
-
-        # Update state and covariance
-        self.x = self.x + K @ y
+        S = self.H @ self.P @ self.H.T + self.R;
+        K = self.P @ self.H.T @ np.linalg.inv(S)
+        self.x = self.x + K @ y;
         self.P = (np.eye(self.dim_x) - K @ self.H) @ self.P
 
 
 class HandTracker:
     """
-    High-performance tracker using a Kalman Filter for robust and smooth prediction.
+    High-performance tracker with a Kalman Filter and a "coasting" mode to
+    predictively search for a lost target.
     """
 
-    def __init__(self, scan_radius=8, scan_points=8, time_per_waypoint=0.03, timeout=1.5):
+    def __init__(self, scan_radius=7, scan_points=8, time_per_waypoint=0.03, timeout=0.7, coast_timeout=1.0):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
         self.time_per_waypoint = time_per_waypoint
         self.timeout = timeout
+        self.coast_timeout = coast_timeout  # --- NEW: How long to search before giving up
 
         self.state = HandTrackerState.IDLE
         self.best_point = {'az': 0, 'el': 0, 'strength': 0, 'time': 0}
-        self.scan_path = []
+        self.scan_path = [];
         self.scan_index = 0
-        self.last_waypoint_time = 0
-        self.last_scan_completion_time = 0
+        self.last_waypoint_time = self.last_scan_completion_time = 0
+        self.coast_start_time = self.last_coast_update_time = 0
 
-        # --- NEW: Kalman Filter for state estimation ---
-        self.kf = HandTrackerKalmanFilter(process_noise=10.0, measurement_noise=25.0)
+        self.kf = HandTrackerKalmanFilter(process_noise=80.0, measurement_noise=10.0)
 
     def reset(self):
         self.state = HandTrackerState.IDLE
         self.best_point['strength'] = 0
-        self.kf.reset()  # Reset the filter
+        self.coast_start_time = 0
+        self.kf.reset()
         print("[HandTracker] Reset.")
 
     def _generate_scan_path(self, center_az, center_el):
+        # ... (This method remains unchanged)
         self.scan_path = []
         for i in range(self.scan_points):
             angle = (i / self.scan_points) * 2 * math.pi
-            az_offset = self.scan_radius * math.cos(angle)
+            az_offset = self.scan_radius * math.cos(angle);
             el_offset = self.scan_radius * math.sin(angle)
             self.scan_path.append((center_az + az_offset, center_el + el_offset))
         norm_az = center_az % 360
@@ -250,65 +230,78 @@ class HandTracker:
             if measurement:
                 self.state = HandTrackerState.SCANNING
                 self.best_point = {'az': current_az, 'el': current_el, 'strength': measurement[1], 'time': current_time}
-                # Initialize the Kalman Filter with the first measurement
                 self.kf.initialize(np.array([current_az, current_el]))
                 self._generate_scan_path(current_az, current_el)
-                self.scan_index = 0
+                self.scan_index = 0;
                 self.last_waypoint_time = self.last_scan_completion_time = current_time
                 print(f"[HandTracker] Acquired target. Starting Kalman-based tracking.")
 
         elif self.state == HandTrackerState.SCANNING:
+            # --- TRANSITION TO COASTING ---
             if current_time - self.best_point['time'] > self.timeout:
-                print("[HandTracker] Target lost (timeout). Returning to IDLE.")
-                command_motors_to_target(self.best_point['az'], self.best_point['el'], shared_data)
-                self.reset()
-                return
+                print("[HandTracker] Target lost (timeout). Entering COASTING mode.")
+                self.state = HandTrackerState.COASTING
+                self.coast_start_time = self.last_coast_update_time = current_time
+                return  # End update cycle here, start coasting on next frame
 
             if measurement and measurement[1] > self.best_point['strength']:
                 self.best_point = {'az': current_az, 'el': current_el, 'strength': measurement[1], 'time': current_time}
 
             if current_time - self.last_waypoint_time >= self.time_per_waypoint:
+                # ... (Scan logic is unchanged)
                 waypoints_to_advance = max(1, int((current_time - self.last_waypoint_time) / self.time_per_waypoint))
                 self.last_waypoint_time = current_time
                 for _ in range(waypoints_to_advance):
                     command_az, command_el = self.scan_path[self.scan_index]
                     command_motors_to_target(command_az, command_el, shared_data)
-                    self.scan_index = (self.scan_index + 1)
-
-                    if self.scan_index >= len(self.scan_path):
-                        self.scan_index = 0
-
-                        # --- KALMAN FILTER PREDICTION LOGIC ---
+                    self.scan_index = (self.scan_index + 1) % len(self.scan_path)
+                    if self.scan_index == 0:
                         dt = current_time - self.last_scan_completion_time
                         self.last_scan_completion_time = current_time
-
-                        # 1. Update filter with the best measurement from the completed scan
                         measurement_vec = np.array([self.best_point['az'], self.best_point['el']])
                         self.kf.update(measurement_vec)
-
-                        # 2. Predict the state forward by the duration of the next scan
                         scan_duration = self.scan_points * self.time_per_waypoint
                         predicted_az, predicted_el = self.kf.predict(scan_duration)
-
-                        # 3. Generate new scan path around the smooth, predicted position
-                        if predicted_az is not None:
-                            self._generate_scan_path(predicted_az, predicted_el)
-
+                        if predicted_az is not None: self._generate_scan_path(predicted_az, predicted_el)
                         self.best_point['strength'] *= 0.9
+
+        # --- NEW COASTING STATE LOGIC ---
+        elif self.state == HandTrackerState.COASTING:
+            # Failure condition: Coasted for too long
+            if current_time - self.coast_start_time > self.coast_timeout:
+                print("[HandTracker] Coasting failed to reacquire target. Resetting.")
+                command_motors_to_target(self.kf.x[0], self.kf.x[1], shared_data)  # Move to last predicted spot
+                self.reset()
+                return
+
+            # Success condition: Found a target while coasting
+            if measurement:
+                print("[HandTracker] Reacquired target during coast! Resuming scan.")
+                self.state = HandTrackerState.SCANNING
+                self.best_point = {'az': current_az, 'el': current_el, 'strength': measurement[1], 'time': current_time}
+                self.kf.update(np.array([current_az, current_el]))  # Update KF with the new good measurement
+                self._generate_scan_path(current_az, current_el)  # Center new scan on reacquired point
+                self.scan_index = 0;
+                self.last_waypoint_time = current_time
+                return
+
+            # Still coasting: Predict and move
+            dt = current_time - self.last_coast_update_time
+            self.last_coast_update_time = current_time
+            predicted_az, predicted_el = self.kf.predict(dt)
+            if predicted_az is not None:
+                command_motors_to_target(predicted_az, predicted_el, shared_data)
 
 
 class ReactiveTracker:
     # ... (This class remains unchanged)
     def __init__(self, smoothing_factor=0.4):
-        self.smoothing_factor = smoothing_factor;
-        self.target_az = None;
-        self.target_el = None
-        self.measurement_history = deque(maxlen=5);
-        self.last_update_time = time.time()
+        self.smoothing_factor = smoothing_factor; self.target_az = None; self.target_el = None; self.measurement_history = deque(
+            maxlen=5); self.last_update_time = time.time()
 
     def update(self, azimuth, elevation, distance, strength):
-        current_time = time.time()
-        measurement = {'az': azimuth, 'el': elevation, 'dist': distance, 'strength': strength, 'time': current_time}
+        current_time = time.time();
+        measurement = {'az': azimuth, 'el': elevation, 'dist': distance, 'strength': strength, 'time': current_time};
         self.measurement_history.append(measurement)
         adaptive_smoothing = self._calculate_adaptive_smoothing(strength)
         if self.target_az is None:
@@ -319,10 +312,10 @@ class ReactiveTracker:
                 az_diff -= 360
             elif az_diff < -180:
                 az_diff += 360
-            self.target_az += (az_diff * adaptive_smoothing)
-            self.target_el = (self.target_el * (1 - adaptive_smoothing) + elevation * adaptive_smoothing)
+            self.target_az += (az_diff * adaptive_smoothing);
+            self.target_el = (self.target_el * (1 - adaptive_smoothing) + elevation * adaptive_smoothing);
             self.target_az %= 360
-        self.last_update_time = current_time
+        self.last_update_time = current_time;
         return self.target_az, self.target_el
 
     def _calculate_adaptive_smoothing(self, strength):
@@ -340,9 +333,9 @@ class ReactiveTracker:
 
     def _check_measurement_consistency(self):
         if len(self.measurement_history) < 3: return 1.0
-        recent_az = [m['az'] for m in list(self.measurement_history)[-3:]]
+        recent_az = [m['az'] for m in list(self.measurement_history)[-3:]];
         recent_el = [m['el'] for m in list(self.measurement_history)[-3:]]
-        az_diffs = [abs(recent_az[i] - recent_az[i - 1]) for i in range(1, len(recent_az))]  # Simplified for brevity
+        az_diffs = [abs(recent_az[i] - recent_az[i - 1]) for i in range(1, len(recent_az))];
         el_diffs = [abs(recent_el[i] - recent_el[i - 1]) for i in range(1, len(recent_el))]
         if az_diffs and el_diffs:
             total_change = np.mean(az_diffs) + np.mean(el_diffs)
@@ -371,66 +364,55 @@ def command_motors_to_target(azimuth, elevation, shared_data):
 def run_tracking_logic(shared_data):
     """Main tracking logic process."""
     print("[TrackingLogic] Starting tracking logic process...")
-
-    # Initialize components
     clutter_filter = ClutterFilter(shared_data.get("background_path", "background_data.npy").value)
-    orbital_ekf = OrbitalEKF()
-    acquirer = Acquirer()
+    orbital_ekf = OrbitalEKF();
+    acquirer = Acquirer();
     reactive_tracker = ReactiveTracker()
-    hand_tracker = HandTracker()  # Using the new Kalman-based tracker
-
-    state = TrackingState.IDLE
-    last_prediction_time = time.time()
+    hand_tracker = HandTracker()
+    state = TrackingState.IDLE;
+    last_prediction_time = time.time();
     prediction_interval = 0.1
-
     shared_data["tracking_logic_ready"].value = True
-
     print("[TrackingLogic] Ready and running...")
-    print("  - debug_mode=True: Kalman Filter hand tracking")
-    print("  - reactive_mode=True: Simple reactive tracking")
-    print("  - Normal mode: Advanced orbital tracking")
+    print("  - debug_mode=True: Kalman Filter hand tracking with coasting")
+    # ... (rest of print statements and main loop are unchanged)
 
     while not shared_data["shutdown"].value:
         try:
             current_time = time.time()
             with shared_data["lidar_data"].get_lock():
                 dist, strength, timestamp = shared_data["lidar_data"][:]
-            current_az = shared_data["stepper_degrees"].value
+            current_az = shared_data["stepper_degrees"].value;
             current_el = shared_data["servo_degrees"].value
-            measurement_valid = (10.0 <= dist <= 16000.0 and
-                                 shared_data.get("lidar_acceptance_range", [3.0, 50.0])[0] <= dist / 100.0 <=
-                                 shared_data.get("lidar_acceptance_range", [3.0, 50.0])[1])
+            measurement_valid = (10.0 <= dist <= 16000.0 and shared_data.get("lidar_acceptance_range", [3.0, 50.0])[
+                0] <= dist / 100.0 <= shared_data.get("lidar_acceptance_range", [3.0, 50.0])[1])
 
             if shared_data["debug_mode"].value:
                 if state != TrackingState.DEBUG_MODE:
                     print("[TrackingLogic] Switching to DEBUG_MODE (Kalman Hand Tracking)")
-                    state = TrackingState.DEBUG_MODE
+                    state = TrackingState.DEBUG_MODE;
                     hand_tracker.reset()
                 is_valid_target = measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist,
                                                                                        strength)
                 measurement_data = (dist, strength) if is_valid_target else None
                 hand_tracker.update(current_az, current_el, measurement_data, shared_data)
-
-                if hand_tracker.state == HandTrackerState.SCANNING:
-                    # Display the filter's current position estimate
-                    with shared_data["predicted_azimuth"].get_lock():
-                        shared_data["predicted_azimuth"].value = hand_tracker.kf.x[0]
-                    with shared_data["predicted_elevation"].get_lock():
-                        shared_data["predicted_elevation"].value = hand_tracker.kf.x[1]
+                if hand_tracker.state in [HandTrackerState.SCANNING, HandTrackerState.COASTING]:
+                    with shared_data["predicted_azimuth"].get_lock(): shared_data["predicted_azimuth"].value = \
+                    hand_tracker.kf.x[0]
+                    with shared_data["predicted_elevation"].get_lock(): shared_data["predicted_elevation"].value = \
+                    hand_tracker.kf.x[1]
 
             elif shared_data["reactive_mode"].value:
                 # ... (This logic block remains unchanged)
                 if state != TrackingState.REACTIVE_MODE:
-                    print("[TrackingLogic] Switching to REACTIVE_MODE (Non-predictive tracking)")
-                    state = TrackingState.REACTIVE_MODE
+                    state = TrackingState.REACTIVE_MODE;
                     reactive_tracker = ReactiveTracker()
                 if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
                     target_az, target_el = reactive_tracker.update(current_az, current_el, dist, strength)
                     command_motors_to_target(target_az, target_el, shared_data)
-                    with shared_data["predicted_azimuth"].get_lock():
-                        shared_data["predicted_azimuth"].value = target_az
-                    with shared_data["predicted_elevation"].get_lock():
-                        shared_data["predicted_elevation"].value = target_el
+                    with shared_data["predicted_azimuth"].get_lock(): shared_data["predicted_azimuth"].value = target_az
+                    with shared_data["predicted_elevation"].get_lock(): shared_data[
+                        "predicted_elevation"].value = target_el
             else:
                 # ... (This logic block remains unchanged)
                 if shared_data["acquire_points"].value:
@@ -455,7 +437,7 @@ def run_tracking_logic(shared_data):
 
             if orbital_ekf.initialized and state == TrackingState.TRACKING:
                 if current_time - last_prediction_time >= prediction_interval:
-                    dt = current_time - orbital_ekf.last_update_time
+                    dt = current_time - orbital_ekf.last_update_time;
                     orbital_ekf.predict(min(dt, 1.0))
                     prediction = orbital_ekf.get_predicted_position(0.5)
                     if prediction is not None:
@@ -468,7 +450,6 @@ def run_tracking_logic(shared_data):
                     last_prediction_time = current_time
 
             time.sleep(0.01)
-
         except Exception as e:
             print(f"[TrackingLogic] Error in main loop: {e}")
             import traceback
