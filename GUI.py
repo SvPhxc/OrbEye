@@ -273,8 +273,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
             if name.lower() == "test":
                 # Example ISS TLE (static; just for testing)
                 tle_lines = (
-                    "1 25544U 98067A   20029.54791435  .00001264  00000-0  29621-4 0  9990",
-                    "2 25544  51.6442 115.8106 0004975  77.8491  35.3233 15.49174187211610",
+                    "1 99999U 25001A   25227.61860759 .00000000 00000-0 10000+4 0 9997",
+                    "2 99999   9.8928 359.9997 0000000 179.9999 180.0475 48.20608643000003",
                 )
                 tle_filename = "example.tle"
             else:
@@ -292,10 +292,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
                 tle_lines=tle_lines,
                 duration_minutes=90,
                 step_seconds=10,        # smoother line
-                site_lat_deg=42.6977,
-                site_lon_deg=23.3219,
-                site_h_m=0.0,
-                units="km"
             )
 
             # --- Draw
