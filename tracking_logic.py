@@ -272,10 +272,10 @@ class HandTrackerState(Enum):
 class HandTracker:
     """
     An optimized tracker that rapidly finds and follows a target's strongest signal
-    by using a continuous scanning motion instead of a slow "move-wait-measure" dither.
+    by using a continuous scanning motion and immediately stopping on target loss.
     """
 
-    def __init__(self, scan_radius=1.5, scan_points=4, time_per_waypoint=0.03, timeout=0.5):
+    def __init__(self, scan_radius=5, scan_points=12, time_per_waypoint=0.01, timeout=1.5):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
         self.time_per_waypoint = time_per_waypoint
@@ -332,7 +332,9 @@ class HandTracker:
         elif self.state == HandTrackerState.SCANNING:
             # Check for target loss
             if current_time - self.best_point['time'] > self.timeout:
-                print("[HandTracker] Target lost (timeout). Returning to IDLE.")
+                print("[HandTracker] Target lost (timeout). Returning to IDLE and last known good position.")
+                # **NEW**: Immediately command motors to last known good point
+                command_motors_to_target(self.best_point['az'], self.best_point['el'], shared_data)
                 self.reset()
                 return
 
@@ -660,7 +662,8 @@ def run_tracking_logic(shared_data):
                         print(f"[OrbitalEKF] Commanding prediction: Az={pred_az:.1f}°, El={pred_el:.1f}°")
                     last_prediction_time = current_time
 
-            time.sleep(0.02)  # 50Hz main loop for responsiveness
+            # **NEW** Faster main loop for maximum hand tracking responsiveness
+            time.sleep(0.01)  # 100Hz main loop
 
         except Exception as e:
             print(f"[TrackingLogic] Error in main loop: {e}")
