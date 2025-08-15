@@ -275,7 +275,7 @@ class HandTracker:
     by using a continuous scanning motion and immediately stopping on target loss.
     """
 
-    def __init__(self, scan_radius=5, scan_points=12, time_per_waypoint=0.01, timeout=1.5):
+    def __init__(self, scan_radius=5, scan_points=32, time_per_waypoint=0.02, timeout=1.5):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
         self.time_per_waypoint = time_per_waypoint
