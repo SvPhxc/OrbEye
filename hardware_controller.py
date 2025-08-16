@@ -171,7 +171,7 @@ class HardwareController:
                     self.pan_pid.set_setpoint(target_az)
                     self.tilt_pid.set_setpoint(target_el)
 
-                    # --- FIX IS HERE ---
+
                     # ALWAYS update the PID controller. Let it decide the velocity.
                     # It will naturally output 0 velocity when the error is 0.
                     pan_vel = self.pan_pid.update(self.internal_pan_pos)
@@ -186,7 +186,7 @@ class HardwareController:
                     if current_state == "GOTO_POSITION":
                         self.shared_data["target_reached"].value = target_reached
                 elif current_state == "BACKGROUND_SCAN":
-                    # --- CODE MODIFIED HERE FOR AUTO-SAVE ---
+
                     if self.current_scan_el < SCAN_TILT_MIN:
                         print("[HWCtrl] BACKGROUND_SCAN finished.")
 
@@ -210,6 +210,7 @@ class HardwareController:
                             self._get_shortest_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos))
                         if pan_error < TARGET_REACHED_THRESHOLD_DEG:
                             # Safely at the edge, now execute the turn.
+                            self.pan_pid.reset()
                             self.scan_pan_direction *= -1
                             self.current_scan_el -= SCAN_STEP_DEG
                             self.scan_is_turning = False
