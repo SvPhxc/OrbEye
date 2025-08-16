@@ -12,7 +12,7 @@ STEPPER_DIR_PIN = 3
 STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
-TARGET_REACHED_THRESHOLD_DEG = 0.5  # Wider threshold for settling in the turnaround zone
+TARGET_REACHED_THRESHOLD_DEG = 0.9  # Wider threshold for settling in the turnaround zone
 SCAN_PAN_SPEED_DPS = 1000.0  # Can be set aggressively now
 
 # --- CODE REPAIRED HERE ---
@@ -23,7 +23,7 @@ SCAN_TURNAROUND_DEG = 0.5
 # --- Define the boundaries and resolution for scanning ---
 SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360
 SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90
-SCAN_STEP_DEG = 1.0
+SCAN_STEP_DEG = 2.0
 
 # --- PID Tuning Gains ---
 MAX_PAN_SPEED_DPS = 1000.0
