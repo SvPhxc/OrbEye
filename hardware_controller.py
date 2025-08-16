@@ -137,7 +137,7 @@ class HardwareController:
 
             while not self.shared_data["shutdown"].value:
                 dt = time.monotonic() - last_loop_time
-                if dt <= 0.001: continue
+                if dt <= 0.0005: continue
                 last_loop_time = time.monotonic()
                 if self.shared_data["background_scan_active"].value:
                     next_state = "BACKGROUND_SCAN"

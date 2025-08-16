@@ -169,7 +169,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
                     # Spherical to Cartesian coordinate conversion
                     x = dist_m * np.cos(el_rad) * np.cos(az_rad)
-                    y = -dist_m * np.cos(el_rad) * np.sin(az_rad) # Retaining original coordinate system
+                    y = dist_m * np.cos(el_rad) * np.sin(az_rad) # Retaining original coordinate system
                     z = dist_m * np.sin(el_rad)
                     points.append([x, y, z])
 
