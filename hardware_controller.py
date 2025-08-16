@@ -13,7 +13,7 @@ STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 TARGET_REACHED_THRESHOLD_DEG = 0.5  # Wider threshold for settling in the turnaround zone
-SCAN_PAN_SPEED_DPS = 700.0  # Can be set aggressively now
+SCAN_PAN_SPEED_DPS = 600.0  # Can be set aggressively now
 
 # --- CODE REPAIRED HERE ---
 # This is the key to preventing skips. It defines a "braking zone" at the
@@ -118,7 +118,7 @@ class HardwareController:
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(min(abs(pan_velocity_dps) / MICROSTEP_ANGLE, 250000)), 500000)
         else:
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
-        self.pi.set_servo_pulsewidth(SERVO_PIN, int(500 + (self.internal_tilt_pos / 0.09) + (38 / 0.09)))
+        self.pi.set_servo_pulsewidth(SERVO_PIN, int(500 + (self.internal_tilt_pos / 0.09) + (36 / 0.09)))
 
     def run(self):
         try:
@@ -265,7 +265,7 @@ class HardwareController:
                 # --- CODE MODIFIED HERE ---
                 # The manual save trigger has been removed from here.
 
-                time.sleep(0.0005)
+                time.sleep(0.0001)
         except Exception as e:
             import traceback;
             print(f"[HWCtrl] CRITICAL ERROR: {e}");
