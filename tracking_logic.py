@@ -283,14 +283,7 @@ class HandTrackerState(Enum):
     COASTING = 2
 
 
-def command_motors_to_target(azimuth, elevation, shared_data):
-    """
-    Dummy function to represent motor commands. In a real system,
-    this would interact with the shared_data dictionary to control hardware.
-    """
-    # In a real implementation, this would likely set values in shared_data
-    # print(f"Commanding motors to Az={azimuth:.1f}, El={elevation:.1f}")
-    pass
+
 
 
 # --- Modified HandTracker Class ---

@@ -161,19 +161,30 @@ class HardwareController:
                 if current_state == "IDLE":
                     pass
                 elif current_state == "GOTO_POSITION" or current_state == "HF_TRACKING":
+                    # Determine the target based on the state
                     target_az = self.shared_data["target_azimuth"].value if current_state == "GOTO_POSITION" else \
                         self.shared_data["predicted_azimuth"].value
                     target_el = self.shared_data["target_elevation"].value if current_state == "GOTO_POSITION" else \
                         self.shared_data["predicted_elevation"].value
-                    self.pan_pid.set_setpoint(target_az);
+
+                    # Set the PID setpoints on every loop
+                    self.pan_pid.set_setpoint(target_az)
                     self.tilt_pid.set_setpoint(target_el)
+
+                    # --- FIX IS HERE ---
+                    # ALWAYS update the PID controller. Let it decide the velocity.
+                    # It will naturally output 0 velocity when the error is 0.
+                    pan_vel = self.pan_pid.update(self.internal_pan_pos)
+                    tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
+
+                    # Now, separately, calculate the status flag without affecting the motors.
                     pan_error = abs(self._get_shortest_pan_error(target_az, self.internal_pan_pos))
                     tilt_error = abs(target_el - self.internal_tilt_pos)
                     target_reached = pan_error < TARGET_REACHED_THRESHOLD_DEG and tilt_error < TARGET_REACHED_THRESHOLD_DEG
-                    if not target_reached: pan_vel, tilt_vel = self.pan_pid.update(
-                        self.internal_pan_pos), self.tilt_pid.update(self.internal_tilt_pos)
-                    if current_state == "GOTO_POSITION": self.shared_data["target_reached"].value = target_reached
 
+                    # Update the shared flag for other processes to read
+                    if current_state == "GOTO_POSITION":
+                        self.shared_data["target_reached"].value = target_reached
                 elif current_state == "BACKGROUND_SCAN":
                     # --- CODE MODIFIED HERE FOR AUTO-SAVE ---
                     if self.current_scan_el < SCAN_TILT_MIN:
