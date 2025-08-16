@@ -302,7 +302,7 @@ class HandTracker:
     and a predictive "coasting" search mode for target reacquisition.
     """
 
-    def __init__(self, scan_radius=6, scan_points=8, time_per_waypoint=0.035, timeout=1.0, coast_timeout=1.5,
+    def __init__(self, scan_radius=10, scan_points=8, time_per_waypoint=0.030, timeout=1.0, coast_timeout=1.5,
                  prediction_factor=1, velocity_smoothing_factor=0.5):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
@@ -450,7 +450,7 @@ class HandTracker:
             self.last_coast_update_time = current_time
 
             # Calculate the predicted change in position
-            predicted_delta_az = 3.5*self.smoothed_velocity['az'] * (dt / (self.scan_points * self.time_per_waypoint))
+            predicted_delta_az = 4.5*self.smoothed_velocity['az'] * (dt / (self.scan_points * self.time_per_waypoint))
             predicted_delta_el = 1.5*self.smoothed_velocity['el'] * (dt / (self.scan_points * self.time_per_waypoint))
 
             # Update the coasting target position
@@ -573,7 +573,7 @@ def run_tracking_logic(shared_data):
                 dist, strength, timestamp = shared_data["lidar_data"][:]
             current_az = shared_data["stepper_degrees"].value
             current_el = shared_data["servo_degrees"].value
-            measurement_valid = (10.0 <= dist <= 12000.0)
+            measurement_valid = (10.0 <= dist <= 600.0)
 
             if shared_data["debug_mode"].value:
                 if state != TrackingState.DEBUG_MODE:
