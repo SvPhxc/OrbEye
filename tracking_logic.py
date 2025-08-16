@@ -20,7 +20,7 @@ class TrackingState(Enum):
 class ClutterFilter:
     """Environmental awareness filter to reject static background objects."""
 
-    def __init__(self, background_file="background_data.npy", distance_tolerance=50.0, strength_tolerance=100):
+    def __init__(self, background_file="background_data.npy", distance_tolerance=50.0, strength_tolerance=1000):
         """
         Initialize clutter filter with background map.
 
@@ -301,8 +301,8 @@ class HandTracker:
     and a predictive "coasting" search mode for target reacquisition.
     """
 
-    def __init__(self, scan_radius=7.5, scan_points=12, time_per_waypoint=0.025, timeout=1.0, coast_timeout=1.5,
-                 prediction_factor=0.75, velocity_smoothing_factor=0.6):
+    def __init__(self, scan_radius=12, scan_points=8, time_per_waypoint=0.015, timeout=1.0, coast_timeout=1.5,
+                 prediction_factor=1, velocity_smoothing_factor=0.5):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
         self.time_per_waypoint = time_per_waypoint
@@ -419,7 +419,7 @@ class HandTracker:
 
                         self.previous_best_point = self.best_point.copy()
                         self._generate_scan_path(next_center_az, next_center_el)
-                        self.best_point['strength'] *= 0.7
+                        self.best_point['strength'] *= 0.9
 
         # --- NEW: COASTING STATE LOGIC ---
         elif self.state == HandTrackerState.COASTING:
