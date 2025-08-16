@@ -13,7 +13,7 @@ STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 TARGET_REACHED_THRESHOLD_DEG = 0.5  # Wider threshold for settling in the turnaround zone
-SCAN_PAN_SPEED_DPS = 600.0  # Can be set aggressively now
+SCAN_PAN_SPEED_DPS = 1000.0  # Can be set aggressively now
 
 # --- CODE REPAIRED HERE ---
 # This is the key to preventing skips. It defines a "braking zone" at the
