@@ -447,8 +447,8 @@ class HandTracker:
             self.last_coast_update_time = current_time
 
             # Calculate the predicted change in position
-            predicted_delta_az = self.smoothed_velocity['az'] * (dt / (self.scan_points * self.time_per_waypoint))
-            predicted_delta_el = self.smoothed_velocity['el'] * (dt / (self.scan_points * self.time_per_waypoint))
+            predicted_delta_az = 10*self.smoothed_velocity['az'] * (dt / (self.scan_points * self.time_per_waypoint))
+            predicted_delta_el = 10*self.smoothed_velocity['el'] * (dt / (self.scan_points * self.time_per_waypoint))
 
             # Update the coasting target position
             self.coasting_target_pos['az'] += predicted_delta_az
