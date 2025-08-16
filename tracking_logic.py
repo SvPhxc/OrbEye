@@ -302,7 +302,7 @@ class HandTracker:
     and a predictive "coasting" search mode for target reacquisition.
     """
 
-    def __init__(self, scan_radius=7, scan_points=12, time_per_waypoint=0.045, timeout=1.0, coast_timeout=1.5,
+    def __init__(self, scan_radius=10, scan_points=12, time_per_waypoint=0.05, timeout=1.0, coast_timeout=1.5,
                  prediction_factor=0.75, velocity_smoothing_factor=0.6):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
@@ -645,7 +645,7 @@ def run_tracking_logic(shared_data):
                         command_motors_to_target(pred_az, pred_el, shared_data)
                     last_prediction_time = current_time
 
-            time.sleep(0.001)
+            time.sleep(0.0005)
 
         except Exception as e:
             print(f"[TrackingLogic] Error in main loop: {e}")
