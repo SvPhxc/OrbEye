@@ -18,67 +18,77 @@ class TrackingState(Enum):
 
 
 class ClutterFilter:
-    """Environmental awareness filter to reject static background objects."""
+    """
+    A robust filter that rejects static background objects by first finding clutter
+    in the same direction (az/el) and then checking if the new point is
+    significantly closer than the known background object.
+    """
 
-    def __init__(self, background_file="background_data.npy", distance_tolerance=50.0, strength_tolerance=1000):
+    def __init__(self, background_file="background_data.npy", angular_tolerance=2.0, distance_margin_cm=50.0):
         """
-        Initialize clutter filter with background map.
+        Initializes the filter with a 2D (azimuth, elevation) background map.
 
         Args:
-            background_file: Path to background scan data
-            distance_tolerance: Distance threshold in cm for clutter detection
-            strength_tolerance: Strength threshold for clutter detection
+            background_file (str): Path to the background scan data.
+            angular_tolerance (float): The maximum angle (in degrees) to consider a point
+                                       as being in the "same direction" as a background point.
+            distance_margin_cm (float): A new point must be at least this much closer
+                                        than a background object in the same direction to be
+                                        considered a valid target.
         """
-        self.distance_tolerance = distance_tolerance
-        self.strength_tolerance = strength_tolerance
+        self.angular_tolerance = angular_tolerance
+        self.distance_margin_cm = distance_margin_cm
         self.background_tree = None
         self.background_data = None
 
         try:
             # Load background data [azimuth, elevation, distance_cm, strength]
             self.background_data = np.load(background_file)
-            print(f"[ClutterFilter] Loaded {len(self.background_data)} background points")
+            print(f"[ClutterFilter] Loaded {len(self.background_data)} background points.")
 
-            # Build k-d tree for efficient spatial queries
-            # Use azimuth, elevation, and distance for spatial indexing
-            coords = self.background_data[:, [0, 1, 2]]  # [az, el, dist]
+            # --- KEY CHANGE ---
+            # Build k-d tree on directional coordinates ONLY [az, el] for fast angular search.
+            coords = self.background_data[:, [0, 1]]
             self.background_tree = cKDTree(coords)
+            print("[ClutterFilter] 2D (directional) k-d tree built successfully.")
 
         except FileNotFoundError:
-            print(
-                f"[ClutterFilter] Warning: Background file '{background_file}' not found. Running without clutter filtering.")
+            print(f"[ClutterFilter] WARNING: Background file '{background_file}' not found. Running without clutter filtering.")
         except Exception as e:
-            print(f"[ClutterFilter] Error loading background: {e}")
+            print(f"[ClutterFilter] ERROR loading background data: {e}")
 
     def is_valid_target(self, azimuth, elevation, distance, strength):
         """
-        Check if measurement represents a valid target (not background clutter).
+        Checks if a measurement is a valid target or background clutter.
 
         Returns:
-            bool: True if target is valid, False if it's likely clutter
+            bool: True if the target is valid, False if it's likely clutter.
         """
         if self.background_tree is None:
-            return True  # No background data, accept all measurements
+            return True  # No background data, so all targets are considered valid.
 
-        # Query k-d tree for nearby background points
-        query_point = np.array([azimuth, elevation, distance])
-
-        # Find closest background point
+        query_point = np.array([azimuth, elevation])
         try:
-            dist, idx = self.background_tree.query(query_point, k=1)
+            # Query the 2D tree to find the angularly closest background point.
+            angular_dist, idx = self.background_tree.query(query_point, k=1)
 
-            if dist < self.distance_tolerance:
-                # Check if strength is significantly different from background
-                bg_strength = self.background_data[idx, 3]
-                strength_diff = abs(strength - bg_strength)
+            # 1. Is there a background object in this direction?
+            if angular_dist < self.angular_tolerance:
+                # 2. Get the distance of that background object.
+                bg_distance = self.background_data[idx, 2]
 
-                if strength_diff < self.strength_tolerance:
-                    return False  # Too similar to background, likely clutter
+                # 3. Is the new measurement significantly IN FRONT of the background?
+                if distance < (bg_distance - self.distance_margin_cm):
+                    return True  # Yes, it's a valid target in front of the background.
+                else:
+                    # No, it's at or behind the background object. It's clutter.
+                    return False
 
-            return True  # Sufficiently different from background
+            # If no background points are nearby in this direction, it's a valid target.
+            return True
 
         except Exception:
-            return True  # If query fails, accept measurement
+            return True # Fail-safe: if the query fails, accept the measurement.
 
 
 class OrbitalEKF:
