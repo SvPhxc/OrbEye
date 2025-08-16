@@ -491,4 +491,3 @@ def run_tracking_logic(shared_data):
             time.sleep(0.1)
 
     print("[TrackingLogic] Shutting down...")
-    ```
