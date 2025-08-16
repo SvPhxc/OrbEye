@@ -18,7 +18,7 @@ SCAN_PAN_SPEED_DPS = 800.0  # Can be set aggressively now
 # --- CODE REPAIRED HERE ---
 # This is the key to preventing skips. It defines a "braking zone" at the
 # edges of the scan, giving the PID time to settle before reversing.
-SCAN_TURNAROUND_DEG = 0.2
+SCAN_TURNAROUND_DEG = 0.5
 
 # --- Define the boundaries and resolution for scanning ---
 SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360
@@ -27,7 +27,7 @@ SCAN_STEP_DEG = 1.0
 
 # --- PID Tuning Gains ---
 MAX_PAN_SPEED_DPS = 600.0
-PAN_KP, PAN_KI, PAN_KD = 15.0, 0.000, 0.0005  # Gains can be more aggressive with this new logic
+PAN_KP, PAN_KI, PAN_KD = 12.0, 0.000, 0.005  # Gains can be more aggressive with this new logic
 MAX_TILT_SPEED_DPS = 600.0
 TILT_KP, TILT_KI, TILT_KD = 12.0, 0.00, 0.0000
 
@@ -118,7 +118,7 @@ class HardwareController:
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(min(abs(pan_velocity_dps) / MICROSTEP_ANGLE, 250000)), 500000)
         else:
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
-        self.pi.set_servo_pulsewidth(SERVO_PIN, int(500 + (self.internal_tilt_pos / 0.09) + (39 / 0.09)))
+        self.pi.set_servo_pulsewidth(SERVO_PIN, int(500 + (self.internal_tilt_pos / 0.09) + (38 / 0.09)))
 
     def run(self):
         try:
