@@ -645,7 +645,7 @@ def run_tracking_logic(shared_data):
                         command_motors_to_target(pred_az, pred_el, shared_data)
                     last_prediction_time = current_time
 
-            time.sleep(0.01)
+            time.sleep(0.001)
 
         except Exception as e:
             print(f"[TrackingLogic] Error in main loop: {e}")

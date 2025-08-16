@@ -265,7 +265,7 @@ class HardwareController:
                 # --- CODE MODIFIED HERE ---
                 # The manual save trigger has been removed from here.
 
-                time.sleep(0.002)
+                time.sleep(0.0005)
         except Exception as e:
             import traceback;
             print(f"[HWCtrl] CRITICAL ERROR: {e}");
