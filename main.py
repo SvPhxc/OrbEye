@@ -77,7 +77,7 @@ if __name__ == "__main__":
 
         # --- LiDAR Data ---
         "lidar_data": Array('d', [0.0, 0.0, 0.0]),  # dist_cm, strength, timestamp
-        "lidar_acceptance_range": Array('d', [3.0, 50.0]),  # min_m, max_m
+        "lidar_acceptance_range": Array('d', [10.0, 16000.0]),  # min_m, max_m
         "lidar_port": manager.Value('c', "/dev/serial0"),
 
         # --- Background Scan ---
