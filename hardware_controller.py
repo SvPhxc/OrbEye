@@ -75,7 +75,7 @@ class HardwareController:
         self.lidar_queue = queue.Queue(maxsize=10)
         self.internal_pan_pos = shared_data["stepper_degrees"].value
         self.internal_tilt_pos = shared_data["servo_degrees"].value
-        self.pan_pid = PIDController(PAN_KP, PAN_KI, PAN_KD, output_limits=(-MAX_PAN_SPEED_DPS, MAX_PAN_SPEED_DPS),
+        self.pan_pid = PIDController(PAN_KP, PAN_KI, PAN_KD, output_limits=(-MAX_PAN_SPEED_DPS, MAX_PAN_SPEED_DPS),anti_windup_limit=20,
                                      wrap_range=(0, 360))
         self.tilt_pid = PIDController(TILT_KP, TILT_KI, TILT_KD,
                                       output_limits=(-MAX_TILT_SPEED_DPS, MAX_TILT_SPEED_DPS))

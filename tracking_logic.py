@@ -573,7 +573,7 @@ def run_tracking_logic(shared_data):
                 dist, strength, timestamp = shared_data["lidar_data"][:]
             current_az = shared_data["stepper_degrees"].value
             current_el = shared_data["servo_degrees"].value
-            measurement_valid = (50.0 <= dist <= 600.0)
+            measurement_valid = (50.0 <= dist <= 300.0)
 
             if shared_data["debug_mode"].value:
                 if state != TrackingState.DEBUG_MODE:
