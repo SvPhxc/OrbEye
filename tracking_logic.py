@@ -24,7 +24,7 @@ class ClutterFilter:
     significantly closer than the known background object.
     """
 
-    def __init__(self, background_file="background_data.npy", angular_tolerance=2.0, distance_margin_cm=70.0):
+    def __init__(self, background_file="background_data.npy", angular_tolerance=1.5, distance_margin_cm=70.0):
         """
         Initializes the filter with a 2D (azimuth, elevation) background map.
 
@@ -302,7 +302,7 @@ class HandTracker:
     and a predictive "coasting" search mode for target reacquisition.
     """
 
-    def __init__(self, scan_radius=10, scan_points=8, time_per_waypoint=0.030, timeout=1.0, coast_timeout=1.5,
+    def __init__(self, scan_radius=8, scan_points=8, time_per_waypoint=0.035, timeout=1.0, coast_timeout=1.5,
                  prediction_factor=1, velocity_smoothing_factor=0.5):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
@@ -422,7 +422,7 @@ class HandTracker:
 
                         self.previous_best_point = self.best_point.copy()
                         self._generate_scan_path(next_center_az, next_center_el)
-                        self.best_point['strength'] *= 0.9
+                        self.best_point['strength'] *= 0.8
 
         # --- NEW: COASTING STATE LOGIC ---
         elif self.state == HandTrackerState.COASTING:
@@ -573,7 +573,7 @@ def run_tracking_logic(shared_data):
                 dist, strength, timestamp = shared_data["lidar_data"][:]
             current_az = shared_data["stepper_degrees"].value
             current_el = shared_data["servo_degrees"].value
-            measurement_valid = (10.0 <= dist <= 600.0)
+            measurement_valid = (50.0 <= dist <= 600.0)
 
             if shared_data["debug_mode"].value:
                 if state != TrackingState.DEBUG_MODE:
