@@ -274,9 +274,7 @@ class Acquirer:
         return state
 
 
-class HandTrackerState(Enum):
-    IDLE = 0
-    SCANNING = 1
+
 
 
 import time
@@ -576,8 +574,8 @@ def run_tracking_logic(shared_data):
             current_az = shared_data["stepper_degrees"].value
             current_el = shared_data["servo_degrees"].value
             measurement_valid = (10.0 <= dist <= 16000.0 and
-                                 shared_data.get("lidar_acceptance_range", [3.0, 50.0])[0] <= dist / 100.0 <=
-                                 shared_data.get("lidar_acceptance_range", [3.0, 50.0])[1])
+                                 shared_data.get("lidar_acceptance_range", [3.0, 100.0])[0] <= dist / 100.0 <=
+                                 shared_data.get("lidar_acceptance_range", [3.0, 100.0])[1])
 
             if shared_data["debug_mode"].value:
                 if state != TrackingState.DEBUG_MODE:
