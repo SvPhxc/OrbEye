@@ -367,7 +367,10 @@ class HandTracker:
 
             if measurement:
                 dist, strength = measurement
-                if strength > self.best_point['strength']:
+                #check distance against background scan
+                if not clutter_filter.is_valid_target(current_az, current_el, dist, strength):
+
+                elif strength > self.best_point['strength']:
                     self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
                                        'time': current_time}
 
