@@ -15,7 +15,7 @@ MICROSTEP_ANGLE = 0.05625
 TARGET_REACHED_THRESHOLD_DEG = 0.5  # Wider threshold for settling in the turnaround zone
 SCAN_PAN_SPEED_DPS = 1000.0  # Can be set aggressively now
 
-# --- CODE REPAIRED HERE ---
+
 # This is the key to preventing skips. It defines a "braking zone" at the
 # edges of the scan, giving the PID time to settle before reversing.
 SCAN_TURNAROUND_DEG = 0.1
@@ -27,9 +27,9 @@ SCAN_STEP_DEG = 1.0
 
 # --- PID Tuning Gains ---
 MAX_PAN_SPEED_DPS = 1000.0
-PAN_KP, PAN_KI, PAN_KD = 8.0, 0.000, 0.000  # Gains can be more aggressive with this new logic
+PAN_KP, PAN_KI, PAN_KD = 8.0, 0.05, 0.005
 MAX_TILT_SPEED_DPS = 600.0
-TILT_KP, TILT_KI, TILT_KD = 8.0, 0.000, 0.000
+TILT_KP, TILT_KI, TILT_KD = 12.0, 0.000, 0.000
 
 
 # ==============================================================================
