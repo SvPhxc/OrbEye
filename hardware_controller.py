@@ -41,13 +41,20 @@ class PIDController:
         self.Kp, self.Ki, self.Kd, self.setpoint, self.output_limits, self.anti_windup_limit, self.wrap_range = Kp, Ki, Kd, setpoint, output_limits, anti_windup_limit, wrap_range
         self._integral, self._last_error, self._last_output, self._last_time = 0, 0, 0, time.monotonic()
 
-    def update(self, current_value):
+    def update(self, current_value, pan_avoid_wrap=False):
         dt = time.monotonic() - self._last_time
         if dt <= 0: return self._last_output
         error = self.setpoint - current_value
         if self.wrap_range:
             range_width = self.wrap_range[1] - self.wrap_range[0]
-            error = (error + range_width / 2) % range_width - range_width / 2
+            if pan_avoid_wrap and abs(error) > range_width / 2:
+                if error > 0:
+                    error -= range_width
+                else:
+                    error += range_width
+            else:
+                error = (error + range_width / 2) % range_width - range_width / 2
+
         self._integral += error * dt
         self._integral = max(-self.anti_windup_limit, min(self.anti_windup_limit, self._integral))
         output = (self.Kp * error) + (self.Ki * self._integral) + (self.Kd * (error - self._last_error) / dt)
@@ -60,7 +67,7 @@ class PIDController:
         self.setpoint = new_setpoint
 
     def reset(self):
-        self._integral, self._last_error = 0, 0;
+        self._integral, self._last_error = 0, 0
         self._last_time = time.monotonic()
 
 
@@ -86,17 +93,26 @@ class HardwareController:
         # --- CODE REPAIRED HERE ---
         # A new state flag to manage the sweep vs. the turnaround.
         self.scan_is_turning = False
+        self.pan_avoid_wrap = False
 
-    def _get_shortest_pan_error(self, setpoint, current_value):
+    def _calculate_pan_error(self, setpoint, current_value, avoid_wrap=False):
         error = setpoint - current_value
-        return (error + 180) % 360 - 180
+        range_width = 360
+        if avoid_wrap and abs(error) > range_width / 2:
+            if error > 0:
+                error -= range_width
+            else:
+                error += range_width
+        else:
+            error = (error + range_width / 2) % range_width - range_width / 2
+        return error
 
     def _lidar_reader_thread(self):
         # ... (lidar reader thread remains unchanged) ...
         print("[HWCtrl-LIDAR] LiDAR reader thread started.")
         while not self.shutdown_event.is_set():
             try:
-                self.ser.read_until(b'\x59\x59');
+                self.ser.read_until(b'\x59\x59')
                 frame = self.ser.read(7)
                 if len(frame) == 7:
                     try:
@@ -122,11 +138,11 @@ class HardwareController:
 
     def run(self):
         try:
-            self.pi = pigpio.pi();
+            self.pi = pigpio.pi()
             if not self.pi.connected: raise RuntimeError("pigpio connection failed.")
-            self.pi.set_mode(STEPPER_ENABLE_PIN, pigpio.OUTPUT);
+            self.pi.set_mode(STEPPER_ENABLE_PIN, pigpio.OUTPUT)
             self.pi.set_mode(STEPPER_SLEEP_PIN, pigpio.OUTPUT)
-            self.pi.write(STEPPER_ENABLE_PIN, 0);
+            self.pi.write(STEPPER_ENABLE_PIN, 0)
             self.pi.write(STEPPER_SLEEP_PIN, 1)
             print("[HWCtrl] Stepper driver enabled.")
             self.ser = serial.Serial(self.shared_data["lidar_port"].value, 115200, timeout=0.1)
@@ -149,7 +165,7 @@ class HardwareController:
                     next_state = "IDLE"
                 if next_state != current_state:
                     print(f"[HWCtrl] State change: {current_state} -> {next_state}")
-                    self.pan_pid.reset();
+                    self.pan_pid.reset()
                     self.tilt_pid.reset()
                     if next_state == "BACKGROUND_SCAN":
                         self.current_scan_el, self.scan_pan_direction, self.scan_is_turning = SCAN_TILT_MAX, 1, False
@@ -167,6 +183,10 @@ class HardwareController:
                     target_el = self.shared_data["target_elevation"].value if current_state == "GOTO_POSITION" else \
                         self.shared_data["predicted_elevation"].value
 
+                    # Check if the new setpoint requires a wrap-around
+                    if abs(target_az - self.internal_pan_pos) > 180:
+                        self.pan_avoid_wrap = True
+
                     # Set the PID setpoints on every loop
                     self.pan_pid.set_setpoint(target_az)
                     self.tilt_pid.set_setpoint(target_el)
@@ -174,17 +194,19 @@ class HardwareController:
 
                     # ALWAYS update the PID controller. Let it decide the velocity.
                     # It will naturally output 0 velocity when the error is 0.
-                    pan_vel = self.pan_pid.update(self.internal_pan_pos)
+                    pan_vel = self.pan_pid.update(self.internal_pan_pos, self.pan_avoid_wrap)
                     tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
                     # Now, separately, calculate the status flag without affecting the motors.
-                    pan_error = abs(self._get_shortest_pan_error(target_az, self.internal_pan_pos))
+                    pan_error = abs(self._calculate_pan_error(target_az, self.internal_pan_pos, self.pan_avoid_wrap))
                     tilt_error = abs(target_el - self.internal_tilt_pos)
                     target_reached = pan_error < TARGET_REACHED_THRESHOLD_DEG and tilt_error < TARGET_REACHED_THRESHOLD_DEG
 
                     # Update the shared flag for other processes to read
                     if current_state == "GOTO_POSITION":
                         self.shared_data["target_reached"].value = target_reached
+                        if target_reached:
+                            self.pan_avoid_wrap = False
                 elif current_state == "BACKGROUND_SCAN":
 
                     if self.current_scan_el < SCAN_TILT_MIN:
@@ -206,14 +228,19 @@ class HardwareController:
 
                     elif self.scan_is_turning:
                         # We are in a turnaround. Wait for the motor to settle at the edge.
-                        pan_error = abs(
-                            self._get_shortest_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos))
+                        pan_error = abs(self._calculate_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos))
                         if pan_error < TARGET_REACHED_THRESHOLD_DEG:
                             # Safely at the edge, now execute the turn.
                             self.pan_pid.reset()
                             self.scan_pan_direction *= -1
                             self.current_scan_el -= SCAN_STEP_DEG
                             self.scan_is_turning = False
+                            # Force a full rotation on direction change
+                            if self.scan_pan_direction == 1:
+                                self.scan_target_az = SCAN_PAN_MIN
+                            else:
+                                self.scan_target_az = SCAN_PAN_MAX
+                            self.pan_avoid_wrap = True
                             print(
                                 f"[HWCtrl-SCAN] Row finished. New elevation: {self.current_scan_el:.1f} deg, Direction: {self.scan_pan_direction}")
                     else:
@@ -224,20 +251,27 @@ class HardwareController:
                         if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX - SCAN_TURNAROUND_DEG:
                             self.scan_target_az = SCAN_PAN_MAX  # Lock target to the edge
                             self.scan_is_turning = True
+                            self.pan_avoid_wrap = False
                         elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN + SCAN_TURNAROUND_DEG:
                             self.scan_target_az = SCAN_PAN_MIN  # Lock target to the edge
                             self.scan_is_turning = True
+                            self.pan_avoid_wrap = False
+
 
                     # In all cases (sweeping or turning), tell the PID to chase the target.
                     self.pan_pid.set_setpoint(self.scan_target_az)
-                    pan_vel = self.pan_pid.update(self.internal_pan_pos)
+                    pan_vel = self.pan_pid.update(self.internal_pan_pos, self.pan_avoid_wrap)
                     self.tilt_pid.set_setpoint(self.current_scan_el)
                     tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
                 else: #HF_TRACKING
                     # In high-frequency tracking mode, we use the predicted values directly.
+                    if self.shared_data["predicted_azimuth"].value is not None and \
+                            abs(self.shared_data["predicted_azimuth"].value - self.internal_pan_pos) > 180:
+                        self.pan_avoid_wrap = True
+
                     pan_vel = self.pan_pid.update(self.shared_data["predicted_azimuth"].value
-                        if self.shared_data["predicted_azimuth"].value is not None else 0)
+                        if self.shared_data["predicted_azimuth"].value is not None else 0, self.pan_avoid_wrap)
                     tilt_vel = self.tilt_pid.update(self.shared_data["predicted_elevation"].value
                         if self.shared_data["predicted_elevation"].value is not None else 0)
                 # Execute the motor commands
@@ -268,8 +302,8 @@ class HardwareController:
 
                 time.sleep(0.0001)
         except Exception as e:
-            import traceback;
-            print(f"[HWCtrl] CRITICAL ERROR: {e}");
+            import traceback
+            print(f"[HWCtrl] CRITICAL ERROR: {e}")
             traceback.print_exc()
         finally:
             print("[HWCtrl] Shutting down...")
@@ -277,10 +311,10 @@ class HardwareController:
             if 'lidar_thread' in locals() and locals()['lidar_thread'].is_alive(): locals()['lidar_thread'].join(
                 timeout=1)
             if self.pi and self.pi.connected:
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0);
-                self.pi.write(STEPPER_ENABLE_PIN, 1);
-                self.pi.write(STEPPER_SLEEP_PIN, 0);
-                self.pi.set_servo_pulsewidth(SERVO_PIN, 0);
+                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
+                self.pi.write(STEPPER_ENABLE_PIN, 1)
+                self.pi.write(STEPPER_SLEEP_PIN, 0)
+                self.pi.set_servo_pulsewidth(SERVO_PIN, 0)
                 self.pi.stop()
                 print("[HWCtrl] pigpio resources released.")
             if self.ser and self.ser.is_open: self.ser.close()
