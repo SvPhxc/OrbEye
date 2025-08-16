@@ -294,8 +294,8 @@ class HandTracker:
     and a predictive "coasting" search mode for target reacquisition.
     """
 
-    def __init__(self, scan_radius=10, scan_points=8, time_per_waypoint=0.030, timeout=1.0, coast_timeout=1.5,
-                 prediction_factor=1, velocity_smoothing_factor=0.6):
+    def __init__(self, scan_radius=10, scan_points=6, time_per_waypoint=0.035, timeout=1.0, coast_timeout=1.5,
+                 prediction_factor=1, velocity_smoothing_factor=0.4):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
         self.time_per_waypoint = time_per_waypoint
@@ -440,8 +440,8 @@ class HandTracker:
             self.last_coast_update_time = current_time
 
             # Calculate the predicted change in position
-            predicted_delta_az = 10*self.smoothed_velocity['az'] * (dt / (self.scan_points * self.time_per_waypoint))
-            predicted_delta_el = 10*self.smoothed_velocity['el'] * (dt / (self.scan_points * self.time_per_waypoint))
+            predicted_delta_az = 8*self.smoothed_velocity['az'] * (dt / (self.scan_points * self.time_per_waypoint))
+            predicted_delta_el = 8*self.smoothed_velocity['el'] * (dt / (self.scan_points * self.time_per_waypoint))
 
             # Update the coasting target position
             self.coasting_target_pos['az'] += predicted_delta_az
