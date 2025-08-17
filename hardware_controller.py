@@ -304,7 +304,7 @@ class HardwareController:
 
             # Setup serial for LiDAR
             self.ser = serial.Serial(self.shared_data["lidar_port"].value, 115200, timeout=0.1)
-            self.ser.write(bytearray([0x5A, 0x06, 0x03, 0xE8, 0x03, 0x4N]))
+            self.ser.write(bytearray([0x5A, 0x06, 0x03, 0xE8, 0x03, 0x4]))
 
             # Start LiDAR reader thread
             lidar_thread = threading.Thread(target=self._lidar_reader_thread, daemon=True)
