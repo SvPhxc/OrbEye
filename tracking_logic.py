@@ -22,7 +22,7 @@ class ClutterFilter:
     significantly closer than the known background object.
     """
 
-    def __init__(self, background_file="background_data.npy", angular_tolerance=1, distance_margin_cm=100.0):
+    def __init__(self, background_file="background_data.npy", angular_tolerance=1.1, distance_margin_cm=50.0):
         """
         Initializes the filter with a 2D (azimuth, elevation) background map.
 
