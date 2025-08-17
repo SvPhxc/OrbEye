@@ -240,7 +240,7 @@ class HardwareController:
                             self.tilt_pid.set_setpoint(self.current_scan_el)
                             tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
                             self._execute_motor_commands(pan_vel, tilt_vel, dt)
-                            sleep(0.05)
+                            time.sleep(0.05)
                     else:
                         # We are sweeping. Move the virtual target.
                         self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
