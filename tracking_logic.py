@@ -1,3 +1,5 @@
+# tracking_logic.py
+
 import time
 import threading
 import numpy as np
@@ -22,7 +24,7 @@ class ClutterFilter:
     significantly closer than the known background object.
     """
 
-    def __init__(self, background_file="background_data.npy", angular_tolerance=1.1, distance_margin_cm=50.0):
+    def __init__(self, background_file="background_data.npy", angular_tolerance=1.1, distance_margin_cm=70.0):
         """
         Initializes the filter with a 2D (azimuth, elevation) background map.
 
@@ -51,8 +53,7 @@ class ClutterFilter:
             print("[ClutterFilter] 2D (directional) k-d tree built successfully.")
 
         except FileNotFoundError:
-            print(
-                f"[ClutterFilter] WARNING: Background file '{background_file}' not found. Running without clutter filtering.")
+            print(f"[ClutterFilter] WARNING: Background file '{background_file}' not found. Running without clutter filtering.")
         except Exception as e:
             print(f"[ClutterFilter] ERROR loading background data: {e}")
 
@@ -87,29 +88,38 @@ class ClutterFilter:
             return True
 
         except Exception:
-            return True  # Fail-safe: if the query fails, accept the measurement.
+            return True # Fail-safe: if the query fails, accept the measurement.
 
 
-class GeneralEKF:
-    """General Extended Kalman Filter for 3D position and velocity estimation."""
+class OrbitalEKF:
+    """Extended Kalman Filter for orbital tracking with strength-aware measurement noise."""
 
     def __init__(self):
-        """Initialize EKF for 6-state tracking [x, y, z, vx, vy, vz]."""
+        """Initialize EKF for 6-state orbital tracking [x, y, z, vx, vy, vz]."""
         self.state = np.zeros(6)  # [x, y, z, vx, vy, vz]
         self.P = np.eye(6) * 1000  # Large initial uncertainty
         self.Q = np.diag([0.1, 0.1, 0.1, 0.01, 0.01, 0.01])  # Process noise
-        self.R = np.diag([1.0, 1.0, 1.0])  # Measurement noise
         self.initialized = False
         self.last_update_time = time.time()
 
     def predict(self, dt):
-        """Predict step with a constant velocity model."""
+        """Predict step with orbital dynamics."""
         if not self.initialized:
             return
 
-        # State transition matrix
+        # State transition matrix (simplified orbital dynamics)
         F = np.eye(6)
         F[0:3, 3:6] = np.eye(3) * dt
+
+        # Simple orbital acceleration model (could be enhanced)
+        r = np.linalg.norm(self.state[0:3])
+        if r > 1.0:  # Avoid division by zero
+            # Gravitational acceleration (simplified)
+            mu = 1000  # Gravitational parameter (tunable)
+            acc_factor = -mu / (r ** 3)
+            F[3, 0] = acc_factor * dt
+            F[4, 1] = acc_factor * dt
+            F[5, 2] = acc_factor * dt
 
         # Predict state
         self.state = F @ self.state
@@ -117,24 +127,29 @@ class GeneralEKF:
         # Predict covariance
         self.P = F @ self.P @ F.T + self.Q
 
-    def update(self, measurement_pos, measurement_time):
+    def update(self, measurement, strength):
         """
-        Update step with a 3D position measurement.
+        Update step with strength-aware measurement noise.
 
         Args:
-            measurement_pos: [x, y, z] position vector
-            measurement_time: time of the measurement
+            measurement: [azimuth, elevation, distance] in degrees and cm
+            strength: LiDAR return strength
         """
         if not self.initialized:
-            dt = measurement_time - self.last_update_time
-            if dt > 0:
-                # Initialize velocity as zero
-                self.state[0:3] = measurement_pos
-                self.state[3:6] = np.zeros(3)
-                self.P = np.eye(6) * 100
-                self.initialized = True
-            self.last_update_time = measurement_time
             return
+
+        az, el, dist = measurement
+
+        # Convert measurement to Cartesian
+        az_rad = np.radians(az)
+        el_rad = np.radians(el)
+        dist_m = dist / 100.0
+
+        z_meas = np.array([
+            dist_m * np.cos(el_rad) * np.cos(az_rad),  # x
+            dist_m * np.cos(el_rad) * np.sin(az_rad),  # y
+            dist_m * np.sin(el_rad)  # z
+        ])
 
         # Predicted measurement
         h_pred = self.state[0:3]
@@ -143,11 +158,28 @@ class GeneralEKF:
         H = np.zeros((3, 6))
         H[0:3, 0:3] = np.eye(3)
 
+        # **KEY FEATURE**: Strength-aware measurement noise
+        base_var_pos = 1.0
+        base_var_angle = 0.1
+
+        # High strength = direct hit = low noise
+        # Low strength = edge hit = high angular noise, but range is still good
+        strength_factor = max(0.1, min(1.0, strength / 1000.0))  # Normalize strength
+
+        if strength > 500:  # High strength - direct hit
+            pos_variance = base_var_pos * 0.1
+            angular_noise_factor = 1.0
+        else:  # Low strength - edge hit
+            pos_variance = base_var_pos * 1.0
+            angular_noise_factor = 5.0  # Much higher angular uncertainty
+
+        R = np.diag([pos_variance, pos_variance * angular_noise_factor, pos_variance * angular_noise_factor])
+
         # Innovation
-        y = measurement_pos - h_pred
+        y = z_meas - h_pred
 
         # Innovation covariance
-        S = H @ self.P @ H.T + self.R
+        S = H @ self.P @ H.T + R
 
         # Kalman gain
         K = self.P @ H.T @ np.linalg.inv(S)
@@ -157,10 +189,10 @@ class GeneralEKF:
         I_KH = np.eye(6) - K @ H
         self.P = I_KH @ self.P
 
-        self.last_update_time = measurement_time
+        self.last_update_time = time.time()
 
     def get_predicted_position(self, future_time_sec=0.5):
-        """Get predicted position at a future time."""
+        """Get predicted position at future time."""
         if not self.initialized:
             return None
 
@@ -171,14 +203,21 @@ class GeneralEKF:
         # Simple ballistic prediction
         temp_state[0:3] += temp_state[3:6] * dt
 
-        return temp_state[0:3]
+        # Convert back to spherical coordinates
+        x, y, z = temp_state[0:3]
+        r = np.sqrt(x ** 2 + y ** 2 + z ** 2)
 
-    def reset(self):
-        """Resets the EKF to its initial state."""
-        self.state = np.zeros(6)
-        self.P = np.eye(6) * 1000
-        self.initialized = False
-        self.last_update_time = time.time()
+        if r < 1.0:
+            return None
+
+        el = np.degrees(np.arcsin(z / r))
+        az = np.degrees(np.arctan2(y, x))
+
+        # Ensure azimuth is in [0, 360)
+        if az < 0:
+            az += 360
+
+        return az, el, r * 100  # Return in degrees and cm
 
 
 class Acquirer:
@@ -235,6 +274,9 @@ class Acquirer:
         return state
 
 
+
+
+
 import time
 import math
 from enum import Enum
@@ -247,6 +289,7 @@ class HandTrackerState(Enum):
     IDLE = 0
     SCANNING = 1
     COASTING = 2
+
 
 
 class HandTracker:
@@ -313,7 +356,7 @@ class HandTracker:
         # 1. SCAN RADIUS: Set to half the LiDAR's FOV.
         # This ensures the edge of the LiDAR's sensing cone passes through the
         # last known target position, maximizing the chance of a hit in a tight circle.
-        self.scan_radius = (self.LIDAR_FOV * 5)
+        self.scan_radius = (self.LIDAR_FOV *5)
 
         # 2. SCAN POINTS: More points for closer targets, fewer for distant ones.
         # Closer targets have higher apparent velocity and benefit from a denser scan pattern.
@@ -427,16 +470,16 @@ class HandTracker:
 
                                 s = self.velocity_smoothing_factor
                                 self.smoothed_velocity['az'] = (s * self.smoothed_velocity['az']) + (
-                                        (1 - s) * (raw_delta_az / dt))
+                                            (1 - s) * (raw_delta_az / dt))
                                 self.smoothed_velocity['el'] = (s * self.smoothed_velocity['el']) + (
-                                        (1 - s) * (raw_delta_el / dt))
+                                            (1 - s) * (raw_delta_el / dt))
 
                                 # Predict based on one full scan cycle time
                                 prediction_time = len(self.scan_path) * self.time_per_waypoint
                                 next_center_az = self.best_point['az'] + (
-                                        self.smoothed_velocity['az'] * prediction_time * self.prediction_factor)
+                                            self.smoothed_velocity['az'] * prediction_time * self.prediction_factor)
                                 next_center_el = self.best_point['el'] + (
-                                        self.smoothed_velocity['el'] * prediction_time * self.prediction_factor)
+                                            self.smoothed_velocity['el'] * prediction_time * self.prediction_factor)
 
                         self.previous_best_point = self.best_point.copy()
 
@@ -483,7 +526,6 @@ class HandTracker:
                 self.coasting_target_pos['el'] += predicted_delta_el
 
                 command_motors_to_target(self.coasting_target_pos['az'], self.coasting_target_pos['el'], shared_data)
-
 
 class ReactiveTracker:
     """Non-predictive tracker for immediate, reactive tracking of any target."""
@@ -576,7 +618,7 @@ def run_tracking_logic(shared_data):
 
     # Initialize components
     clutter_filter = ClutterFilter(shared_data.get("background_path", "background_data.npy").value)
-    general_ekf = GeneralEKF()
+    orbital_ekf = OrbitalEKF()
     acquirer = Acquirer()
     reactive_tracker = ReactiveTracker()
     hand_tracker = HandTracker()
@@ -584,9 +626,6 @@ def run_tracking_logic(shared_data):
     state = TrackingState.IDLE
     last_prediction_time = time.time()
     prediction_interval = 0.1
-
-    hand_tracker_points = deque(maxlen=100)
-    use_ekf_for_prediction = False
 
     shared_data["tracking_logic_ready"].value = True
 
@@ -609,62 +648,11 @@ def run_tracking_logic(shared_data):
                     print("[TrackingLogic] Switching to DEBUG_MODE (Predictive Hand Tracking)")
                     state = TrackingState.DEBUG_MODE
                     hand_tracker.reset()
-                    general_ekf.reset()
-                    hand_tracker_points.clear()
-                    use_ekf_for_prediction = False
-
                 is_valid_target = measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist,
                                                                                        strength)
                 measurement_data = (dist, strength) if is_valid_target else None
                 hand_tracker.update(current_az, current_el, measurement_data, shared_data)
-
-                if is_valid_target:
-                    # Convert to Cartesian and add to our list of points
-                    az_rad = np.radians(current_az)
-                    el_rad = np.radians(current_el)
-                    dist_m = dist / 100.0
-                    pos = np.array([
-                        dist_m * np.cos(el_rad) * np.cos(az_rad),
-                        dist_m * np.cos(el_rad) * np.sin(az_rad),
-                        dist_m * np.sin(el_rad)
-                    ])
-                    hand_tracker_points.append((pos, current_time))
-
-                    # If we have enough points, we can start using the EKF
-                    if len(hand_tracker_points) > 20:
-                        # Update the EKF with the new measurement
-                        general_ekf.update(pos, current_time)
-
-                        if general_ekf.initialized:
-                            # Get the EKF's prediction
-                            predicted_pos = general_ekf.get_predicted_position(dt=0.1)
-
-                            if predicted_pos is not None and len(hand_tracker_points) > 1:
-                                # Compare with hand tracker's next position (if available)
-                                next_hand_tracker_pos = hand_tracker_points[-1][0]
-                                prediction_error = np.linalg.norm(predicted_pos - next_hand_tracker_pos)
-
-                                # If the prediction is good, switch to EKF
-                                if prediction_error < 0.1:  # 10 cm threshold
-                                    use_ekf_for_prediction = True
-
-                else:  # Measurement is not valid
-                    general_ekf.reset()
-                    hand_tracker.reset()
-                    hand_tracker_points.clear()
-                    use_ekf_for_prediction = False
-
-                if use_ekf_for_prediction:
-                    predicted_pos = general_ekf.get_predicted_position(dt=0.1)
-                    if predicted_pos is not None:
-                        # Convert back to spherical for motor commands
-                        x, y, z = predicted_pos
-                        r = np.linalg.norm(predicted_pos)
-                        el = np.degrees(np.arcsin(z / r))
-                        az = np.degrees(np.arctan2(y, x))
-                        command_motors_to_target(az, el, shared_data)
-
-                elif hand_tracker.state == HandTrackerState.SCANNING:
+                if hand_tracker.state == HandTrackerState.SCANNING:
                     with shared_data["predicted_azimuth"].get_lock():
                         shared_data["predicted_azimuth"].value = hand_tracker.best_point['az']
                     with shared_data["predicted_elevation"].get_lock():
@@ -695,39 +683,27 @@ def run_tracking_logic(shared_data):
                         if acquirer.add_measurement(current_az, current_el, dist, current_time):
                             initial_state = acquirer.compute_initial_state()
                             if initial_state is not None:
-                                general_ekf.state = initial_state
-                                general_ekf.initialized = True
+                                orbital_ekf.state = initial_state
+                                orbital_ekf.initialized = True
                                 shared_data["ekf_initialized"].value = True
                                 shared_data["acquire_points"].value = False
                                 shared_data["acquirer_status"].value = 0
-                elif shared_data["lidar_track_mode_active"].value and general_ekf.initialized:
+                elif shared_data["lidar_track_mode_active"].value and orbital_ekf.initialized:
                     if state != TrackingState.TRACKING:
                         print("[TrackingLogic] Switching to TRACKING mode (Predictive)")
                         state = TrackingState.TRACKING
                     if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
-                        az_rad = np.radians(current_az)
-                        el_rad = np.radians(current_el)
-                        dist_m = dist / 100.0
-                        pos = np.array([
-                            dist_m * np.cos(el_rad) * np.cos(az_rad),
-                            dist_m * np.cos(el_rad) * np.sin(az_rad),
-                            dist_m * np.sin(el_rad)
-                        ])
-                        general_ekf.update(pos, current_time)
+                        orbital_ekf.update([current_az, current_el, dist], strength)
                 else:
                     if state != TrackingState.IDLE: state = TrackingState.IDLE
 
-            if general_ekf.initialized and state == TrackingState.TRACKING:
+            if orbital_ekf.initialized and state == TrackingState.TRACKING:
                 if current_time - last_prediction_time >= prediction_interval:
-                    dt = current_time - general_ekf.last_update_time
-                    general_ekf.predict(min(dt, 1.0))
-                    prediction = general_ekf.get_predicted_position(0.5)
+                    dt = current_time - orbital_ekf.last_update_time
+                    orbital_ekf.predict(min(dt, 1.0))
+                    prediction = orbital_ekf.get_predicted_position(0.5)
                     if prediction is not None:
-                        x, y, z = prediction
-                        r = np.linalg.norm(prediction)
-                        pred_el = np.degrees(np.arcsin(z / r))
-                        pred_az = np.degrees(np.arctan2(y, x))
-
+                        pred_az, pred_el, pred_dist = prediction
                         with shared_data["predicted_azimuth"].get_lock():
                             shared_data["predicted_azimuth"].value = pred_az
                         with shared_data["predicted_elevation"].get_lock():
