@@ -237,7 +237,7 @@ class HardwareController:
                             self.scan_is_turning = False
                             # Force a full rotation on direction change
 
-                                self.scan_target_az = SCAN_PAN_MIN
+                            self.scan_target_az = SCAN_PAN_MIN
 
                             self.pan_avoid_wrap = False
                     else:
