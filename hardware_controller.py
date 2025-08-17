@@ -32,7 +32,7 @@ SCAN_STEP_DEG = 1.0
 # - If the return scan lines are shifted TO THE RIGHT of the initial scan lines, INCREASE this value.
 # - If the return scan lines are shifted TO THE LEFT of the initial scan lines, DECREASE this value.
 # Start with a small value like 0.5 and adjust until the images align.
-SCAN_PAN_CALIBRATION_OFFSET_DEG = 0.5  # <--- TUNE THIS VALUE
+SCAN_PAN_CALIBRATION_OFFSET_DEG = 0  # <--- TUNE THIS VALUE
 # ==============================================================================
 
 
@@ -59,7 +59,7 @@ SCAN_PAN_CALIBRATION_OFFSET_DEG = 0.5  # <--- TUNE THIS VALUE
 # 4. If needed, add a very small PAN_KI to help the motor hold its final position accurately.
 #
 MAX_PAN_SPEED_DPS = 800.0
-PAN_KP, PAN_KI, PAN_KD = 10, 0.0001, 0.05
+PAN_KP, PAN_KI, PAN_KD = 10, 0.0001, 0.03
 MAX_TILT_SPEED_DPS = 600.0
 TILT_KP, TILT_KI, TILT_KD = 10, 0.000, 0.000
 
