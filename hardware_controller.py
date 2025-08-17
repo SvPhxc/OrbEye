@@ -226,38 +226,47 @@ class HardwareController:
                         # Now, signal that the scan is no longer active.
                         self.shared_data["background_scan_active"].value = False
 
-                    elif self.scan_is_turning:
+                    if self.scan_is_turning:
                         # We are in a turnaround. Wait for the motor to settle at the edge.
                         pan_error = abs(self._calculate_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos, avoid_wrap=True))
                         if pan_error < TARGET_REACHED_THRESHOLD_DEG:
                             # Safely at the edge, now execute the turn.
                             self.pan_pid.reset()
-                            self.scan_pan_direction *= -1
                             self.current_scan_el -= SCAN_STEP_DEG
+                            self.scan_pan_direction *= -1
+                            if self.scan_pan_direction == 1:
+                                # If the new direction is FORWARD, our goal is the MAX boundary.
+                                self.scan_target_az = SCAN_PAN_MAX
+                            else:
+                                # If the new direction is BACKWARD, our goal is the MIN boundary.
+                                self.scan_target_az = SCAN_PAN_MIN
                             self.scan_is_turning = False
                             # Force a full rotation on direction change
 
-                            self.scan_target_az = SCAN_PAN_MIN
+
 
                             self.pan_avoid_wrap = False
                     else:
                         # We are sweeping. Move the virtual target.
-                        self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
-
+                        self.pan_pid.set_setpoint(self.scan_target_az)
+                        pan_error_for_turn = abs(self._calculate_pan_error(self.scan_target_az, self.internal_pan_pos, avoid_wrap=False))
                         # Check if we've entered a turnaround zone.
-                        if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX - SCAN_TURNAROUND_DEG:
-                            self.scan_target_az = SCAN_PAN_MAX  # Lock target to the edge
+                        if pan_error_for_turn < TARGET_REACHED_THRESHOLD_DEG * 2:
+                            # We've reached the end of the line. Enter the turnaround state.
                             self.scan_is_turning = True
-                            self.pan_avoid_wrap = False
-                        elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN + SCAN_TURNAROUND_DEG:
-                            self.scan_target_az = SCAN_PAN_MIN  # Lock target to the edge
-                            self.scan_is_turning = True
-                            self.pan_avoid_wrap = False
+
+                            # Lock the PID setpoint to the boundary we just reached.
+                            # This ensures the motor actively holds its position at the edge
+                            # while the elevation motor moves and the logic prepares for the next line.
+                            if self.scan_pan_direction == 1:
+                                self.pan_pid.set_setpoint(SCAN_PAN_MAX)
+                            else:
+                                self.pan_pid.set_setpoint(SCAN_PAN_MIN)
 
 
                     # In all cases (sweeping or turning), tell the PID to chase the target.
-                    self.pan_pid.set_setpoint(self.scan_target_az % 360)
                     pan_vel = self.pan_pid.update(self.internal_pan_pos, self.pan_avoid_wrap)
+
                     self.tilt_pid.set_setpoint(self.current_scan_el)
                     tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
