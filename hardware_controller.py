@@ -4,6 +4,7 @@ import pigpio
 import threading
 import queue
 import numpy as np
+import traceback
 
 # --- Hardware & Scan Constants ---
 SERVO_PIN = 13
@@ -11,80 +12,66 @@ STEPPER_PULSE_PIN = 19
 STEPPER_DIR_PIN = 3
 STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
+
+# --- System & Microstepping Configuration ---
+# This is the angle of a single microstep. (e.g., 1.8 deg/step motor with 32x microstepping = 1.8/32 = 0.05625)
 MICROSTEP_ANGLE = 0.05625
-TARGET_REACHED_THRESHOLD_DEG = 0.5  # Wider threshold for settling in the turnaround zone
-SCAN_PAN_SPEED_DPS = 1000.0  # Can be set aggressively now
-SCAN_TURNAROUND_DEG = 0.05  # Defines a "braking zone" at scan edges for PID settling.
+# Maximum pulse frequency pigpio can generate reliably. Limits top speed.
+MAX_PULSE_FREQ = 250000
 
 # --- Define the boundaries and resolution for scanning ---
 SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360
 SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90
+# The angular distance between each measurement point.
 SCAN_STEP_DEG = 1.0
+# How long to pause at each point to let motors settle before taking a reading.
+SCAN_SETTLE_TIME_S = 0.02  # 20 milliseconds
 
-# --- PID Tuning Gains ---
+# --- PID & Movement Tuning ---
+TARGET_REACHED_THRESHOLD_DEG = 0.5  # How close to the target we need to be.
+
+# PID gains control how the motors move to their targets.
+# Higher KP = faster, more aggressive movement.
 MAX_PAN_SPEED_DPS = 1000.0
-PAN_KP, PAN_KI, PAN_KD = 10.0, 0.001, 0.002
+PAN_KP, PAN_KI, PAN_KD = 10.0, 0.0, 0.01
+
 MAX_TILT_SPEED_DPS = 600.0
-TILT_KP, TILT_KI, TILT_KD = 10.0, 0.000, 0.000
+TILT_KP, TILT_KI, TILT_KD = 10.0, 0.0, 0.01
 
 
 class PIDController:
     """A Proportional-Integral-Derivative (PID) controller."""
 
-    def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-150, 150), anti_windup_limit=1, wrap_range=None):
-        """
-        Initialize the PID controller.
-
-        Args:
-            Kp (float): Proportional gain.
-            Ki (float): Integral gain.
-            Kd (float): Derivative gain.
-            setpoint (float): The target value.
-            output_limits (tuple): A tuple (min, max) for the output value.
-            anti_windup_limit (float): The limit for the integral term.
-            wrap_range (tuple): A tuple (min, max) for handling wrap-around values (e.g., 0-360 degrees).
-        """
+    def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-150, 150), wrap_range=None):
         self.Kp, self.Ki, self.Kd = Kp, Ki, Kd
         self.setpoint = setpoint
         self.output_limits = output_limits
-        self.anti_windup_limit = anti_windup_limit
         self.wrap_range = wrap_range
 
         self._integral = 0
         self._last_error = 0
-        self._last_output = 0
         self._last_time = time.monotonic()
 
-    def update(self, current_value, pan_avoid_wrap=False):
-        """
-        Calculate the PID output value for a given measurement.
-
-        Args:
-            current_value (float): The current measured value.
-            pan_avoid_wrap (bool): Flag to handle angle wrapping logic specifically.
-
-        Returns:
-            float: The calculated output.
-        """
+    def update(self, current_value):
         dt = time.monotonic() - self._last_time
         if dt <= 0:
-            return self._last_output
+            # Avoid division by zero or negative time travel
+            return self.output_limits[0] if self.setpoint < current_value else self.output_limits[1]
 
         error = self.setpoint - current_value
 
         # Handle wrap-around for circular systems like a 360-degree pan
         if self.wrap_range:
             range_width = self.wrap_range[1] - self.wrap_range[0]
-            if pan_avoid_wrap and abs(error) > range_width / 2:
+            if abs(error) > range_width / 2:
                 if error > 0:
                     error -= range_width
                 else:
                     error += range_width
-            else:
-                error = (error + range_width / 2) % range_width - range_width / 2
 
         self._integral += error * dt
-        self._integral = max(-self.anti_windup_limit, min(self.anti_windup_limit, self._integral))
+        # Simple anti-windup
+        self._integral = max(-1.0, min(1.0, self._integral))
 
         derivative = (error - self._last_error) / dt
 
@@ -92,20 +79,16 @@ class PIDController:
 
         self._last_error = error
         self._last_time = time.monotonic()
-        self._last_output = max(self.output_limits[0], min(self.output_limits[1], output))
 
-        return self._last_output
+        return max(self.output_limits[0], min(self.output_limits[1], output))
 
     def set_setpoint(self, new_setpoint):
-        """Update the setpoint of the controller."""
         self.setpoint = new_setpoint
 
     def get_setpoint(self):
-        """Return the current setpoint."""
         return self.setpoint
 
     def reset(self):
-        """Reset the PID controller's integral and error terms."""
         self._integral = 0
         self._last_error = 0
         self._last_time = time.monotonic()
@@ -119,18 +102,16 @@ class HardwareController:
         self.pi = None
         self.ser = None
         self.shutdown_event = threading.Event()
-        self.lidar_queue = queue.Queue(maxsize=20)
+        self.lidar_queue = queue.Queue(maxsize=100)  # Increased queue size
         self.background_data_buffer = []
-        self.last_pan_velocity = 0.0
-        self.last_tilt_velocity = 0.0
 
+        # Internal state tracking for motor positions
         self.internal_pan_pos = shared_data["stepper_degrees"].value
         self.internal_tilt_pos = shared_data["servo_degrees"].value
 
         self.pan_pid = PIDController(
             PAN_KP, PAN_KI, PAN_KD,
             output_limits=(-MAX_PAN_SPEED_DPS, MAX_PAN_SPEED_DPS),
-            anti_windup_limit=1,
             wrap_range=(0, 360)
         )
         self.tilt_pid = PIDController(
@@ -138,160 +119,180 @@ class HardwareController:
             output_limits=(-MAX_TILT_SPEED_DPS, MAX_TILT_SPEED_DPS)
         )
 
-        # State flags for scanning logic
+        # State flags for the new "Step-and-Scan" logic
         self.current_scan_el = SCAN_TILT_MAX
-        self.scan_pan_direction = 1
-        self.scan_target_az = 0.0
-        self.scan_is_turning = False
-        self.pan_avoid_wrap = False
-
-    def _calculate_pan_error(self, setpoint, current_value, avoid_wrap=False):
-        """Helper to calculate panoramic angle error with wrap-around logic."""
-        error = setpoint - current_value
-        range_width = 360
-        if avoid_wrap and abs(error) > range_width / 2:
-            if error > 0:
-                error -= range_width
-            else:
-                error += range_width
-        else:
-            error = (error + range_width / 2) % range_width - range_width / 2
-        return error
+        self.current_scan_az = SCAN_PAN_MIN
+        self.scan_pan_direction = 1  # 1 for forward (MIN to MAX), -1 for reverse
+        self.scan_state = "MOVING"  # Can be "MOVING" or "SAMPLING"
+        self.scan_settle_start_time = 0
 
     def _lidar_reader_thread(self):
-        """Dedicated thread to continuously read data from the LiDAR sensor."""
         print("[HWCtrl-LIDAR] LiDAR reader thread started.")
         while not self.shutdown_event.is_set():
             try:
+                # Find the start of a frame
                 self.ser.read_until(b'\x59\x59')
                 frame = self.ser.read(7)
                 if len(frame) == 7:
-                    try:
-                        dist = frame[0] + (frame[1] << 8)
-                        strength = frame[2] + (frame[3] << 8)
+                    dist = frame[0] + (frame[1] << 8)
+                    strength = frame[2] + (frame[3] << 8)
+                    # Put the latest data in the queue
+                    if not self.lidar_queue.full():
                         self.lidar_queue.put_nowait((dist, strength, time.time()))
-                    except queue.Full:
-                        pass  # Ignore if the queue is full
             except (serial.SerialException, OSError):
                 if not self.shutdown_event.is_set():
                     print("[HWCtrl-LIDAR] Serial error.")
                 break
+            except queue.Full:
+                # If queue is full, we are not processing fast enough.
+                # It's better to drop old data.
+                pass
         print("[HWCtrl-LIDAR] LiDAR reader thread shut down.")
 
     def _execute_motor_commands(self, pan_velocity_dps, tilt_velocity_dps, dt):
         """Send commands to the stepper and servo motors."""
+        # Update internal position based on velocity command
         self.internal_pan_pos = (self.internal_pan_pos + (pan_velocity_dps * dt)) % 360
-        self.internal_tilt_pos = max(0, min(90, self.internal_tilt_pos + (tilt_velocity_dps * dt)))
+        self.internal_tilt_pos = max(SCAN_TILT_MIN,
+                                     min(SCAN_TILT_MAX, self.internal_tilt_pos + (tilt_velocity_dps * dt)))
 
+        # Stepper motor control
         if abs(pan_velocity_dps) > 0.1:
             self.pi.write(STEPPER_DIR_PIN, 0 if pan_velocity_dps < 0 else 1)
-            pulse_freq = int(min(abs(pan_velocity_dps) / MICROSTEP_ANGLE, 250000))
-            self.pi.hardware_PWM(STEPPER_PULSE_PIN, pulse_freq, 500000)
+            pulse_freq = int(min(abs(pan_velocity_dps) / MICROSTEP_ANGLE, MAX_PULSE_FREQ))
+            self.pi.hardware_PWM(STEPPER_PULSE_PIN, pulse_freq, 500000)  # 50% duty cycle
         else:
-            self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
+            self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)  # Stop motor
 
-        pulse_width = int(500 + (self.internal_tilt_pos / 0.09) + (36 / 0.09))
+        # Servo motor control (pulse width range for 0-90 degrees may need tuning)
+        pulse_width = int(500 + (self.internal_tilt_pos / 90.0) * 2000)
         self.pi.set_servo_pulsewidth(SERVO_PIN, pulse_width)
 
     def _handle_state_machine(self, current_state):
-        """Determine the current operational state of the controller."""
         if self.shared_data["background_scan_active"].value:
             next_state = "BACKGROUND_SCAN"
         elif self.shared_data["go_to_target"].value:
             next_state = "GOTO_POSITION"
-        elif self.shared_data["lidar_track_mode_active"].value:
-            next_state = "HF_TRACKING"
         else:
+            # Default to IDLE if no other state is active
             next_state = "IDLE"
 
         if next_state != current_state:
             print(f"[HWCtrl] State change: {current_state} -> {next_state}")
             self.pan_pid.reset()
             self.tilt_pid.reset()
+            # Initialize scan parameters when starting a new background scan
             if next_state == "BACKGROUND_SCAN":
                 self.current_scan_el = SCAN_TILT_MAX
+                self.current_scan_az = SCAN_PAN_MIN
                 self.scan_pan_direction = 1
-                self.scan_is_turning = False
-                self.scan_target_az = self.internal_pan_pos
+                self.scan_state = "MOVING"
+                self.background_data_buffer = []  # Clear old data
         return next_state
 
-    def _run_goto_or_tracking_state(self, current_state):
-        """Handle GOTO_POSITION and HF_TRACKING states."""
-        if current_state == "GOTO_POSITION":
-            target_az = self.shared_data["target_azimuth"].value
-            target_el = self.shared_data["target_elevation"].value
-        else:  # HF_TRACKING
-            target_az = self.shared_data["predicted_azimuth"].value
-            target_el = self.shared_data["predicted_elevation"].value
-
-        if abs(target_az - self.internal_pan_pos) > 180:
-            self.pan_avoid_wrap = True
+    def _run_goto_position_state(self):
+        target_az = self.shared_data["target_azimuth"].value
+        target_el = self.shared_data["target_elevation"].value
 
         self.pan_pid.set_setpoint(target_az)
         self.tilt_pid.set_setpoint(target_el)
 
-        pan_vel = self.pan_pid.update(self.internal_pan_pos, self.pan_avoid_wrap)
+        pan_vel = self.pan_pid.update(self.internal_pan_pos)
         tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
-        pan_error = abs(self._calculate_pan_error(target_az, self.internal_pan_pos, self.pan_avoid_wrap))
-        tilt_error = abs(target_el - self.internal_tilt_pos)
-        target_reached = pan_error < TARGET_REACHED_THRESHOLD_DEG and tilt_error < TARGET_REACHED_THRESHOLD_DEG
+        pan_error = abs(self.pan_pid.get_setpoint() - self.internal_pan_pos)
+        tilt_error = abs(self.tilt_pid.get_setpoint() - self.internal_tilt_pos)
 
-        if current_state == "GOTO_POSITION":
-            self.shared_data["target_reached"].value = target_reached
-            if target_reached:
-                self.pan_avoid_wrap = False
+        # Handle pan wrap-around for error checking
+        if pan_error > 180:
+            pan_error = 360 - pan_error
+
+        target_reached = pan_error < TARGET_REACHED_THRESHOLD_DEG and tilt_error < TARGET_REACHED_THRESHOLD_DEG
+        self.shared_data["target_reached"].value = target_reached
 
         return pan_vel, tilt_vel
 
-    def _run_background_scan_state(self, dt):
-        """Handle the BACKGROUND_SCAN state."""
-        if self.current_scan_el < SCAN_TILT_MIN:
-            print("[HWCtrl] BACKGROUND_SCAN finished.")
-            self._save_background_data()
-            self.shared_data["background_scan_active"].value = False
-        elif self.scan_is_turning:
-            pan_error = abs(self._calculate_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos))
-            if pan_error < TARGET_REACHED_THRESHOLD_DEG:
-                self.pan_pid.reset()
-                self.scan_pan_direction *= -1
-                self.current_scan_el -= SCAN_STEP_DEG
-                self.scan_is_turning = False
-                self.scan_target_az = SCAN_PAN_MIN if self.scan_pan_direction == 1 else SCAN_PAN_MAX
-                self.pan_avoid_wrap = True
-                print(
-                    f"[HWCtrl-SCAN] Row finished. New elevation: {self.current_scan_el:.1f} deg, Direction: {self.scan_pan_direction}")
-        else:  # Sweeping
-            self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
-            if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX - SCAN_TURNAROUND_DEG:
-                self.scan_target_az = SCAN_PAN_MAX
-                self.scan_is_turning = True
-                self.pan_avoid_wrap = False
-            elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN + SCAN_TURNAROUND_DEG:
-                self.scan_target_az = SCAN_PAN_MIN
-                self.scan_is_turning = True
-                self.pan_avoid_wrap = False
+    def _run_background_scan_state(self):
+        """Handles the 'Step-and-Scan' logic."""
+        pan_vel, tilt_vel = 0, 0
 
-        self.pan_pid.set_setpoint(self.scan_target_az)
-        pan_vel = self.pan_pid.update(self.internal_pan_pos, self.pan_avoid_wrap)
+        # Set the target for the PID controllers
+        self.pan_pid.set_setpoint(self.current_scan_az)
         self.tilt_pid.set_setpoint(self.current_scan_el)
-        tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
+
+        # Calculate error to check if we've reached the target
+        pan_error = abs(self.pan_pid.get_setpoint() - self.internal_pan_pos)
+        if pan_error > 180: pan_error = 360 - pan_error  # Handle wrap around
+        tilt_error = abs(self.tilt_pid.get_setpoint() - self.internal_tilt_pos)
+        is_target_reached = pan_error < TARGET_REACHED_THRESHOLD_DEG and tilt_error < TARGET_REACHED_THRESHOLD_DEG
+
+        if self.scan_state == "MOVING":
+            if is_target_reached:
+                # We've arrived. Stop the motors and switch to SAMPLING state.
+                self.scan_state = "SAMPLING"
+                self.scan_settle_start_time = time.monotonic()
+                pan_vel, tilt_vel = 0, 0
+            else:
+                # Still moving towards the target point.
+                pan_vel = self.pan_pid.update(self.internal_pan_pos)
+                tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
+
+        elif self.scan_state == "SAMPLING":
+            # Wait for the settling time to pass
+            if time.monotonic() - self.scan_settle_start_time >= SCAN_SETTLE_TIME_S:
+                # --- DATA RECORDING ---
+                # Clear old readings from the queue and get the most recent one
+                last_reading = None
+                while not self.lidar_queue.empty():
+                    last_reading = self.lidar_queue.get_nowait()
+
+                if last_reading:
+                    dist, strength, _ = last_reading
+                    # Log the data with the TARGET position for perfect accuracy
+                    self.background_data_buffer.append(
+                        [self.current_scan_az, self.current_scan_el, dist, strength]
+                    )
+
+                # --- MOVE TO NEXT POINT ---
+                # Calculate the next azimuth position
+                self.current_scan_az += SCAN_STEP_DEG * self.scan_pan_direction
+
+                # Check if we reached the end of a row
+                if self.scan_pan_direction == 1 and self.current_scan_az > SCAN_PAN_MAX:
+                    # End of forward row, move down and reverse
+                    self.current_scan_el -= SCAN_STEP_DEG
+                    self.scan_pan_direction = -1
+                    self.current_scan_az = SCAN_PAN_MAX  # Set target for next row
+                elif self.scan_pan_direction == -1 and self.current_scan_az < SCAN_PAN_MIN:
+                    # End of backward row, move down and go forward
+                    self.current_scan_el -= SCAN_STEP_DEG
+                    self.scan_pan_direction = 1
+                    self.current_scan_az = SCAN_PAN_MIN  # Set target for next row
+
+                # Check if scan is complete
+                if self.current_scan_el < SCAN_TILT_MIN:
+                    print("[HWCtrl] BACKGROUND_SCAN finished.")
+                    self._save_background_data()
+                    self.shared_data["background_scan_active"].value = False
+                else:
+                    # Switch back to MOVING state for the next point
+                    self.scan_state = "MOVING"
 
         return pan_vel, tilt_vel
 
     def _save_background_data(self):
         """Saves the collected background scan data to a file."""
         if self.background_data_buffer:
-            print(f"[HWCtrl] Auto-saving {len(self.background_data_buffer)} background scan points...")
+            print(f"[HWCtrl] Saving {len(self.background_data_buffer)} background scan points...")
             try:
                 np.save(self.shared_data["background_path"].value, np.array(self.background_data_buffer))
                 print(f"[HWCtrl] Data saved to {self.shared_data['background_path'].value}")
-                self.background_data_buffer = []  # Clear buffer after saving
             except Exception as e:
                 print(f"[HWCtrl] ERROR saving background data: {e}")
+        else:
+            print("[HWCtrl] No background data to save.")
 
     def run(self):
-        """Main loop for the hardware controller."""
         try:
             self.pi = pigpio.pi()
             if not self.pi.connected:
@@ -300,15 +301,15 @@ class HardwareController:
             # Setup GPIO pins
             self.pi.set_mode(STEPPER_ENABLE_PIN, pigpio.OUTPUT)
             self.pi.set_mode(STEPPER_SLEEP_PIN, pigpio.OUTPUT)
-            self.pi.write(STEPPER_ENABLE_PIN, 0)  # Enable driver
-            self.pi.write(STEPPER_SLEEP_PIN, 1)  # Wake driver
+            self.pi.write(STEPPER_ENABLE_PIN, 0)
+            self.pi.write(STEPPER_SLEEP_PIN, 1)
             print("[HWCtrl] Stepper driver enabled.")
 
             # Setup serial for LiDAR
             self.ser = serial.Serial(self.shared_data["lidar_port"].value, 115200, timeout=0.1)
+            # This command might be specific to your LiDAR model for setting sample rate/mode
             self.ser.write(bytearray([0x5A, 0x06, 0x03, 0xE8, 0x03, 0x4E]))
 
-            # Start LiDAR reader thread
             lidar_thread = threading.Thread(target=self._lidar_reader_thread, daemon=True)
             lidar_thread.start()
             print("[HWCtrl] Hardware Controller process is running.")
@@ -318,43 +319,28 @@ class HardwareController:
 
             while not self.shared_data["shutdown"].value:
                 dt = time.monotonic() - last_loop_time
-                if dt <= 0.0005:
+                if dt <= 0.001:  # Loop at roughly 1kHz max
+                    time.sleep(0.0005)
                     continue
                 last_loop_time = time.monotonic()
 
                 current_state = self._handle_state_machine(current_state)
 
                 pan_vel, tilt_vel = 0, 0
-                if current_state in ["GOTO_POSITION", "HF_TRACKING"]:
-                    pan_vel, tilt_vel = self._run_goto_or_tracking_state(current_state)
+                if current_state == "GOTO_POSITION":
+                    pan_vel, tilt_vel = self._run_goto_position_state()
                 elif current_state == "BACKGROUND_SCAN":
-                    pan_vel, tilt_vel = self._run_background_scan_state(dt)
+                    pan_vel, tilt_vel = self._run_background_scan_state()
+                # In IDLE state, velocities remain 0
 
-                self.last_pan_velocity = pan_vel
-                self.last_tilt_velocity = tilt_vel
                 self._execute_motor_commands(pan_vel, tilt_vel, dt)
 
-                # Process LiDAR data from queue
+                # Process any remaining LiDAR data for live feed (not used for background scan)
                 try:
                     while not self.lidar_queue.empty():
                         dist, strength, ts = self.lidar_queue.get_nowait()
                         with self.shared_data["lidar_data"].get_lock():
                             self.shared_data["lidar_data"][:] = [dist, strength, ts]
-
-                        if current_state == "BACKGROUND_SCAN":
-                            # Calculate the time elapsed since the measurement was taken
-                            time_since_measurement = time.monotonic() - ts
-
-                            # Estimate the historical position
-                            # This subtracts the distance the motor has traveled since the reading
-                            estimated_pan_pos = self.internal_pan_pos - (self.last_pan_velocity * time_since_measurement)
-                            estimated_tilt_pos = self.internal_tilt_pos - (self.last_tilt_velocity * time_since_measurement)
-
-                            # Normalize pan position to handle wrap-around
-                            estimated_pan_pos %= 360
-
-                            self.background_data_buffer.append(
-                                [estimated_pan_pos, estimated_tilt_pos, dist, strength])
                 except queue.Empty:
                     pass
 
@@ -362,10 +348,7 @@ class HardwareController:
                 self.shared_data["stepper_degrees"].value = self.internal_pan_pos
                 self.shared_data["servo_degrees"].value = self.internal_tilt_pos
 
-                time.sleep(0.0001)
-
         except Exception as e:
-            import traceback
             print(f"[HWCtrl] CRITICAL ERROR: {e}")
             traceback.print_exc()
         finally:
@@ -376,14 +359,15 @@ class HardwareController:
 
             if self.pi and self.pi.connected:
                 self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
-                self.pi.write(STEPPER_ENABLE_PIN, 1)  # Disable driver
-                self.pi.write(STEPPER_SLEEP_PIN, 0)  # Sleep driver
+                self.pi.write(STEPPER_ENABLE_PIN, 1)
+                self.pi.write(STEPPER_SLEEP_PIN, 0)
                 self.pi.set_servo_pulsewidth(SERVO_PIN, 0)
                 self.pi.stop()
                 print("[HWCtrl] pigpio resources released.")
 
             if self.ser and self.ser.is_open:
                 self.ser.close()
+                print("[HWCtrl] Serial port closed.")
 
 
 def run_hardware_controller(shared_data):
