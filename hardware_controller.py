@@ -237,10 +237,7 @@ class HardwareController:
                             self.current_scan_el -= SCAN_STEP_DEG
                             self.scan_is_turning = False
                             print(f"[HWCtrl-SCAN] Row finished. New elevation: {self.current_scan_el:.1f} deg, Direction: {self.scan_pan_direction}")
-                            self.tilt_pid.set_setpoint(self.current_scan_el)
-                            tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
-                            self._execute_motor_commands(pan_vel, tilt_vel, dt)
-                            time.sleep(0.05)
+
                     else:
                         # We are sweeping. Move the virtual target.
                         self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
