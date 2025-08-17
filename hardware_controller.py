@@ -13,7 +13,7 @@ STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 TARGET_REACHED_THRESHOLD_DEG = 0.4
-SCAN_PAN_SPEED_DPS = 1000.0
+SCAN_PAN_SPEED_DPS = 600.0
 
 SCAN_TURNAROUND_DEG = 0.4
 
@@ -58,8 +58,8 @@ SCAN_PAN_CALIBRATION_OFFSET_DEG = 0  # <--- TUNE THIS VALUE
 # 3. With PAN_KP set, slowly increase PAN_KD to reduce overshoot at the end of a move. If the jump returns, this value is too high.
 # 4. If needed, add a very small PAN_KI to help the motor hold its final position accurately.
 #
-MAX_PAN_SPEED_DPS = 1000.0
-PAN_KP, PAN_KI, PAN_KD = 6, 0.0001, 0.01
+MAX_PAN_SPEED_DPS = 800.0
+PAN_KP, PAN_KI, PAN_KD = 6, 0.0001, 0.005
 MAX_TILT_SPEED_DPS = 600.0
 TILT_KP, TILT_KI, TILT_KD = 6, 0.000, 0.000
 
