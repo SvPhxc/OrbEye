@@ -37,7 +37,7 @@ TILT_KP, TILT_KI, TILT_KD = 12.0, 0.000, 0.000
 # ==============================================================================
 class PIDController:
     # ... (PID Controller class remains unchanged) ...
-    def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-100, 100), anti_windup_limit=20, wrap_range=None):
+    def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-150, 150), anti_windup_limit=1, wrap_range=None):
         self.Kp, self.Ki, self.Kd, self.setpoint, self.output_limits, self.anti_windup_limit, self.wrap_range = Kp, Ki, Kd, setpoint, output_limits, anti_windup_limit, wrap_range
         self._integral, self._last_error, self._last_output, self._last_time = 0, 0, 0, time.monotonic()
 
@@ -79,10 +79,10 @@ class HardwareController:
         self.shared_data = shared_data
         self.pi, self.ser = None, None
         self.shutdown_event = threading.Event()
-        self.lidar_queue = queue.Queue(maxsize=10)
+        self.lidar_queue = queue.Queue(maxsize=20)
         self.internal_pan_pos = shared_data["stepper_degrees"].value
         self.internal_tilt_pos = shared_data["servo_degrees"].value
-        self.pan_pid = PIDController(PAN_KP, PAN_KI, PAN_KD, output_limits=(-MAX_PAN_SPEED_DPS, MAX_PAN_SPEED_DPS),anti_windup_limit=20,
+        self.pan_pid = PIDController(PAN_KP, PAN_KI, PAN_KD, output_limits=(-MAX_PAN_SPEED_DPS, MAX_PAN_SPEED_DPS),anti_windup_limit=1,
                                      wrap_range=(0, 360))
         self.tilt_pid = PIDController(TILT_KP, TILT_KI, TILT_KD,
                                       output_limits=(-MAX_TILT_SPEED_DPS, MAX_TILT_SPEED_DPS))
