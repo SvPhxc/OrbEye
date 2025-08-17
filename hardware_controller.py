@@ -72,7 +72,7 @@ TILT_KP, TILT_KI, TILT_KD = 10, 0.000, 0.000
 # ==============================================================================
 class PIDController:
     # ... (PID Controller class remains unchanged) ...
-    def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-90, 90), anti_windup_limit=1, wrap_range=None):
+    def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-90, 90), anti_windup_limit=10, wrap_range=None):
         self.Kp, self.Ki, self.Kd, self.setpoint, self.output_limits, self.anti_windup_limit, self.wrap_range = Kp, Ki, Kd, setpoint, output_limits, anti_windup_limit, wrap_range
         self._integral, self._last_error, self._last_output, self._last_time = 0, 0, 0, time.monotonic()
 
@@ -232,7 +232,7 @@ class HardwareController:
                         pan_error = abs(
                             self._get_shortest_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos))
                         if pan_error < TARGET_REACHED_THRESHOLD_DEG:
-                            self.pan_pid.reset()
+                            
                             self.scan_pan_direction *= -1
                             self.current_scan_el -= SCAN_STEP_DEG
                             self.scan_is_turning = False
