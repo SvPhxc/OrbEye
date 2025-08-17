@@ -356,7 +356,7 @@ class HandTracker:
         # 1. SCAN RADIUS: Set to half the LiDAR's FOV.
         # This ensures the edge of the LiDAR's sensing cone passes through the
         # last known target position, maximizing the chance of a hit in a tight circle.
-        self.scan_radius = (self.LIDAR_FOV / 1.5) * (1 + (distance_m ))
+        self.scan_radius = (self.LIDAR_FOV / 1.5) * (1 + (distance_m /10))
 
         # 2. SCAN POINTS: More points for closer targets, fewer for distant ones.
         # Closer targets have higher apparent velocity and benefit from a denser scan pattern.
