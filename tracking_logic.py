@@ -292,26 +292,37 @@ class HandTrackerState(Enum):
 
 
 
-
-
-# --- Modified HandTracker Class ---
-
 class HandTracker:
     """
     High-performance predictive tracker with velocity smoothing, dynamic rate adjustment,
     and a predictive "coasting" search mode for target reacquisition.
+    Scan parameters (radius, points, speed) are dynamically adjusted based on target distance.
     """
 
-    def __init__(self, scan_radius=10, scan_points=8, time_per_waypoint=0.03, timeout=1.0, coast_timeout=1.5,
+    # Constants based on the TF Mini-S hardware specifications.
+    # The Field of View (FOV) of the TF Mini-S is approximately 2 degrees.
+    LIDAR_FOV = 2.0
+
+    def __init__(self, timeout=1.0, coast_timeout=1.5,
                  prediction_factor=1, velocity_smoothing_factor=0.4):
-        self.scan_radius = scan_radius
-        self.scan_points = scan_points
-        self.time_per_waypoint = time_per_waypoint
+        """
+        Initializes the HandTracker.
+        Note: scan_radius, scan_points, and time_per_waypoint are now dynamically
+        calculated and will be set upon first target acquisition.
+        """
+        # Dynamic parameters are initialized but will be immediately overwritten
+        # by _update_scan_parameters upon target acquisition.
+        self.scan_radius = self.LIDAR_FOV / 2.0
+        self.scan_points = 8
+        self.time_per_waypoint = 0.03
+
+        # Configuration for tracking behavior
         self.timeout = timeout
-        self.coast_timeout = coast_timeout  # NEW: How long to search before giving up
+        self.coast_timeout = coast_timeout
         self.prediction_factor = prediction_factor
         self.velocity_smoothing_factor = velocity_smoothing_factor
 
+        # Internal state variables
         self.state = HandTrackerState.IDLE
         self.best_point = {'az': 0, 'el': 0, 'strength': 0, 'dist': 0, 'time': 0}
         self.previous_best_point = None
@@ -319,16 +330,16 @@ class HandTracker:
         self.scan_index = 0
         self.last_waypoint_time = 0
 
-        # State for smoothed velocity
+        # State for smoothed velocity calculation
         self.smoothed_velocity = {'az': 0.0, 'el': 0.0}
 
-        # --- NEW: State variables for coasting ---
+        # State variables for the "coasting" (predictive search) mode
         self.coast_start_time = 0
         self.last_coast_update_time = 0
         self.coasting_target_pos = {'az': 0.0, 'el': 0.0}
 
     def reset(self):
-        """Resets the tracker to its initial state."""
+        """Resets the tracker to its initial idle state."""
         self.state = HandTrackerState.IDLE
         self.best_point['strength'] = 0
         self.best_point['time'] = 0
@@ -337,20 +348,62 @@ class HandTracker:
         self.coast_start_time = 0
         print("[HandTracker] Reset.")
 
+    def _update_scan_parameters(self, distance_m):
+        """
+        Dynamically adjusts scan points and speed based on the target's distance.
+        This is the core of the distance-based adaptation.
+        """
+        # 1. SCAN RADIUS: Set to half the LiDAR's FOV.
+        # This ensures the edge of the LiDAR's sensing cone passes through the
+        # last known target position, maximizing the chance of a hit in a tight circle.
+        self.scan_radius = self.LIDAR_FOV / 2.0
+
+        # 2. SCAN POINTS: More points for closer targets, fewer for distant ones.
+        # Closer targets have higher apparent velocity and benefit from a denser scan pattern.
+        min_points, max_points = 6, 16
+        # We assume a maximum effective tracking distance for this scaling logic (e.g., 12 meters).
+        effective_dist_max = 12.0
+        # Linearly interpolate the number of points based on distance.
+        self.scan_points = int(max_points - (distance_m / effective_dist_max) * (max_points - min_points))
+        # Clamp the value to stay within the defined min/max bounds.
+        self.scan_points = max(min_points, min(max_points, self.scan_points))
+
+        # 3. TIME PER WAYPOINT (Scan Speed): Scan faster for closer targets.
+        # Linger longer on points for distant targets, which may have a weaker return signal.
+        min_time, max_time = 0.02, 0.06  # in seconds
+        self.time_per_waypoint = min_time + (distance_m / effective_dist_max) * (max_time - min_time)
+        # Clamp the value to stay within the defined min/max bounds.
+        self.time_per_waypoint = max(min_time, min(max_time, self.time_per_waypoint))
+
+        print(f"[HandTracker] Distance: {distance_m:.2f}m -> "
+              f"Radius: {self.scan_radius:.2f}°, "
+              f"Points: {self.scan_points}, "
+              f"Time/Point: {self.time_per_waypoint:.3f}s")
+
     def _generate_scan_path(self, center_az, center_el):
-        """Generates a circular scan path around a center point."""
+        """
+        Generates a circular scan path using the current dynamic scan parameters.
+        """
         self.scan_path = []
+        if self.scan_points <= 0: return  # Safety check
+
         for i in range(self.scan_points):
             angle = (i / self.scan_points) * 2 * math.pi
             az_offset = self.scan_radius * math.cos(angle)
             el_offset = self.scan_radius * math.sin(angle)
             self.scan_path.append((center_az + az_offset, center_el + el_offset))
+
         norm_az = center_az % 360
-        print(f"[HandTracker] Generated new scan path centered at Az={norm_az:.1f}, El={center_el:.1f}")
+        print(
+            f"[HandTracker] Generated new {self.scan_points}-point scan path centered at Az={norm_az:.1f}, El={center_el:.1f}")
 
     def update(self, current_az, current_el, measurement, shared_data):
+        """
+        Main update loop for the tracker's state machine.
+        """
         current_time = time.time()
 
+        # STATE: IDLE - Waiting for a target
         if self.state == HandTrackerState.IDLE:
             if measurement:
                 dist, strength = measurement
@@ -358,13 +411,18 @@ class HandTracker:
                 self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
                                    'time': current_time}
                 self.previous_best_point = self.best_point.copy()
+
+                # ** Dynamically set parameters based on the first detection **
+                self._update_scan_parameters(dist)
+
                 self._generate_scan_path(current_az, current_el)
                 self.scan_index = 0
                 self.last_waypoint_time = current_time
                 print(f"[HandTracker] Acquired target. Starting scan at Az={current_az:.1f}, El={current_el:.1f}")
 
+        # STATE: SCANNING - Actively tracking the target
         elif self.state == HandTrackerState.SCANNING:
-            # --- TRANSITION TO COASTING on target loss ---
+            # Transition to COASTING if the target hasn't been seen for too long
             if current_time - self.best_point['time'] > self.timeout:
                 print("[HandTracker] Target lost. Entering COASTING mode.")
                 self.state = HandTrackerState.COASTING
@@ -373,91 +431,101 @@ class HandTracker:
                 self.coasting_target_pos = {'az': self.best_point['az'], 'el': self.best_point['el']}
                 return
 
+            # If we have a measurement, check if it's better than our current best point
             if measurement:
                 dist, strength = measurement
-                #check distance against background scan
-
                 if strength > self.best_point['strength']:
                     self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
-                                        'time': current_time}
+                                       'time': current_time}
 
-            # Dynamic Rate Adjustment
+            # Move to the next waypoint in the scan path if enough time has passed
             time_since_last_waypoint = current_time - self.last_waypoint_time
             if time_since_last_waypoint >= self.time_per_waypoint:
                 waypoints_to_advance = max(1, int(time_since_last_waypoint / self.time_per_waypoint))
                 self.last_waypoint_time = current_time
                 for _ in range(waypoints_to_advance):
+                    if not self.scan_path: continue  # Safety check
+
                     command_az, command_el = self.scan_path[self.scan_index]
                     command_motors_to_target(command_az, command_el, shared_data)
                     self.scan_index = (self.scan_index + 1)
 
+                    # If a full scan cycle is complete, generate a new predicted path
                     if self.scan_index >= len(self.scan_path):
                         self.scan_index = 0
                         next_center_az, next_center_el = self.best_point['az'], self.best_point['el']
 
+                        # Calculate smoothed velocity and predict the next center point
                         if self.previous_best_point and self.previous_best_point['strength'] > 0:
-                            raw_delta_az = self.best_point['az'] - self.previous_best_point['az']
-                            if raw_delta_az > 180:
-                                raw_delta_az -= 360
-                            elif raw_delta_az < -180:
-                                raw_delta_az += 360
-                            raw_delta_el = self.best_point['el'] - self.previous_best_point['el']
-                            s = self.velocity_smoothing_factor
-                            self.smoothed_velocity['az'] = (s * self.smoothed_velocity['az']) + ((1 - s) * raw_delta_az)
-                            self.smoothed_velocity['el'] = (s * self.smoothed_velocity['el']) + ((1 - s) * raw_delta_el)
-                            next_center_az = self.best_point['az'] + (
-                                        self.smoothed_velocity['az'] * self.prediction_factor)
-                            next_center_el = self.best_point['el'] + (
-                                        self.smoothed_velocity['el'] * self.prediction_factor)
+                            dt = self.best_point['time'] - self.previous_best_point['time']
+                            if dt > 0:
+                                raw_delta_az = self.best_point['az'] - self.previous_best_point['az']
+                                # Handle azimuth wrap-around (e.g., from 359 to 1 degree)
+                                if raw_delta_az > 180:
+                                    raw_delta_az -= 360
+                                elif raw_delta_az < -180:
+                                    raw_delta_az += 360
 
-                        # --- NEW: Save best point to shared data ---
-                        if "tracking_history" in shared_data:
-                            point_data = [self.best_point['az'], self.best_point['el'], self.best_point['dist'],
-                                          self.best_point['strength'], self.best_point['time']]
-                            shared_data["tracking_history"].append(point_data)
-                            # When you decide it's time to generate the TLE
-                            if len(shared_data["tracking_history"]) >= 30:  # Example: trigger after 5 points
-                                print("[Tracking Logic] Triggering TLE generation.")
-                                shared_data["generate_tle"].value = True
+                                raw_delta_el = self.best_point['el'] - self.previous_best_point['el']
+
+                                s = self.velocity_smoothing_factor
+                                self.smoothed_velocity['az'] = (s * self.smoothed_velocity['az']) + (
+                                            (1 - s) * (raw_delta_az / dt))
+                                self.smoothed_velocity['el'] = (s * self.smoothed_velocity['el']) + (
+                                            (1 - s) * (raw_delta_el / dt))
+
+                                # Predict based on one full scan cycle time
+                                prediction_time = len(self.scan_path) * self.time_per_waypoint
+                                next_center_az = self.best_point['az'] + (
+                                            self.smoothed_velocity['az'] * prediction_time * self.prediction_factor)
+                                next_center_el = self.best_point['el'] + (
+                                            self.smoothed_velocity['el'] * prediction_time * self.prediction_factor)
 
                         self.previous_best_point = self.best_point.copy()
+
+                        # ** Update scan parameters for the next cycle based on the latest distance **
+                        self._update_scan_parameters(self.best_point['dist'])
+
                         self._generate_scan_path(next_center_az, next_center_el)
+                        # Decay strength to prioritize finding a new, stronger signal
                         self.best_point['strength'] *= 0.8
 
-        # --- NEW: COASTING STATE LOGIC ---
+        # STATE: COASTING - Target lost, predicting its path to reacquire
         elif self.state == HandTrackerState.COASTING:
-            # Failure: Coasted for too long without finding the target
+            # If coasting for too long, give up and reset
             if current_time - self.coast_start_time > self.coast_timeout:
                 print("[HandTracker] Coasting failed to reacquire target. Resetting.")
                 self.reset()
                 return
 
-            # Success: Found a target while coasting
+            # Success: Reacquired a target while coasting
             if measurement:
                 dist, strength = measurement
                 print("[HandTracker] Reacquired target during coast! Resuming scan.")
                 self.state = HandTrackerState.SCANNING
                 self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
                                    'time': current_time}
-                # Center new scan on the reacquired point
+
+                # ** Update parameters based on reacquired distance **
+                self._update_scan_parameters(dist)
+
                 self._generate_scan_path(current_az, current_el)
                 self.scan_index = 0
                 self.last_waypoint_time = current_time
                 return
 
-            # Still coasting: Predict and move along the last known velocity vector
+            # Continue moving along the predicted path
             dt = current_time - self.last_coast_update_time
-            self.last_coast_update_time = current_time
+            if dt > 0:
+                self.last_coast_update_time = current_time
 
-            # Calculate the predicted change in position
-            predicted_delta_az = 4.5*self.smoothed_velocity['az'] * (dt / (self.scan_points * self.time_per_waypoint))
-            predicted_delta_el = 1.5*self.smoothed_velocity['el'] * (dt / (self.scan_points * self.time_per_waypoint))
+                predicted_delta_az = self.smoothed_velocity['az'] * dt
+                predicted_delta_el = self.smoothed_velocity['el'] * dt
 
-            # Update the coasting target position
-            self.coasting_target_pos['az'] += predicted_delta_az
-            self.coasting_target_pos['el'] += predicted_delta_el
+                self.coasting_target_pos['az'] += predicted_delta_az
+                self.coasting_target_pos['el'] += predicted_delta_el
 
-            command_motors_to_target(self.coasting_target_pos['az'], self.coasting_target_pos['el'], shared_data)
+                command_motors_to_target(self.coasting_target_pos['az'], self.coasting_target_pos['el'], shared_data)
 
 class ReactiveTracker:
     """Non-predictive tracker for immediate, reactive tracking of any target."""
