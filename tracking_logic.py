@@ -24,7 +24,7 @@ class ClutterFilter:
     significantly closer than the known background object.
     """
 
-    def __init__(self, background_file="background_data.npy", angular_tolerance=1.1, distance_margin_cm=70.0):
+    def __init__(self, background_file="background_data.npy", angular_tolerance=1, distance_margin_cm=70.0):
         """
         Initializes the filter with a 2D (azimuth, elevation) background map.
 
@@ -434,7 +434,8 @@ class HandTracker:
             # If we have a measurement, check if it's better than our current best point
             if measurement:
                 dist, strength = measurement
-                if strength > self.best_point['strength']:
+
+                if strength > self.best_point['strength']and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
                     self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
                                        'time': current_time}
 
