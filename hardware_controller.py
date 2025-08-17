@@ -251,22 +251,19 @@ class HardwareController:
                         self.pan_pid.set_setpoint(self.scan_target_az)
                         pan_error_for_turn = abs(self._calculate_pan_error(self.scan_target_az, self.internal_pan_pos, avoid_wrap=False))
                         # Check if we've entered a turnaround zone.
-                        if pan_error_for_turn < TARGET_REACHED_THRESHOLD_DEG * 2:
-                            # We've reached the end of the line. Enter the turnaround state.
+                        if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX - SCAN_TURNAROUND_DEG:
+                            self.scan_target_az = SCAN_PAN_MAX  # Lock target to the edge
                             self.scan_is_turning = True
-
-                            # Lock the PID setpoint to the boundary we just reached.
-                            # This ensures the motor actively holds its position at the edge
-                            # while the elevation motor moves and the logic prepares for the next line.
-                            if self.scan_pan_direction == 1:
-                                self.pan_pid.set_setpoint(SCAN_PAN_MAX)
-                            else:
-                                self.pan_pid.set_setpoint(SCAN_PAN_MIN)
+                            self.pan_avoid_wrap = False
+                        elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN + SCAN_TURNAROUND_DEG:
+                            self.scan_target_az = SCAN_PAN_MIN  # Lock target to the edge
+                            self.scan_is_turning = True
+                            self.pan_avoid_wrap = False
 
 
                     # In all cases (sweeping or turning), tell the PID to chase the target.
+                    self.pan_pid.set_setpoint(self.scan_target_az % 360)
                     pan_vel = self.pan_pid.update(self.internal_pan_pos, self.pan_avoid_wrap)
-
                     self.tilt_pid.set_setpoint(self.current_scan_el)
                     tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
