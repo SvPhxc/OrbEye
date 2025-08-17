@@ -12,7 +12,7 @@ STEPPER_DIR_PIN = 3
 STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
-TARGET_REACHED_THRESHOLD_DEG = 0.056
+TARGET_REACHED_THRESHOLD_DEG = 0.1
 SCAN_PAN_SPEED_DPS = 1000.0
 
 SCAN_TURNAROUND_DEG = 0
@@ -59,9 +59,9 @@ SCAN_PAN_CALIBRATION_OFFSET_DEG = 0.5  # <--- TUNE THIS VALUE
 # 4. If needed, add a very small PAN_KI to help the motor hold its final position accurately.
 #
 MAX_PAN_SPEED_DPS = 1000.0
-PAN_KP, PAN_KI, PAN_KD = 10.0, 0.0001, 0.0005
+PAN_KP, PAN_KI, PAN_KD = 12.0, 0.0001, 0.0005
 MAX_TILT_SPEED_DPS = 600.0
-TILT_KP, TILT_KI, TILT_KD = 10.0, 0.000, 0.000
+TILT_KP, TILT_KI, TILT_KD = 12.0, 0.000, 0.000
 
 
 # ==============================================================================
@@ -72,7 +72,7 @@ TILT_KP, TILT_KI, TILT_KD = 10.0, 0.000, 0.000
 # ==============================================================================
 class PIDController:
     # ... (PID Controller class remains unchanged) ...
-    def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-100, 100), anti_windup_limit=20, wrap_range=None):
+    def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-90, 90), anti_windup_limit=1, wrap_range=None):
         self.Kp, self.Ki, self.Kd, self.setpoint, self.output_limits, self.anti_windup_limit, self.wrap_range = Kp, Ki, Kd, setpoint, output_limits, anti_windup_limit, wrap_range
         self._integral, self._last_error, self._last_output, self._last_time = 0, 0, 0, time.monotonic()
 
@@ -111,7 +111,7 @@ class HardwareController:
         self.internal_pan_pos = shared_data["stepper_degrees"].value
         self.internal_tilt_pos = shared_data["servo_degrees"].value
         self.pan_pid = PIDController(PAN_KP, PAN_KI, PAN_KD, output_limits=(-MAX_PAN_SPEED_DPS, MAX_PAN_SPEED_DPS),
-                                     anti_windup_limit=20,
+                                     anti_windup_limit=10,
                                      wrap_range=(0, 360))
         self.tilt_pid = PIDController(TILT_KP, TILT_KI, TILT_KD,
                                       output_limits=(-MAX_TILT_SPEED_DPS, MAX_TILT_SPEED_DPS))
