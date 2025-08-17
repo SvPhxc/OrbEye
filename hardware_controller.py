@@ -11,59 +11,34 @@ STEPPER_PULSE_PIN = 19
 STEPPER_DIR_PIN = 3
 STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
-MICROSTEP_ANGLE = 0.05625
-TARGET_REACHED_THRESHOLD_DEG = 0.4
-SCAN_PAN_SPEED_DPS = 600.0
-
-SCAN_TURNAROUND_DEG = 0.4
+MICROSTEP_ANGLE = 0.05625  # For DRV8825 with 1/32 microstepping on a 1.8-degree motor
+TARGET_REACHED_THRESHOLD_DEG = 0.5 # Increased threshold slightly for stability
+SCAN_PAN_SPEED_DPS = 180.0 # Adjusted for a smooth, data-rich concentric scan
 
 # --- Define the boundaries and resolution for scanning ---
-SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360
+# SCAN_PAN_MIN/MAX are implicitly 0/360 in the new logic
 SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90
-SCAN_STEP_DEG = 1.0
+SCAN_STEP_DEG = 1.0 # The amount the servo moves down for each new ring
 
 # ==============================================================================
 # --- SCAN CALIBRATION ---
 # This value helps correct for the "ghosting" or "offset image" effect caused by
-# system latency and the physical offset of the LiDAR sensor from the center of rotation.
-# It applies a small, direction-dependent angular correction to the logged data.
+# system latency. It's now applied differently based on the direction of the scan.
 #
 # YOU WILL NEED TO TUNE THIS VALUE EXPERIMENTALLY:
-# - If the return scan lines are shifted TO THE RIGHT of the initial scan lines, INCREASE this value.
-# - If the return scan lines are shifted TO THE LEFT of the initial scan lines, DECREASE this value.
-# Start with a small value like 0.5 and adjust until the images align.
+# - If the return scan lines are shifted TO THE RIGHT of the forward scan lines, INCREASE this value.
+# - If the return scan lines are shifted TO THE LEFT of the forward scan lines, DECREASE this value.
 SCAN_PAN_CALIBRATION_OFFSET_DEG = 0  # <--- TUNE THIS VALUE
 # ==============================================================================
 
 
 # ==============================================================================
 # --- PID TUNING GAINS ---
-# Tuning these values is critical to eliminating the motor jump and ensuring smooth operation.
-#
-# PAN_KP (Proportional): The main driving force. Higher values make it react faster.
-#   - If too high, the motor will be jerky and overshoot.
-#   - If too low, it will be sluggish and lag behind the target.
-#
-# PAN_KI (Integral): Corrects for steady-state error over time. Helps the motor hold position.
-#   - A small value is often sufficient. If too high, it can lead to oscillation and overshoot.
-#
-# PAN_KD (Derivative): Dampens the response and prevents overshoot. Acts like a brake.
-#   - **THE MOTOR JUMP IS LIKELY CAUSED BY THIS VALUE BEING TOO HIGH.**
-#   - A high Kd can cause a violent "kick" in response to sudden changes (like starting a new scan line).
-#   - Try reducing this value significantly, or even setting it to 0, to see if the jump disappears.
-#
-# TO TUNE:
-# 1. Start by setting PAN_KI and PAN_KD to 0.
-# 2. Increase PAN_KP until the motor moves quickly but starts to oscillate or become jerky. Then reduce it by about 20-30%.
-# 3. With PAN_KP set, slowly increase PAN_KD to reduce overshoot at the end of a move. If the jump returns, this value is too high.
-# 4. If needed, add a very small PAN_KI to help the motor hold its final position accurately.
-#
-MAX_PAN_SPEED_DPS = 800.0
-PAN_KP, PAN_KI, PAN_KD = 6, 0.0001, 0.005
+# These are still used for "Go-To" modes and for holding position between rings.
+MAX_PAN_SPEED_DPS = 600.0
+PAN_KP, PAN_KI, PAN_KD = 7.5, 0.0001, 0.0005
 MAX_TILT_SPEED_DPS = 600.0
-TILT_KP, TILT_KI, TILT_KD = 6, 0.000, 0.000
-
-
+TILT_KP, TILT_KI, TILT_KD = 7.5, 0.000, 0.000
 # ==============================================================================
 
 
@@ -115,11 +90,13 @@ class HardwareController:
                                      wrap_range=(0, 360))
         self.tilt_pid = PIDController(TILT_KP, TILT_KI, TILT_KD,
                                       output_limits=(-MAX_TILT_SPEED_DPS, MAX_TILT_SPEED_DPS))
-        self.current_scan_el = SCAN_TILT_MAX
-        self.scan_pan_direction = 1
         self.background_data_buffer = []
-        self.scan_target_az = 0.0
-        self.scan_is_turning = False
+
+        # -- New state variables for concentric scan --
+        self.current_scan_el = SCAN_TILT_MAX
+        self.scan_sub_state = "IDLE" # Can be "MOVING_TILT", "PANNING_RING"
+        self.passed_scan_completion_marker = False
+
 
     def _get_shortest_pan_error(self, setpoint, current_value):
         error = setpoint - current_value
@@ -144,10 +121,11 @@ class HardwareController:
         print("[HWCtrl-LIDAR] LiDAR reader thread shut down.")
 
     def _execute_motor_commands(self, pan_velocity_dps, tilt_velocity_dps, dt):
-        # ... (motor execution logic remains unchanged) ...
+        # The direction pin is now set based on the sign of the velocity
         self.internal_pan_pos = (self.internal_pan_pos + (pan_velocity_dps * dt)) % 360
         self.internal_tilt_pos = max(0, min(90, self.internal_tilt_pos + (tilt_velocity_dps * dt)))
         if abs(pan_velocity_dps) > 0.1:
+            # Set direction based on velocity: 0 for negative, 1 for positive
             self.pi.write(STEPPER_DIR_PIN, 0 if pan_velocity_dps < 0 else 1)
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(min(abs(pan_velocity_dps) / MICROSTEP_ANGLE, 250000)), 500000)
         else:
@@ -173,6 +151,7 @@ class HardwareController:
                 dt = time.monotonic() - last_loop_time
                 if dt <= 0.0005: continue
                 last_loop_time = time.monotonic()
+
                 if self.shared_data["background_scan_active"].value:
                     next_state = "BACKGROUND_SCAN"
                 elif self.shared_data["go_to_target"].value:
@@ -181,87 +160,83 @@ class HardwareController:
                     next_state = "HF_TRACKING"
                 else:
                     next_state = "IDLE"
+
                 if next_state != current_state:
                     print(f"[HWCtrl] State change: {current_state} -> {next_state}")
-                    self.pan_pid.reset()
-                    self.tilt_pid.reset()
+
+                    # --- STATE TRANSITION LOGIC ---
                     if next_state == "BACKGROUND_SCAN":
-                        self.current_scan_el, self.scan_pan_direction, self.scan_is_turning = SCAN_TILT_MAX, 1, False
-                        self.scan_target_az = self.internal_pan_pos
+                        self.current_scan_el = SCAN_TILT_MAX
+                        self.pan_pid.set_setpoint(0)
+                        self.tilt_pid.set_setpoint(self.current_scan_el)
+                        self.scan_sub_state = "MOVING_TILT"
+                        print(f"[HWCtrl-SCAN] Starting Scan. Moving to Tilt: {self.current_scan_el:.1f} deg")
+                    elif current_state == "BACKGROUND_SCAN":
+                        self.scan_sub_state = "IDLE"
                     current_state = next_state
 
                 pan_vel, tilt_vel = 0, 0
 
+                # --- MAIN STATE LOGIC ---
                 if current_state == "IDLE":
                     pass
                 elif current_state == "GOTO_POSITION" or current_state == "HF_TRACKING":
-                    target_az = self.shared_data["target_azimuth"].value if current_state == "GOTO_POSITION" else \
-                        self.shared_data["predicted_azimuth"].value
-                    target_el = self.shared_data["target_elevation"].value if current_state == "GOTO_POSITION" else \
-                        self.shared_data["predicted_elevation"].value
-
+                    target_az = self.shared_data["target_azimuth"].value if current_state == "GOTO_POSITION" else self.shared_data["predicted_azimuth"].value
+                    target_el = self.shared_data["target_elevation"].value if current_state == "GOTO_POSITION" else self.shared_data["predicted_elevation"].value
                     self.pan_pid.set_setpoint(target_az)
                     self.tilt_pid.set_setpoint(target_el)
-
                     pan_vel = self.pan_pid.update(self.internal_pan_pos)
                     tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
-
                     pan_error = abs(self._get_shortest_pan_error(target_az, self.internal_pan_pos))
                     tilt_error = abs(target_el - self.internal_tilt_pos)
                     target_reached = pan_error < TARGET_REACHED_THRESHOLD_DEG and tilt_error < TARGET_REACHED_THRESHOLD_DEG
-
                     if current_state == "GOTO_POSITION":
                         self.shared_data["target_reached"].value = target_reached
+
                 elif current_state == "BACKGROUND_SCAN":
+                    # --- Concentric Scan State Machine ---
+                    if self.scan_sub_state == "MOVING_TILT":
+                        pan_vel = self.pan_pid.update(self.internal_pan_pos)
+                        tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
+                        pan_error = abs(self._get_shortest_pan_error(0, self.internal_pan_pos))
+                        tilt_error = abs(self.internal_tilt_pos - self.current_scan_el)
 
-                    if self.current_scan_el < SCAN_TILT_MIN:
-                        print("[HWCtrl] BACKGROUND_SCAN finished.")
-                        if self.background_data_buffer:
-                            print(f"[HWCtrl] Auto-saving {len(self.background_data_buffer)} background scan points...")
-                            try:
-                                np.save(self.shared_data["background_path"].value,
-                                        np.array(self.background_data_buffer))
-                                print(f"[HWCtrl] Data saved to {self.shared_data['background_path'].value}")
-                                self.background_data_buffer = []
-                            except Exception as e:
-                                print(f"[HWCtrl] ERROR saving background data: {e}")
-                        self.shared_data["background_scan_active"].value = False
+                        if pan_error < TARGET_REACHED_THRESHOLD_DEG and tilt_error < TARGET_REACHED_THRESHOLD_DEG:
+                            print(f"[HWCtrl-SCAN] Position reached. Starting ring scan at {self.current_scan_el:.1f} deg.")
+                            self.scan_sub_state = "PANNING_RING"
+                            self.passed_scan_completion_marker = False
 
-                    elif self.scan_is_turning:
-                        # We are in a turnaround. Wait for the motor to settle at the edge.
-                        pan_error = abs(
-                            self._get_shortest_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos))
-                        if pan_error < TARGET_REACHED_THRESHOLD_DEG:
+                    elif self.scan_sub_state == "PANNING_RING":
+                        pan_vel = SCAN_PAN_SPEED_DPS
+                        tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
-                            self.scan_pan_direction *= -1
+                        if self.internal_pan_pos > 355.0:
+                            self.passed_scan_completion_marker = True
+
+                        if self.passed_scan_completion_marker and self.internal_pan_pos < 10.0:
+                            print(f"[HWCtrl-SCAN] Ring finished at {self.current_scan_el:.1f} deg.")
+                            pan_vel = 0
                             self.current_scan_el -= SCAN_STEP_DEG
-                            self.scan_is_turning = False
-                            print(
-                                f"[HWCtrl-SCAN] Row finished. New elevation: {self.current_scan_el:.1f} deg, Direction: {self.scan_pan_direction}")
-                    else:
-                        # We are sweeping. Move the virtual target.
-                        self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
 
-                        if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX - SCAN_TURNAROUND_DEG:
-                            self.scan_target_az = SCAN_PAN_MAX
-                            self.scan_is_turning = True
-                        elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN + SCAN_TURNAROUND_DEG:
-                            self.scan_target_az = SCAN_PAN_MIN
-                            self.scan_is_turning = True
+                            if self.current_scan_el < SCAN_TILT_MIN:
+                                print("[HWCtrl] BACKGROUND_SCAN finished.")
+                                if self.background_data_buffer:
+                                    print(f"[HWCtrl] Auto-saving {len(self.background_data_buffer)} background scan points...")
+                                    try:
+                                        np.save(self.shared_data["background_path"].value, np.array(self.background_data_buffer))
+                                        print(f"[HWCtrl] Data saved to {self.shared_data['background_path'].value}")
+                                        self.background_data_buffer = []
+                                    except Exception as e:
+                                        print(f"[HWCtrl] ERROR saving background data: {e}")
+                                self.shared_data["background_scan_active"].value = False
+                                self.scan_sub_state = "IDLE"
+                            else:
+                                self.tilt_pid.set_setpoint(self.current_scan_el)
+                                self.pan_pid.set_setpoint(0)
+                                print(f"[HWCtrl-SCAN] Moving to next Tilt: {self.current_scan_el:.1f} deg")
+                                self.scan_sub_state = "MOVING_TILT"
 
-                    self.pan_pid.set_setpoint(self.scan_target_az)
-                    pan_vel = self.pan_pid.update(self.internal_pan_pos)
-                    self.tilt_pid.set_setpoint(self.current_scan_el)
-                    tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
-
-                else:  # HF_TRACKING
-                    pan_vel = self.pan_pid.update(self.shared_data["predicted_azimuth"].value
-                                                  if self.shared_data["predicted_azimuth"].value is not None else 0)
-                    tilt_vel = self.tilt_pid.update(self.shared_data["predicted_elevation"].value
-                                                    if self.shared_data["predicted_elevation"].value is not None else 0)
-                    pan_vel = max(-MAX_PAN_SPEED_DPS, min(MAX_PAN_SPEED_DPS, pan_vel))
-                    tilt_vel = max(-MAX_TILT_SPEED_DPS, min(MAX_TILT_SPEED_DPS, tilt_vel))
-
+                # --- Shared motor execution and LiDAR data logging ---
                 self._execute_motor_commands(pan_vel, tilt_vel, dt)
 
                 try:
@@ -270,25 +245,28 @@ class HardwareController:
                         with self.shared_data["lidar_data"].get_lock():
                             self.shared_data["lidar_data"][:] = [dist, strength, ts]
 
-                        # --- CODE MODIFIED HERE ---
-                        # Only log data during the active sweep (not during a turn)
-                        if current_state == "BACKGROUND_SCAN" and not self.scan_is_turning:
-                            # Apply a calibration offset to the pan position to correct for ghosting.
-                            corrected_pan_pos = self.internal_pan_pos + (
-                                        self.scan_pan_direction * SCAN_PAN_CALIBRATION_OFFSET_DEG)
-                            # Ensure the corrected position still wraps around 360 degrees
-                            corrected_pan_pos %= 360.0
+                        # ====================== MODIFIED SECTION ======================
+                        # Log data during both the main scan and the return trip (turnaround)
+                        if current_state == "BACKGROUND_SCAN" and (self.scan_sub_state == "PANNING_RING" or self.scan_sub_state == "MOVING_TILT"):
+                            # Apply a direction-dependent calibration offset for better accuracy.
+                            # During the main ring scan, we move in the positive direction.
+                            # During the return trip (MOVING_TILT), we move in the negative direction.
+                            if self.scan_sub_state == "PANNING_RING":
+                                # Apply positive offset for the forward scan
+                                corrected_pan_pos = (self.internal_pan_pos + SCAN_PAN_CALIBRATION_OFFSET_DEG) % 360.0
+                            else: # This means we are in MOVING_TILT
+                                # Apply negative offset for the return trip
+                                corrected_pan_pos = (self.internal_pan_pos - SCAN_PAN_CALIBRATION_OFFSET_DEG) % 360.0
 
-                            self.background_data_buffer.append(
-                                [corrected_pan_pos, self.internal_tilt_pos, dist, strength])
+                            self.background_data_buffer.append([corrected_pan_pos, self.internal_tilt_pos, dist, strength])
+                        # ============================================================
 
                 except queue.Empty:
                     pass
 
-                self.shared_data["stepper_degrees"].value, self.shared_data[
-                    "servo_degrees"].value = self.internal_pan_pos, self.internal_tilt_pos
-
+                self.shared_data["stepper_degrees"].value, self.shared_data["servo_degrees"].value = self.internal_pan_pos, self.internal_tilt_pos
                 time.sleep(0.0001)
+
         except Exception as e:
             import traceback
             print(f"[HWCtrl] CRITICAL ERROR: {e}")
@@ -296,8 +274,7 @@ class HardwareController:
         finally:
             print("[HWCtrl] Shutting down...")
             self.shutdown_event.set()
-            if 'lidar_thread' in locals() and locals()['lidar_thread'].is_alive(): locals()['lidar_thread'].join(
-                timeout=1)
+            if 'lidar_thread' in locals() and locals()['lidar_thread'].is_alive(): locals()['lidar_thread'].join(timeout=1)
             if self.pi and self.pi.connected:
                 self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
                 self.pi.write(STEPPER_ENABLE_PIN, 1)
@@ -311,9 +288,7 @@ class HardwareController:
 def get_setpoint(self):
     return self.setpoint
 
-
 PIDController.get_setpoint = get_setpoint
-
 
 def run_hardware_controller(shared_data):
     controller = HardwareController(shared_data)
