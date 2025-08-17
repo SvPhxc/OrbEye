@@ -207,66 +207,91 @@ class HardwareController:
                         self.shared_data["target_reached"].value = target_reached
                         if target_reached:
                             self.pan_avoid_wrap = False
-                elif current_state == "BACKGROUND_SCAN":
+                            # ... inside the while loop in the run() method ...
 
-                    if self.current_scan_el < SCAN_TILT_MIN:
-                        print("[HWCtrl] BACKGROUND_SCAN finished.")
+                            elif current_state == "BACKGROUND_SCAN":
+                            # First, handle the overall completion condition
+                            if self.current_scan_el < SCAN_TILT_MIN:
+                                print("[HWCtrl] BACKGROUND_SCAN finished.")
+                                # (Your auto-saving logic remains unchanged here)
+                                if self.background_data_buffer:
+                                    print(
+                                        f"[HWCtrl] Auto-saving {len(self.background_data_buffer)} background scan points...")
+                                    try:
+                                        np.save(self.shared_data["background_path"].value,
+                                                np.array(self.background_data_buffer))
+                                        print(f"[HWCtrl] Data saved to {self.shared_data['background_path'].value}")
+                                        self.background_data_buffer = []
+                                    except Exception as e:
+                                        print(f"[HWCtrl] ERROR saving background data: {e}")
+                                self.shared_data["background_scan_active"].value = False
+                                continue  # Exit this loop iteration immediately
 
-                        # Automatically save the data upon completion.
-                        if self.background_data_buffer:
-                            print(f"[HWCtrl] Auto-saving {len(self.background_data_buffer)} background scan points...")
-                            try:
-                                np.save(self.shared_data["background_path"].value,
-                                        np.array(self.background_data_buffer))
-                                print(f"[HWCtrl] Data saved to {self.shared_data['background_path'].value}")
-                                self.background_data_buffer = []  # Clear buffer after saving
-                            except Exception as e:
-                                print(f"[HWCtrl] ERROR saving background data: {e}")
+                            # --- STATE MACHINE LOGIC: TURNING vs. SWEEPING ---
 
-                        # Now, signal that the scan is no longer active.
-                        self.shared_data["background_scan_active"].value = False
+                            if self.scan_is_turning:
+                                # STATE: TURNING
+                                # Goal: Settle the motor at the edge and prepare for the next line.
+                                # For settling, we want the shortest path, so avoid_wrap=True is correct.
+                                pan_error = abs(
+                                    self._calculate_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos,
+                                                              avoid_wrap=True))
 
-                    if self.scan_is_turning:
-                        # We are in a turnaround. Wait for the motor to settle at the edge.
-                        pan_error = abs(self._calculate_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos, avoid_wrap=True))
-                        if pan_error < TARGET_REACHED_THRESHOLD_DEG:
-                            # Safely at the edge, now execute the turn.
-                            self.pan_pid.reset()
-                            self.current_scan_el -= SCAN_STEP_DEG
-                            self.scan_pan_direction *= -1
-                            if self.scan_pan_direction == 1:
-                                # If the new direction is FORWARD, our goal is the MAX boundary.
-                                self.scan_target_az = SCAN_PAN_MAX
+                                if pan_error < TARGET_REACHED_THRESHOLD_DEG:
+                                    # We are settled. Now, execute the turn.
+                                    print(f"[HWCtrl-SCAN] Row finished. New elevation: {self.current_scan_el:.1f} deg.")
+
+                                    self.current_scan_el -= SCAN_STEP_DEG
+                                    self.scan_pan_direction *= -1
+                                    self.pan_pid.reset()
+
+                                    # CRITICAL: Initialize the next sweep's virtual target to match the
+                                    # motor's current physical position. This prevents any initial jump.
+                                    if self.scan_pan_direction == 1:
+                                        # We just finished a backward sweep and are at 0. Start the new target here.
+                                        self.scan_target_az = SCAN_PAN_MIN
+                                    else:
+                                        # We just finished a forward sweep and are at 360. Start the new target here.
+                                        self.scan_target_az = SCAN_PAN_MAX
+
+                                    # Transition to the SWEEPING state for the next loop iteration.
+                                    self.scan_is_turning = False
+                                    self.pan_avoid_wrap = False  # A sweep must always go the long way around.
+
                             else:
-                                # If the new direction is BACKWARD, our goal is the MIN boundary.
-                                self.scan_target_az = SCAN_PAN_MIN
-                            self.scan_is_turning = False
-                            # Force a full rotation on direction change
+                                # STATE: SWEEPING
+                                # Goal: Move the virtual target and check if we've hit a boundary.
+                                self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
 
+                                # Check if the virtual target has reached or passed a boundary.
+                                if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX:
+                                    # Reached the MAX edge. Transition to the TURNING state.
+                                    self.scan_is_turning = True
+                                    # Lock the PID setpoint to the boundary to actively hold position.
+                                    self.pan_pid.set_setpoint(SCAN_PAN_MAX)
+                                    print(f"[HWCtrl-SCAN] Reached MAX edge. Entering turnaround...")
 
+                                elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN:
+                                    # Reached the MIN edge. Transition to the TURNING state.
+                                    self.scan_is_turning = True
+                                    # Lock the PID setpoint to the boundary to actively hold position.
+                                    self.pan_pid.set_setpoint(SCAN_PAN_MIN)
+                                    print(f"[HWCtrl-SCAN] Reached MIN edge. Entering turnaround...")
 
-                            self.pan_avoid_wrap = False
-                    else:
-                        # We are sweeping. Move the virtual target.
-                        self.pan_pid.set_setpoint(self.scan_target_az)
-                        pan_error_for_turn = abs(self._calculate_pan_error(self.scan_target_az, self.internal_pan_pos, avoid_wrap=False))
-                        # Check if we've entered a turnaround zone.
-                        if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX - SCAN_TURNAROUND_DEG:
-                            self.scan_target_az = SCAN_PAN_MAX  # Lock target to the edge
-                            self.scan_is_turning = True
-                            self.pan_avoid_wrap = False
-                        elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN + SCAN_TURNAROUND_DEG:
-                            self.scan_target_az = SCAN_PAN_MIN  # Lock target to the edge
-                            self.scan_is_turning = True
-                            self.pan_avoid_wrap = False
+                            # --- MOTOR CONTROL (Applies to both states) ---
 
+                            # If we are in the middle of a sweep, the PID's setpoint must continuously
+                            # chase the moving virtual target.
+                            if not self.scan_is_turning:
+                                # This modulo operation is the original fix for the "skip past 0" bug.
+                                # It ensures the setpoint is always wrapped into the [0, 360) range.
+                                self.pan_pid.set_setpoint(self.scan_target_az % 360)
 
-                    # In all cases (sweeping or turning), tell the PID to chase the target.
-                    self.pan_pid.set_setpoint(self.scan_target_az % 360)
-                    pan_vel = self.pan_pid.update(self.internal_pan_pos, self.pan_avoid_wrap)
-                    self.tilt_pid.set_setpoint(self.current_scan_el)
-                    tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
-
+                            # In all cases, update the PID controllers based on the decided setpoint.
+                            pan_vel = self.pan_pid.update(self.internal_pan_pos, self.pan_avoid_wrap)
+                            self.tilt_pid.set_setpoint(self.current_scan_el)
+                            tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
+                            
                 else: #HF_TRACKING
                     # In high-frequency tracking mode, we use the predicted values directly.
                     if self.shared_data["predicted_azimuth"].value is not None and \
