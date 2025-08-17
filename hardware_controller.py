@@ -13,14 +13,14 @@ STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 TARGET_REACHED_THRESHOLD_DEG = 0.4
-SCAN_PAN_SPEED_DPS = 360.0
+SCAN_PAN_SPEED_DPS = 720.0
 
 SCAN_TURNAROUND_DEG = 0.1
 
 # --- Define the boundaries and resolution for scanning ---
 SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360
 SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90
-SCAN_STEP_DEG = 1.0
+SCAN_STEP_DEG = 2
 
 # ==============================================================================
 # --- SCAN CALIBRATION ---
