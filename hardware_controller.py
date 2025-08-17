@@ -59,7 +59,7 @@ SCAN_PAN_CALIBRATION_OFFSET_DEG = 0.5  # <--- TUNE THIS VALUE
 # 4. If needed, add a very small PAN_KI to help the motor hold its final position accurately.
 #
 MAX_PAN_SPEED_DPS = 1000.0
-PAN_KP, PAN_KI, PAN_KD = 40.0, 0.005, 0.007
+PAN_KP, PAN_KI, PAN_KD = 20.0, 0.005, 0.007
 MAX_TILT_SPEED_DPS = 600.0
 TILT_KP, TILT_KI, TILT_KD = 12.0, 0.000, 0.000
 
