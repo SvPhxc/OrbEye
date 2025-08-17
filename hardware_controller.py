@@ -228,7 +228,7 @@ class HardwareController:
 
                     elif self.scan_is_turning:
                         # We are in a turnaround. Wait for the motor to settle at the edge.
-                        pan_error = abs(self._calculate_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos))
+                        pan_error = abs(self._calculate_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos, avoid_wrap=True))
                         if pan_error < TARGET_REACHED_THRESHOLD_DEG:
                             # Safely at the edge, now execute the turn.
                             self.pan_pid.reset()
@@ -236,13 +236,10 @@ class HardwareController:
                             self.current_scan_el -= SCAN_STEP_DEG
                             self.scan_is_turning = False
                             # Force a full rotation on direction change
-                            if self.scan_pan_direction == 1:
+
                                 self.scan_target_az = SCAN_PAN_MIN
-                            else:
-                                self.scan_target_az = SCAN_PAN_MAX
-                            self.pan_avoid_wrap = True
-                            print(
-                                f"[HWCtrl-SCAN] Row finished. New elevation: {self.current_scan_el:.1f} deg, Direction: {self.scan_pan_direction}")
+
+                            self.pan_avoid_wrap = False
                     else:
                         # We are sweeping. Move the virtual target.
                         self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
