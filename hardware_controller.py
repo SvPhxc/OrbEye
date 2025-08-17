@@ -259,7 +259,7 @@ class HardwareController:
 
 
                     # In all cases (sweeping or turning), tell the PID to chase the target.
-                    self.pan_pid.set_setpoint(self.scan_target_az)
+                    self.pan_pid.set_setpoint(self.scan_target_az % 360)
                     pan_vel = self.pan_pid.update(self.internal_pan_pos, self.pan_avoid_wrap)
                     self.tilt_pid.set_setpoint(self.current_scan_el)
                     tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
