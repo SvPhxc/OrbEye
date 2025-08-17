@@ -155,7 +155,7 @@ if __name__ == "__main__":
                 print("[main] A critical process has terminated unexpectedly. Initiating shutdown.")
                 shared_data["shutdown"].value = True
                 break
-            time.sleep(0.5)
+            time.sleep(0.01)
 
     except (KeyboardInterrupt, SystemExit):
         if not shared_data["shutdown"].value:

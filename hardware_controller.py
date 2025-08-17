@@ -121,6 +121,8 @@ class HardwareController:
         self.shutdown_event = threading.Event()
         self.lidar_queue = queue.Queue(maxsize=20)
         self.background_data_buffer = []
+        self.last_pan_velocity = 0.0
+        self.last_tilt_velocity = 0.0
 
         self.internal_pan_pos = shared_data["stepper_degrees"].value
         self.internal_tilt_pos = shared_data["servo_degrees"].value
@@ -328,6 +330,8 @@ class HardwareController:
                 elif current_state == "BACKGROUND_SCAN":
                     pan_vel, tilt_vel = self._run_background_scan_state(dt)
 
+                self.last_pan_velocity = pan_vel
+                self.last_tilt_velocity = tilt_vel
                 self._execute_motor_commands(pan_vel, tilt_vel, dt)
 
                 # Process LiDAR data from queue
@@ -336,9 +340,21 @@ class HardwareController:
                         dist, strength, ts = self.lidar_queue.get_nowait()
                         with self.shared_data["lidar_data"].get_lock():
                             self.shared_data["lidar_data"][:] = [dist, strength, ts]
+
                         if current_state == "BACKGROUND_SCAN":
+                            # Calculate the time elapsed since the measurement was taken
+                            time_since_measurement = time.monotonic() - ts
+
+                            # Estimate the historical position
+                            # This subtracts the distance the motor has traveled since the reading
+                            estimated_pan_pos = self.internal_pan_pos - (self.last_pan_velocity * time_since_measurement)
+                            estimated_tilt_pos = self.internal_tilt_pos - (self.last_tilt_velocity * time_since_measurement)
+
+                            # Normalize pan position to handle wrap-around
+                            estimated_pan_pos %= 360
+
                             self.background_data_buffer.append(
-                                [self.internal_pan_pos, self.internal_tilt_pos, dist, strength])
+                                [estimated_pan_pos, estimated_tilt_pos, dist, strength])
                 except queue.Empty:
                     pass
 
