@@ -22,7 +22,7 @@ class ClutterFilter:
     significantly closer than the known background object.
     """
 
-    def __init__(self, background_file="background_data.npy", angular_tolerance=0.5, distance_margin_cm=120.0):
+    def __init__(self, background_file="background_data.npy", angular_tolerance=0.5, distance_margin_cm=70.0):
         """
         Initializes the filter with a 2D (azimuth, elevation) background map.
 
@@ -300,7 +300,7 @@ class HandTracker:
     LIDAR_FOV = 2.0
 
     def __init__(self, timeout=1.0, coast_timeout=1.5,
-                 prediction_factor=1, velocity_smoothing_factor=0.4):
+                 prediction_factor=1, velocity_smoothing_factor=0.6):
         """
         Initializes the HandTracker.
         Note: scan_radius, scan_points, and time_per_waypoint are now dynamically
