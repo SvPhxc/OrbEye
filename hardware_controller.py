@@ -13,7 +13,7 @@ STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 TARGET_REACHED_THRESHOLD_DEG = 0.4
-SCAN_PAN_SPEED_DPS = 600.0
+SCAN_PAN_SPEED_DPS = 60.0  # <-- This is the constant speed for the background scan
 
 SCAN_TURNAROUND_DEG = 0.1
 
@@ -118,8 +118,9 @@ class HardwareController:
         self.current_scan_el = SCAN_TILT_MAX
         self.scan_pan_direction = 1
         self.background_data_buffer = []
-        self.scan_target_az = 0.0
         self.scan_is_turning = False
+        self.scan_sweep_start_time = 0
+        self.scan_sweep_duration = (SCAN_PAN_MAX - SCAN_PAN_MIN) / SCAN_PAN_SPEED_DPS
 
     def _get_shortest_pan_error(self, setpoint, current_value):
         error = setpoint - current_value
@@ -187,7 +188,7 @@ class HardwareController:
                     self.tilt_pid.reset()
                     if next_state == "BACKGROUND_SCAN":
                         self.current_scan_el, self.scan_pan_direction, self.scan_is_turning = SCAN_TILT_MAX, 1, False
-                        self.scan_target_az = self.internal_pan_pos
+                        self.scan_sweep_start_time = time.monotonic()
                     current_state = next_state
 
                 pan_vel, tilt_vel = 0, 0
@@ -213,7 +214,6 @@ class HardwareController:
                     if current_state == "GOTO_POSITION":
                         self.shared_data["target_reached"].value = target_reached
                 elif current_state == "BACKGROUND_SCAN":
-
                     if self.current_scan_el < SCAN_TILT_MIN:
                         print("[HWCtrl] BACKGROUND_SCAN finished.")
                         if self.background_data_buffer:
@@ -228,29 +228,30 @@ class HardwareController:
                         self.shared_data["background_scan_active"].value = False
 
                     elif self.scan_is_turning:
-                        # We are in a turnaround. Wait for the motor to settle at the edge.
-                        pan_error = abs(
-                            self._get_shortest_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos))
-                        if pan_error < TARGET_REACHED_THRESHOLD_DEG:
+                        # We are in a turnaround. Use PID to move to the edge.
+                        turnaround_target = SCAN_PAN_MAX if self.scan_pan_direction == 1 else SCAN_PAN_MIN
+                        self.pan_pid.set_setpoint(turnaround_target)
+                        pan_vel = self.pan_pid.update(self.internal_pan_pos)
 
+                        pan_error = abs(self._get_shortest_pan_error(turnaround_target, self.internal_pan_pos))
+                        if pan_error < TARGET_REACHED_THRESHOLD_DEG:
                             self.scan_pan_direction *= -1
                             self.current_scan_el -= SCAN_STEP_DEG
                             self.scan_is_turning = False
-                            print(f"[HWCtrl-SCAN] Row finished. New elevation: {self.current_scan_el:.1f} deg, Direction: {self.scan_pan_direction}")
+                            self.scan_sweep_start_time = time.monotonic()  # Reset timer for the new sweep
+                            print(
+                                f"[HWCtrl-SCAN] Row finished. New elevation: {self.current_scan_el:.1f} deg, Direction: {self.scan_pan_direction}")
 
                     else:
-                        # We are sweeping. Move the virtual target.
-                        self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
+                        # We are sweeping. Move at a constant speed.
+                        pan_vel = SCAN_PAN_SPEED_DPS * self.scan_pan_direction
 
-                        if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX:
-                            self.scan_target_az = SCAN_PAN_MAX
+                        # Check if it's time to turn around
+                        if time.monotonic() - self.scan_sweep_start_time > self.scan_sweep_duration:
                             self.scan_is_turning = True
-                        elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN:
-                            self.scan_target_az = SCAN_PAN_MIN
-                            self.scan_is_turning = True
+                            pan_vel = 0  # Stop constant velocity movement
 
-                    self.pan_pid.set_setpoint(self.scan_target_az)
-                    pan_vel = self.pan_pid.update(self.internal_pan_pos)
+                    # Always control tilt with PID
                     self.tilt_pid.set_setpoint(self.current_scan_el)
                     tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
@@ -275,7 +276,7 @@ class HardwareController:
                         if current_state == "BACKGROUND_SCAN" and not self.scan_is_turning:
                             # Apply a calibration offset to the pan position to correct for ghosting.
                             corrected_pan_pos = self.internal_pan_pos + (
-                                        self.scan_pan_direction * SCAN_PAN_CALIBRATION_OFFSET_DEG)
+                                    self.scan_pan_direction * SCAN_PAN_CALIBRATION_OFFSET_DEG)
                             # Ensure the corrected position still wraps around 360 degrees
                             corrected_pan_pos %= 360.0
 
