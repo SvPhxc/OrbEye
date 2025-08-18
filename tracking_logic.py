@@ -300,7 +300,7 @@ class HandTracker:
     LIDAR_FOV = 2.0
 
     def __init__(self, timeout=1.0, coast_timeout=1.5,
-                 prediction_factor=1, velocity_smoothing_factor=0.6):
+                 prediction_factor=1, velocity_smoothing_factor=0.4):
         """
         Initializes the HandTracker.
         Note: scan_radius, scan_points, and time_per_waypoint are now dynamically
@@ -353,7 +353,7 @@ class HandTracker:
         # 1. SCAN RADIUS: Set to half the LiDAR's FOV.
         # This ensures the edge of the LiDAR's sensing cone passes through the
         # last known target position, maximizing the chance of a hit in a tight circle.
-        self.scan_radius = (self.LIDAR_FOV * 4.5)
+        self.scan_radius = (self.LIDAR_FOV * 6)
 
         # 2. SCAN POINTS: More points for closer targets, fewer for distant ones.
         # Closer targets have higher apparent velocity and benefit from a denser scan pattern.
@@ -492,7 +492,7 @@ class HandTracker:
 
                         self._generate_scan_path(next_center_az, next_center_el)
                         # Decay strength to prioritize finding a new, stronger signal
-                        self.best_point['strength'] *= 0.8
+                        self.best_point['strength'] *= 0.9
 
         # STATE: COASTING - Target lost, predicting its path to reacquire
         elif self.state == HandTrackerState.COASTING:
