@@ -240,7 +240,7 @@ class HardwareController:
 
                     else:
                         # We are sweeping. Move the virtual target.
-                        self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
+                        self.scan_target_az += pan_vel * self.scan_pan_direction *dt
 
                         if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX:
                             self.scan_target_az = SCAN_PAN_MAX
