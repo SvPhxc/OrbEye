@@ -13,7 +13,7 @@ STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 TARGET_REACHED_THRESHOLD_DEG = 0.4
-SCAN_PAN_SPEED_DPS = 720.0 # Speed for scanning
+SCAN_PAN_SPEED_DPS = 360.0 # Speed for scanning
 
 # --- Define the boundaries and resolution for scanning ---
 SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360
@@ -33,7 +33,7 @@ SCAN_PAN_CALIBRATION_OFFSET_DEG = 0
 # This is the "P" in PID. It's a simple multiplier.
 # If you set this too high, the motor will be very fast but will overshoot
 # and oscillate wildly. If it's too low, it will be very slow to reach the target.
-PAN_KP = 4.5
+PAN_KP = 3.5
 TILT_KP = 6.5
 MAX_PAN_SPEED_DPS = 360.0
 MAX_TILT_SPEED_DPS = 600.0
