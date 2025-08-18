@@ -24,7 +24,7 @@ class ClutterFilter:
     significantly closer than the known background object.
     """
 
-    def __init__(self, background_file="background_data.npy", angular_tolerance=1, distance_margin_cm=70.0):
+    def __init__(self, background_file="background_data.npy", angular_tolerance=0.5, distance_margin_cm=70.0):
         """
         Initializes the filter with a 2D (azimuth, elevation) background map.
 
@@ -596,7 +596,7 @@ def run_tracking_logic(shared_data):
                                 shared_data["ekf_initialized"].value = True
                                 shared_data["acquire_points"].value = False
                                 shared_data["acquirer_status"].value = 0
-                elif shared_data["lidar_track_mode_active"].value and
+                elif shared_data["lidar_track_mode_active"].value
                     if state != TrackingState.TRACKING:
                         print("[TrackingLogic] Switching to TRACKING mode (Predictive)")
                         state = TrackingState.TRACKING
@@ -605,7 +605,7 @@ def run_tracking_logic(shared_data):
                 else:
                     if state != TrackingState.IDLE: state = TrackingState.IDLE
 
-            
+
 
             time.sleep(0.0005)
 
