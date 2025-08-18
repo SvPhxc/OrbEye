@@ -483,13 +483,9 @@ class HandTracker:
 
                         # Save the best point of the scan to shared_data
                         with shared_data["satellite_points"].get_lock():
-                            # Assuming satellite_points is a list or can be treated as such
-                            # to append new points. If it's a single value, this needs adjustment.
-                            # For now, let's assume we are storing a list of best points.
-                            # If you want to overwrite it each time, remove the list creation/append.
-                            if "satellite_points_list" not in shared_data:
-                                shared_data["satellite_points_list"] = []
-                            shared_data["satellite_points_list"].append(self.best_point)
+
+
+                            shared_data["satellite_points"].append(self.best_point)
 
                         # ** Update scan parameters for the next cycle based on the latest distance **
                         self._update_scan_parameters(self.best_point['dist'])
