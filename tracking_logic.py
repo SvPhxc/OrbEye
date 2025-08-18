@@ -91,64 +91,187 @@ class ClutterFilter:
             return True # Fail-safe: if the query fails, accept the measurement.
 
 
-class HandTrackerState:
-    IDLE = 0
-    SCANNING = 1
-    COASTING = 2
-    KALMAN_TRACKING = 3
+class OrbitalEKF:
+    """Extended Kalman Filter for orbital tracking with strength-aware measurement noise."""
 
-def command_motors_to_target(az, el, shared_data):
-    """
-    Placeholder function for commanding the motors.
-    In a real implementation, this would send commands to the drone's flight controller.
-    """
-    # print(f"Commanding motors to Az: {az:.2f}, El: {el:.2f}")
-    pass
+    def __init__(self):
+        """Initialize EKF for 6-state orbital tracking [x, y, z, vx, vy, vz]."""
+        self.state = np.zeros(6)  # [x, y, z, vx, vy, vz]
+        self.P = np.eye(6) * 1000  # Large initial uncertainty
+        self.Q = np.diag([0.1, 0.1, 0.1, 0.01, 0.01, 0.01])  # Process noise
+        self.initialized = False
+        self.last_update_time = time.time()
 
-class KalmanFilter:
-    def __init__(self, dt, process_variance, measurement_variance):
-        """
-        Initializes the Kalman Filter.
-        :param dt: Time step
-        :param process_variance: How much we trust the process model
-        :param measurement_variance: How much we trust the measurement
-        """
-        self.dt = dt
-        # State transition matrix
-        self.A = np.array([[1, 0, dt, 0],
-                           [0, 1, 0, dt],
-                           [0, 0, 1, 0],
-                           [0, 0, 0, 1]])
-        # Measurement matrix
-        self.H = np.array([[1, 0, 0, 0],
-                           [0, 1, 0, 0]])
-        # Process covariance matrix
-        self.Q = np.eye(4) * process_variance
-        # Measurement covariance matrix
-        self.R = np.eye(2) * measurement_variance
-        # State estimate
-        self.x = np.zeros((4, 1))
-        # Error covariance matrix
-        self.P = np.eye(4)
+    def predict(self, dt):
+        """Predict step with orbital dynamics."""
+        if not self.initialized:
+            return
 
-    def predict(self):
-        """
-        Predict the next state.
-        """
-        self.x = self.A @ self.x
-        self.P = self.A @ self.P @ self.A.T + self.Q
-        return self.x
+        # State transition matrix (simplified orbital dynamics)
+        F = np.eye(6)
+        F[0:3, 3:6] = np.eye(3) * dt
 
-    def update(self, z):
+        # Simple orbital acceleration model (could be enhanced)
+        r = np.linalg.norm(self.state[0:3])
+        if r > 1.0:  # Avoid division by zero
+            # Gravitational acceleration (simplified)
+            mu = 1000  # Gravitational parameter (tunable)
+            acc_factor = -mu / (r ** 3)
+            F[3, 0] = acc_factor * dt
+            F[4, 1] = acc_factor * dt
+            F[5, 2] = acc_factor * dt
+
+        # Predict state
+        self.state = F @ self.state
+
+        # Predict covariance
+        self.P = F @ self.P @ F.T + self.Q
+
+    def update(self, measurement, strength):
         """
-        Update the state with a new measurement.
-        :param z: New measurement (az, el)
+        Update step with strength-aware measurement noise.
+
+        Args:
+            measurement: [azimuth, elevation, distance] in degrees and cm
+            strength: LiDAR return strength
         """
-        y = z - self.H @ self.x
-        S = self.H @ self.P @ self.H.T + self.R
-        K = self.P @ self.H.T @ np.linalg.inv(S)
-        self.x = self.x + K @ y
-        self.P = (np.eye(4) - K @ self.H) @ self.P
+        if not self.initialized:
+            return
+
+        az, el, dist = measurement
+
+        # Convert measurement to Cartesian
+        az_rad = np.radians(az)
+        el_rad = np.radians(el)
+        dist_m = dist / 100.0
+
+        z_meas = np.array([
+            dist_m * np.cos(el_rad) * np.cos(az_rad),  # x
+            dist_m * np.cos(el_rad) * np.sin(az_rad),  # y
+            dist_m * np.sin(el_rad)  # z
+        ])
+
+        # Predicted measurement
+        h_pred = self.state[0:3]
+
+        # Measurement Jacobian
+        H = np.zeros((3, 6))
+        H[0:3, 0:3] = np.eye(3)
+
+        # **KEY FEATURE**: Strength-aware measurement noise
+        base_var_pos = 1.0
+        base_var_angle = 0.1
+
+        # High strength = direct hit = low noise
+        # Low strength = edge hit = high angular noise, but range is still good
+        strength_factor = max(0.1, min(1.0, strength / 1000.0))  # Normalize strength
+
+        if strength > 500:  # High strength - direct hit
+            pos_variance = base_var_pos * 0.1
+            angular_noise_factor = 1.0
+        else:  # Low strength - edge hit
+            pos_variance = base_var_pos * 1.0
+            angular_noise_factor = 5.0  # Much higher angular uncertainty
+
+        R = np.diag([pos_variance, pos_variance * angular_noise_factor, pos_variance * angular_noise_factor])
+
+        # Innovation
+        y = z_meas - h_pred
+
+        # Innovation covariance
+        S = H @ self.P @ H.T + R
+
+        # Kalman gain
+        K = self.P @ H.T @ np.linalg.inv(S)
+
+        # Update state and covariance
+        self.state = self.state + K @ y
+        I_KH = np.eye(6) - K @ H
+        self.P = I_KH @ self.P
+
+        self.last_update_time = time.time()
+
+    def get_predicted_position(self, future_time_sec=0.5):
+        """Get predicted position at future time."""
+        if not self.initialized:
+            return None
+
+        # Predict forward in time
+        temp_state = self.state.copy()
+        dt = future_time_sec
+
+        # Simple ballistic prediction
+        temp_state[0:3] += temp_state[3:6] * dt
+
+        # Convert back to spherical coordinates
+        x, y, z = temp_state[0:3]
+        r = np.sqrt(x ** 2 + y ** 2 + z ** 2)
+
+        if r < 1.0:
+            return None
+
+        el = np.degrees(np.arcsin(z / r))
+        az = np.degrees(np.arctan2(y, x))
+
+        # Ensure azimuth is in [0, 360)
+        if az < 0:
+            az += 360
+
+        return az, el, r * 100  # Return in degrees and cm
+
+
+class Acquirer:
+    """Initial Orbit Determination using multiple measurements."""
+
+    def __init__(self):
+        self.measurements = []
+        self.required_points = 3
+
+    def add_measurement(self, azimuth, elevation, distance, timestamp):
+        """Add a measurement for IOD calculation."""
+        # Convert to Cartesian
+        az_rad = np.radians(azimuth)
+        el_rad = np.radians(elevation)
+        dist_m = distance / 100.0
+
+        pos = np.array([
+            dist_m * np.cos(el_rad) * np.cos(az_rad),
+            dist_m * np.cos(el_rad) * np.sin(az_rad),
+            dist_m * np.sin(el_rad)
+        ])
+
+        self.measurements.append((pos, timestamp))
+
+        if len(self.measurements) > self.required_points:
+            self.measurements.pop(0)  # Keep only latest measurements
+
+        return len(self.measurements) >= self.required_points
+
+    def compute_initial_state(self):
+        """Compute initial state vector using simplified Herrick-Gibbs method."""
+        if len(self.measurements) < self.required_points:
+            return None
+
+        # Get positions and times
+        positions = [m[0] for m in self.measurements]
+        times = [m[1] for m in self.measurements]
+
+        # Simple velocity estimation using finite differences
+        r1, r2, r3 = positions
+        t1, t2, t3 = times
+
+        dt1 = t2 - t1
+        dt2 = t3 - t2
+
+        if dt1 <= 0 or dt2 <= 0:
+            return None
+
+        # Estimate velocity at middle point
+        v2 = (r3 - r1) / (dt1 + dt2)
+
+        # Return state [position, velocity]
+        state = np.concatenate([r2, v2])
+        return state
 
 
 
@@ -166,7 +289,6 @@ class HandTrackerState(Enum):
     IDLE = 0
     SCANNING = 1
     COASTING = 2
-    KALMAN_TRACKING = 3
 
 
 
@@ -216,11 +338,6 @@ class HandTracker:
         self.last_coast_update_time = 0
         self.coasting_target_pos = {'az': 0.0, 'el': 0.0}
 
-        # Kalman Filter
-        self.kf = KalmanFilter(dt=0.1, process_variance=1e-5, measurement_variance=1e-4)
-        self.data_points = []
-        self.last_kf_prediction_time = 0
-
     def reset(self):
         """Resets the tracker to its initial idle state."""
         self.state = HandTrackerState.IDLE
@@ -229,7 +346,6 @@ class HandTracker:
         self.previous_best_point = None
         self.smoothed_velocity = {'az': 0.0, 'el': 0.0}
         self.coast_start_time = 0
-        self.data_points = []
         print("[HandTracker] Reset.")
 
     def _update_scan_parameters(self, distance_m):
@@ -240,7 +356,7 @@ class HandTracker:
         # 1. SCAN RADIUS: Set to half the LiDAR's FOV.
         # This ensures the edge of the LiDAR's sensing cone passes through the
         # last known target position, maximizing the chance of a hit in a tight circle.
-        self.scan_radius = (self.LIDAR_FOV * 5)
+        self.scan_radius = (self.LIDAR_FOV *5)
 
         # 2. SCAN POINTS: More points for closer targets, fewer for distant ones.
         # Closer targets have higher apparent velocity and benefit from a denser scan pattern.
@@ -295,7 +411,6 @@ class HandTracker:
                 self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
                                    'time': current_time}
                 self.previous_best_point = self.best_point.copy()
-                self.data_points.append((current_az, current_el, strength))
 
                 # ** Dynamically set parameters based on the first detection **
                 self._update_scan_parameters(dist)
@@ -307,15 +422,6 @@ class HandTracker:
 
         # STATE: SCANNING - Actively tracking the target
         elif self.state == HandTrackerState.SCANNING:
-            if len(self.data_points) > 8:
-                # Basic accuracy check, a more sophisticated one can be implemented
-                if self.best_point['strength'] > 100: # Example threshold
-                    print("[HandTracker] Switching to Kalman Filter tracking.")
-                    self.state = HandTrackerState.KALMAN_TRACKING
-                    self.kf.x = np.array([[self.best_point['az']], [self.best_point['el']], [0], [0]]) # Initialize with current position
-                    self.last_kf_prediction_time = current_time
-                    return
-
             # Transition to COASTING if the target hasn't been seen for too long
             if current_time - self.best_point['time'] > self.timeout:
                 print("[HandTracker] Target lost. Entering COASTING mode.")
@@ -328,7 +434,6 @@ class HandTracker:
             # If we have a measurement, check if it's better than our current best point
             if measurement:
                 dist, strength = measurement
-                self.data_points.append((current_az, current_el, strength))
 
                 if strength > self.best_point['strength']:
                     self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
@@ -422,28 +527,6 @@ class HandTracker:
                 self.coasting_target_pos['el'] += predicted_delta_el
 
                 command_motors_to_target(self.coasting_target_pos['az'], self.coasting_target_pos['el'], shared_data)
-
-        # STATE: KALMAN_TRACKING - Using the Kalman Filter for prediction
-        elif self.state == HandTrackerState.KALMAN_TRACKING:
-            if not measurement:
-                print("[HandTracker] Target lost during Kalman tracking. Switching back to hand tracking.")
-                self.state = HandTrackerState.SCANNING
-                self.data_points = []
-                return
-
-            dist, strength = measurement
-            # Update measurement noise based on strength (trust strong signals more)
-            self.kf.R = np.eye(2) * (1e-1 / max(1, strength))
-            self.kf.update(np.array([[current_az], [current_el]]))
-
-            # Predict 0.5 seconds into the future
-            if current_time - self.last_kf_prediction_time > 0.05: # Limit prediction rate
-                predicted_state = self.kf.predict()
-                future_time = 0.5
-                future_az = predicted_state[0][0] + predicted_state[2][0] * future_time
-                future_el = predicted_state[1][0] + predicted_state[3][0] * future_time
-                command_motors_to_target(future_az, future_el, shared_data)
-                self.last_kf_prediction_time = current_time
 
 class ReactiveTracker:
     """Non-predictive tracker for immediate, reactive tracking of any target."""
