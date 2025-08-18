@@ -357,7 +357,7 @@ class HandTracker:
 
         # 2. SCAN POINTS: More points for closer targets, fewer for distant ones.
         # Closer targets have higher apparent velocity and benefit from a denser scan pattern.
-        min_points, max_points = 12, 12
+        min_points, max_points = 6, 8
         # We assume a maximum effective tracking distance for this scaling logic (e.g., 12 meters).
         effective_dist_max = 12.0
         # Linearly interpolate the number of points based on distance.
@@ -367,7 +367,7 @@ class HandTracker:
 
         # 3. TIME PER WAYPOINT (Scan Speed): Scan faster for closer targets.
         # Linger longer on points for distant targets, which may have a weaker return signal.
-        min_time, max_time = 0.040, 0.04  # in seconds
+        min_time, max_time = 0.025, 0.030  # in seconds
         self.time_per_waypoint = min_time + (distance_m / effective_dist_max) * (max_time - min_time)
         # Clamp the value to stay within the defined min/max bounds.
         self.time_per_waypoint = max(min_time, min(max_time, self.time_per_waypoint))
