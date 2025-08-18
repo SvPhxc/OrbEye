@@ -22,7 +22,7 @@ class ClutterFilter:
     significantly closer than the known background object.
     """
 
-    def __init__(self, background_file="background_data.npy", angular_tolerance=0.5, distance_margin_cm=70.0):
+    def __init__(self, background_file="background_data.npy", angular_tolerance=1, distance_margin_cm=70.0):
         """
         Initializes the filter with a 2D (azimuth, elevation) background map.
 
@@ -308,7 +308,7 @@ class HandTracker:
         """
         # Dynamic parameters are initialized but will be immediately overwritten
         # by _update_scan_parameters upon target acquisition.
-        self.scan_radius = self.LIDAR_FOV / 2.0
+        self.scan_radius = self.LIDAR_FOV * 5.0
         self.scan_points = 8
         self.time_per_waypoint = 0.03
 
@@ -353,11 +353,11 @@ class HandTracker:
         # 1. SCAN RADIUS: Set to half the LiDAR's FOV.
         # This ensures the edge of the LiDAR's sensing cone passes through the
         # last known target position, maximizing the chance of a hit in a tight circle.
-        self.scan_radius = (self.LIDAR_FOV * 5)
+        self.scan_radius = (self.LIDAR_FOV * 4.5)
 
         # 2. SCAN POINTS: More points for closer targets, fewer for distant ones.
         # Closer targets have higher apparent velocity and benefit from a denser scan pattern.
-        min_points, max_points = 6, 16
+        min_points, max_points = 8, 12
         # We assume a maximum effective tracking distance for this scaling logic (e.g., 12 meters).
         effective_dist_max = 12.0
         # Linearly interpolate the number of points based on distance.
@@ -367,7 +367,7 @@ class HandTracker:
 
         # 3. TIME PER WAYPOINT (Scan Speed): Scan faster for closer targets.
         # Linger longer on points for distant targets, which may have a weaker return signal.
-        min_time, max_time = 0.02, 0.06  # in seconds
+        min_time, max_time = 0.035, 0.05  # in seconds
         self.time_per_waypoint = min_time + (distance_m / effective_dist_max) * (max_time - min_time)
         # Clamp the value to stay within the defined min/max bounds.
         self.time_per_waypoint = max(min_time, min(max_time, self.time_per_waypoint))
