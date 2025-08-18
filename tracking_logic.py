@@ -591,33 +591,21 @@ def run_tracking_logic(shared_data):
                         if acquirer.add_measurement(current_az, current_el, dist, current_time):
                             initial_state = acquirer.compute_initial_state()
                             if initial_state is not None:
-                                orbital_ekf.state = initial_state
-                                orbital_ekf.initialized = True
+
+
                                 shared_data["ekf_initialized"].value = True
                                 shared_data["acquire_points"].value = False
                                 shared_data["acquirer_status"].value = 0
-                elif shared_data["lidar_track_mode_active"].value and orbital_ekf.initialized:
+                elif shared_data["lidar_track_mode_active"].value and
                     if state != TrackingState.TRACKING:
                         print("[TrackingLogic] Switching to TRACKING mode (Predictive)")
                         state = TrackingState.TRACKING
                     if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
-                        orbital_ekf.update([current_az, current_el, dist], strength)
+
                 else:
                     if state != TrackingState.IDLE: state = TrackingState.IDLE
 
-            if orbital_ekf.initialized and state == TrackingState.TRACKING:
-                if current_time - last_prediction_time >= prediction_interval:
-                    dt = current_time - orbital_ekf.last_update_time
-                    orbital_ekf.predict(min(dt, 1.0))
-                    prediction = orbital_ekf.get_predicted_position(0.5)
-                    if prediction is not None:
-                        pred_az, pred_el, pred_dist = prediction
-                        with shared_data["predicted_azimuth"].get_lock():
-                            shared_data["predicted_azimuth"].value = pred_az
-                        with shared_data["predicted_elevation"].get_lock():
-                            shared_data["predicted_elevation"].value = pred_el
-                        command_motors_to_target(pred_az, pred_el, shared_data)
-                    last_prediction_time = current_time
+            
 
             time.sleep(0.0005)
 
