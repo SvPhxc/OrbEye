@@ -66,6 +66,7 @@ class ClutterFilter:
         """
         if self.background_tree is None:
             return True  # No background data, so all targets are considered valid.
+            print("[ClutterFilter] No background data available, skipping clutter filtering.")
 
         query_point = np.array([azimuth, elevation])
         try:
