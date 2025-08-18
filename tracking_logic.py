@@ -467,7 +467,7 @@ class HandTracker:
                                 raw_delta_el = self.best_point['el'] - self.previous_best_point['el']
 
                                 s = self.velocity_smoothing_factor
-                                self.smoothed_velocity['az'] = (4*s * self.smoothed_velocity['az']) + (
+                                self.smoothed_velocity['az'] = (*s * self.smoothed_velocity['az']) + (
                                         (1 - s) * (raw_delta_az / dt))
                                 self.smoothed_velocity['el'] = (s * self.smoothed_velocity['el']) + (
                                         (1 - s) * (raw_delta_el / dt))
@@ -520,7 +520,7 @@ class HandTracker:
             if dt > 0:
                 self.last_coast_update_time = current_time
 
-                predicted_delta_az = self.smoothed_velocity['az'] * dt
+                predicted_delta_az =*self.smoothed_velocity['az'] * dt
                 predicted_delta_el = self.smoothed_velocity['el'] * dt
 
                 self.coasting_target_pos['az'] += predicted_delta_az
