@@ -637,4 +637,4 @@ def run_tracking_logic(shared_data):
             traceback.print_exc()
             time.sleep(0.1)
 
-    print("[TrackingLogic] Shutting down...") 
+    print("[TrackingLogic] Shutting down...")
