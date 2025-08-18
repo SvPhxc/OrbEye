@@ -13,7 +13,7 @@ STEPPER_ENABLE_PIN = 4
 STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 TARGET_REACHED_THRESHOLD_DEG = 0.4
-SCAN_PAN_SPEED_DPS = 60.0  # <-- This is the constant speed for the background scan
+SCAN_PAN_SPEED_DPS = 720.0  # <-- This is the constant speed for the background scan
 
 SCAN_TURNAROUND_DEG = 0.1
 
