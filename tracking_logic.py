@@ -602,8 +602,7 @@ def run_tracking_logic(shared_data):
                         state = TrackingState.TRACKING
                     if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
 
-                else:
-                    if state != TrackingState.IDLE: state = TrackingState.IDLE
+                
 
 
 
