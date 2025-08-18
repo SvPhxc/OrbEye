@@ -14,7 +14,7 @@ STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 TARGET_REACHED_THRESHOLD_DEG = 0.4
 SCAN_PAN_SPEED_DPS = 600.0
-
+SCAN_TURNAROUND_SETTLE_DELAY_S = 0.05  # 50 milliseconds
 SCAN_TURNAROUND_DEG = 0.1
 
 # --- Define the boundaries and resolution for scanning ---
@@ -129,15 +129,17 @@ class HardwareController:
         self.background_data_buffer = []
         self.scan_target_az = 0.0
         self.scan_is_turning = False
-        # --- ADDED ---: A variable to track the continuous, non-wrapping pan position during scans.
         self.unwrapped_scan_pan_pos = 0.0
+        # --- ADDED ---: Timestamp to manage the turnaround settle delay.
+        self.turnaround_start_time = 0.0
 
     def _get_shortest_pan_error(self, setpoint, current_value):
+        # ... (function is unchanged) ...
         error = setpoint - current_value
         return (error + 180) % 360 - 180
 
     def _lidar_reader_thread(self):
-        # ... (lidar reader thread remains unchanged) ...
+        # ... (function is unchanged) ...
         print("[HWCtrl-LIDAR] LiDAR reader thread started.")
         while not self.shutdown_event.is_set():
             try:
@@ -154,9 +156,8 @@ class HardwareController:
                 break
         print("[HWCtrl-LIDAR] LiDAR reader thread shut down.")
 
-    # --- MODIFIED ---: This function now only sends commands to the hardware.
-    # The position state is updated in the main `run` loop. `dt` is no longer needed.
     def _execute_motor_commands(self, pan_velocity_dps, tilt_velocity_dps):
+        # ... (function is unchanged) ...
         if abs(pan_velocity_dps) > 0.1:
             self.pi.write(STEPPER_DIR_PIN, 0 if pan_velocity_dps < 0 else 1)
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(min(abs(pan_velocity_dps) / MICROSTEP_ANGLE, 250000)), 500000)
@@ -181,6 +182,7 @@ class HardwareController:
             last_loop_time, current_state = time.monotonic(), "IDLE"
 
             while not self.shared_data["shutdown"].value:
+                # ... (dt calculation and state switching logic is unchanged) ...
                 dt = time.monotonic() - last_loop_time
                 if dt <= 0.001: continue
                 last_loop_time = time.monotonic()
@@ -197,21 +199,19 @@ class HardwareController:
                     print(f"[HWCtrl] State change: {current_state} -> {next_state}")
                     self.pan_pid.reset()
                     self.tilt_pid.reset()
-                    # --- MODIFIED ---: Ensure PID wrapping is ON by default for GOTO and TRACKING modes.
                     self.pan_pid.set_wrapping(True)
                     if next_state == "BACKGROUND_SCAN":
                         self.current_scan_el, self.scan_pan_direction, self.scan_is_turning = SCAN_TILT_MAX, 1, False
                         self.scan_target_az = self.internal_pan_pos
-                        # --- MODIFIED ---: Initialize the unwrapped position to the current real position.
                         self.unwrapped_scan_pan_pos = self.internal_pan_pos
                     current_state = next_state
 
                 pan_vel, tilt_vel = 0, 0
 
                 if current_state == "IDLE":
-                    pass
+                    pass  # ...
                 elif current_state == "GOTO_POSITION" or current_state == "HF_TRACKING":
-                    # --- MODIFIED ---: Ensure wrapping is on for GOTO/TRACKING.
+                    # ... (This state is unchanged) ...
                     self.pan_pid.set_wrapping(True)
                     target_az = self.shared_data["target_azimuth"].value if current_state == "GOTO_POSITION" else \
                         self.shared_data["predicted_azimuth"].value
@@ -221,7 +221,6 @@ class HardwareController:
                     self.pan_pid.set_setpoint(target_az)
                     self.tilt_pid.set_setpoint(target_el)
 
-                    # --- MODIFIED ---: Uses the standard wrapped internal_pan_pos for shortest-path movement.
                     pan_vel = self.pan_pid.update(self.internal_pan_pos)
                     tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
@@ -237,71 +236,71 @@ class HardwareController:
                         # ... (Scan finished logic is unchanged) ...
                         self.shared_data["background_scan_active"].value = False
                     elif self.scan_is_turning:
-                        # --- MODIFIED ---: For the turnaround, we want shortest-path seeking. Enable wrapping.
-                        self.pan_pid.set_wrapping(True)
-                        pan_error = abs(
-                            self._get_shortest_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos))
-                        if pan_error < TARGET_REACHED_THRESHOLD_DEG:
-                            self.scan_pan_direction *= -1
-                            self.current_scan_el -= SCAN_STEP_DEG
-                            self.scan_is_turning = False
-                            # --- MODIFIED ---: Re-sync the unwrapped tracker before starting the new sweep.
-                            self.unwrapped_scan_pan_pos = self.internal_pan_pos
-                            self.scan_target_az = self.internal_pan_pos  # Start new target from here
-                            print(
-                                f"[HWCtrl-SCAN] Row finished. New elevation: {self.current_scan_el:.1f} deg, Direction: {self.scan_pan_direction}")
+                        # --- MODIFIED ---: Entire turnaround logic refactored for clarity and safety.
 
-                        # Use the standard PID update with the wrapped position to seek the edge.
+                        # 1. ALWAYS command the motor to move toward the designated edge.
+                        # This ensures it's actively correcting during the settle delay.
+                        self.pan_pid.set_wrapping(True)
                         pan_vel = self.pan_pid.update(self.internal_pan_pos)
                         self.tilt_pid.set_setpoint(self.current_scan_el)
                         tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
-                    else:
-                        # --- MODIFIED ---: For the continuous sweep, we must disable wrapping.
-                        self.pan_pid.set_wrapping(False)
 
-                        # Move the virtual target (this can now go beyond 360 or below 0)
+                        # 2. ONLY check for arrival *after* the settle delay has passed.
+                        if time.monotonic() - self.turnaround_start_time > SCAN_TURNAROUND_SETTLE_DELAY_S:
+                            pan_error = abs(
+                                self._get_shortest_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos))
+                            if pan_error < TARGET_REACHED_THRESHOLD_DEG:
+                                # We have arrived. Reverse direction and start the next line.
+                                self.scan_pan_direction *= -1
+                                self.current_scan_el -= SCAN_STEP_DEG
+                                self.scan_is_turning = False
+                                self.unwrapped_scan_pan_pos = self.internal_pan_pos
+                                self.scan_target_az = self.internal_pan_pos
+                                print(
+                                    f"[HWCtrl-SCAN] Row finished. New elevation: {self.current_scan_el:.1f} deg, Direction: {self.scan_pan_direction}")
+
+                    else:  # This is the sweeping phase
+                        self.pan_pid.set_wrapping(False)
                         self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
 
-                        # Trigger the turnaround when the target reaches the boundary
+                        boundary_reached = False
                         if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX:
                             self.scan_target_az = SCAN_PAN_MAX
-                            self.pan_pid.set_setpoint(SCAN_PAN_MAX)  # Set PID target for the turnaround
-                            self.scan_is_turning = True
+                            self.pan_pid.set_setpoint(SCAN_PAN_MAX)
+                            boundary_reached = True
                         elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN:
                             self.scan_target_az = SCAN_PAN_MIN
-                            self.pan_pid.set_setpoint(SCAN_PAN_MIN)  # Set PID target for the turnaround
+                            self.pan_pid.set_setpoint(SCAN_PAN_MIN)
+                            boundary_reached = True
+
+                        if boundary_reached:
                             self.scan_is_turning = True
+                            # --- MODIFIED ---: Record the timestamp when the turnaround begins.
+                            self.turnaround_start_time = time.monotonic()
 
-                        # Set the PID setpoint to the continuous, unwrapped target
-                        self.pan_pid.set_setpoint(self.scan_target_az)
-
-                        # --- MODIFIED ---: Calculate PID correction using the UNWRAPPED position variables
+                        # Calculate sweeping velocity
                         pid_correction_vel = self.pan_pid.update(self.unwrapped_scan_pan_pos)
                         feedforward_vel = SCAN_PAN_SPEED_DPS * self.scan_pan_direction
                         pan_vel = feedforward_vel + pid_correction_vel
-
                         pan_vel = max(-MAX_PAN_SPEED_DPS, min(MAX_PAN_SPEED_DPS, pan_vel))
 
                         self.tilt_pid.set_setpoint(self.current_scan_el)
                         tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
-                # --- MODIFIED ---: Position updates are now handled here in the main loop for all states.
+                # --- Position update and command execution logic is unchanged ---
                 pan_delta = pan_vel * dt
                 self.internal_pan_pos = (self.internal_pan_pos + pan_delta) % 360
                 self.unwrapped_scan_pan_pos += pan_delta
 
-                # To prevent drift over time, re-sync the unwrapped tracker to the real position
-                # when it's not being used for a continuous sweep.
                 if not (current_state == "BACKGROUND_SCAN" and not self.scan_is_turning):
                     self.unwrapped_scan_pan_pos = self.internal_pan_pos
 
                 self.internal_tilt_pos = max(0, min(90, self.internal_tilt_pos + (tilt_vel * dt)))
 
-                # --- MODIFIED ---: Pass calculated velocities directly to the execution function.
                 self._execute_motor_commands(pan_vel, tilt_vel)
 
+                # ... (Lidar data processing and shutdown logic is unchanged) ...
                 try:
-                    # ... (Lidar data processing is unchanged) ...
                     while not self.lidar_queue.empty():
                         dist, strength, ts = self.lidar_queue.get_nowait()
                         with self.shared_data["lidar_data"].get_lock():
@@ -321,13 +320,12 @@ class HardwareController:
 
                 time.sleep(0.001)
         except Exception as e:
-            # ... (Exception handling is unchanged) ...
             import traceback
             print(f"[HWCtrl] CRITICAL ERROR: {e}")
             traceback.print_exc()
         finally:
-            # ... (Shutdown logic is unchanged) ...
             print("[HWCtrl] Shutting down...")
+           
             self.shutdown_event.set()
             if 'lidar_thread' in locals() and locals()['lidar_thread'].is_alive(): locals()['lidar_thread'].join(
                 timeout=1)
