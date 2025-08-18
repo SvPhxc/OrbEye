@@ -171,7 +171,7 @@ class HardwareController:
 
             while not self.shared_data["shutdown"].value:
                 dt = time.monotonic() - last_loop_time
-                if dt <= 0.001: continue
+                if dt <= 0.01: continue
                 last_loop_time = time.monotonic()
                 if self.shared_data["background_scan_active"].value:
                     next_state = "BACKGROUND_SCAN"
@@ -187,7 +187,7 @@ class HardwareController:
                     self.tilt_pid.reset()
                     if next_state == "BACKGROUND_SCAN":
                         self.current_scan_el, self.scan_pan_direction, self.scan_is_turning = SCAN_TILT_MAX, 1, False
-                        self.scan_target_az = 0
+                        self.scan_target_az = self.internal_pan_pos
                     current_state = next_state
 
                 pan_vel, tilt_vel = 0, 0
@@ -240,7 +240,7 @@ class HardwareController:
 
                     else:
                         # We are sweeping. Move the virtual target.
-                        self.scan_target_az += pan_vel * self.scan_pan_direction *dt
+                        self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
 
                         if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX:
                             self.scan_target_az = SCAN_PAN_MAX
@@ -249,10 +249,10 @@ class HardwareController:
                             self.scan_target_az = SCAN_PAN_MIN
                             self.scan_is_turning = True
 
-                    self.pan_pid.set_setpoint(self.scan_target_az)
-                    pan_vel = self.pan_pid.update(self.internal_pan_pos)
-                    self.tilt_pid.set_setpoint(self.current_scan_el)
-                    tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
+
+                    pan_vel = SCAN_PAN_SPEED_DPS
+
+                    tilt_vel = SCAN_PAN_SPEED_DPS
 
                 else:  # HF_TRACKING
                     pan_vel = self.pan_pid.update(self.shared_data["predicted_azimuth"].value
