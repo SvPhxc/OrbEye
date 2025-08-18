@@ -328,12 +328,6 @@ class HardwareController:
         finally:
             # ... (Shutdown logic is unchanged) ...
             print("[HWCtrl] Shutting down...")
-        except Exception as e:
-            import traceback
-            print(f"[HWCtrl] CRITICAL ERROR: {e}")
-            traceback.print_exc()
-        finally:
-            print("[HWCtrl] Shutting down...")
             self.shutdown_event.set()
             if 'lidar_thread' in locals() and locals()['lidar_thread'].is_alive(): locals()['lidar_thread'].join(
                 timeout=1)
