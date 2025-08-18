@@ -367,7 +367,7 @@ class HandTracker:
 
         # 3. TIME PER WAYPOINT (Scan Speed): Scan faster for closer targets.
         # Linger longer on points for distant targets, which may have a weaker return signal.
-        min_time, max_time = 0.04, 0.045  # in seconds
+        min_time, max_time = 0.025, 0.03  # in seconds
         self.time_per_waypoint = min_time + (distance_m / effective_dist_max) * (max_time - min_time)
         # Clamp the value to stay within the defined min/max bounds.
         self.time_per_waypoint = max(min_time, min(max_time, self.time_per_waypoint))
