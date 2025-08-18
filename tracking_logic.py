@@ -642,7 +642,7 @@ def run_tracking_logic(shared_data):
                 dist, strength, timestamp = shared_data["lidar_data"][:]
             current_az = shared_data["stepper_degrees"].value
             current_el = shared_data["servo_degrees"].value
-            measurement_valid = (50.0 <= dist <= 600.0)
+            measurement_valid = (50.0 <= dist <= 400.0)
 
             if shared_data["debug_mode"].value:
                 if state != TrackingState.DEBUG_MODE:
@@ -712,7 +712,7 @@ def run_tracking_logic(shared_data):
                         command_motors_to_target(pred_az, pred_el, shared_data)
                     last_prediction_time = current_time
 
-            time.sleep(0.0005)
+            time.sleep(0.001)
 
         except Exception as e:
             print(f"[TrackingLogic] Error in main loop: {e}")
