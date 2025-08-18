@@ -24,7 +24,7 @@ class ClutterFilter:
     significantly closer than the known background object.
     """
 
-    def __init__(self, background_file="background_data.npy", angular_tolerance=0.5, distance_margin_cm=70.0):
+    def __init__(self, background_file="background_data.npy", angular_tolerance=1, distance_margin_cm=70.0):
         """
         Initializes the filter with a 2D (azimuth, elevation) background map.
 
@@ -91,9 +91,19 @@ class ClutterFilter:
             return True # Fail-safe: if the query fails, accept the measurement.
 
 
+class HandTrackerState:
+    IDLE = 0
+    SCANNING = 1
+    COASTING = 2
+    KALMAN_TRACKING = 3
 
-
-
+def command_motors_to_target(az, el, shared_data):
+    """
+    Placeholder function for commanding the motors.
+    In a real implementation, this would send commands to the drone's flight controller.
+    """
+    # print(f"Commanding motors to Az: {az:.2f}, El: {el:.2f}")
+    pass
 
 class KalmanFilter:
     def __init__(self, dt, process_variance, measurement_variance):
@@ -526,8 +536,8 @@ def run_tracking_logic(shared_data):
 
     # Initialize components
     clutter_filter = ClutterFilter(shared_data.get("background_path", "background_data.npy").value)
-    kf = KalmanFilter(dt=0.1, process_variance=1e-5, measurement_variance=1e-4)
-
+    orbital_ekf = OrbitalEKF()
+    acquirer = Acquirer()
     reactive_tracker = ReactiveTracker()
     hand_tracker = HandTracker()
 
@@ -591,16 +601,33 @@ def run_tracking_logic(shared_data):
                         if acquirer.add_measurement(current_az, current_el, dist, current_time):
                             initial_state = acquirer.compute_initial_state()
                             if initial_state is not None:
-
-
+                                orbital_ekf.state = initial_state
+                                orbital_ekf.initialized = True
                                 shared_data["ekf_initialized"].value = True
                                 shared_data["acquire_points"].value = False
                                 shared_data["acquirer_status"].value = 0
-              
+                elif shared_data["lidar_track_mode_active"].value and orbital_ekf.initialized:
+                    if state != TrackingState.TRACKING:
+                        print("[TrackingLogic] Switching to TRACKING mode (Predictive)")
+                        state = TrackingState.TRACKING
+                    if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
+                        orbital_ekf.update([current_az, current_el, dist], strength)
+                else:
+                    if state != TrackingState.IDLE: state = TrackingState.IDLE
 
-
-
-
+            if orbital_ekf.initialized and state == TrackingState.TRACKING:
+                if current_time - last_prediction_time >= prediction_interval:
+                    dt = current_time - orbital_ekf.last_update_time
+                    orbital_ekf.predict(min(dt, 1.0))
+                    prediction = orbital_ekf.get_predicted_position(0.5)
+                    if prediction is not None:
+                        pred_az, pred_el, pred_dist = prediction
+                        with shared_data["predicted_azimuth"].get_lock():
+                            shared_data["predicted_azimuth"].value = pred_az
+                        with shared_data["predicted_elevation"].get_lock():
+                            shared_data["predicted_elevation"].value = pred_el
+                        command_motors_to_target(pred_az, pred_el, shared_data)
+                    last_prediction_time = current_time
 
             time.sleep(0.0005)
 
@@ -610,4 +637,4 @@ def run_tracking_logic(shared_data):
             traceback.print_exc()
             time.sleep(0.1)
 
-    print("[TrackingLogic] Shutting down...")
+    print("[TrackingLogic] Shutting down...") 
