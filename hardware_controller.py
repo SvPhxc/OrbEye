@@ -187,7 +187,7 @@ class HardwareController:
                     self.tilt_pid.reset()
                     if next_state == "BACKGROUND_SCAN":
                         self.current_scan_el, self.scan_pan_direction, self.scan_is_turning = SCAN_TILT_MAX, 1, False
-                        self.scan_target_az = self.internal_pan_pos
+                        self.scan_target_az = 0
                     current_state = next_state
 
                 pan_vel, tilt_vel = 0, 0
