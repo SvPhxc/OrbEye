@@ -16,13 +16,13 @@ TARGET_REACHED_THRESHOLD_DEG = 0.4
 
 # --- IMPROVED SCAN PARAMETERS ---
 # Constant velocity scanning with precise timing
-SCAN_VELOCITY_DPS = 360.0  # Constant scan velocity in degrees per second
-SCAN_SAMPLE_RATE_HZ = 1000  # LiDAR sampling rate (samples per second)
+SCAN_VELOCITY_DPS = 120.0  # Constant scan velocity in degrees per second
+SCAN_SAMPLE_RATE_HZ = 10  # LiDAR sampling rate (samples per second)
 SCAN_DEGREES_PER_SAMPLE = SCAN_VELOCITY_DPS / SCAN_SAMPLE_RATE_HZ  # 12 degrees per sample at 120dps/10Hz
 
 # Define the boundaries and resolution for scanning
 # IMPORTANT: Limited range to prevent cable damage - no full 360° rotation!
-SCAN_PAN_MIN, SCAN_PAN_MAX = 1, 359  # Safe range with cable protection margins
+SCAN_PAN_MIN, SCAN_PAN_MAX = 10, 350  # Safe range with cable protection margins
 SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90
 SCAN_STEP_DEG = 1
 
@@ -263,29 +263,39 @@ class HardwareController:
 
         elif self.scan_state == "SCANNING":
             # Constant velocity scanning within safe range
-            target_pan = self._get_expected_scan_position(current_time)
-
-            # Use direct velocity control for constant motion
             pan_vel = SCAN_VELOCITY_DPS * self.scan_direction
 
             # Keep tilt position steady
             self.tilt_pid.set_setpoint(self.current_scan_elevation)
             tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
-            # Check if we've reached the end of the safe scan range
-            if self.scan_direction == 1 and self.internal_pan_pos >= SCAN_PAN_MAX:
-                # Reached maximum safe position
-                self.scan_state = "MOVING_TO_NEXT_ROW"
-                self.scan_direction = -1  # Next row will scan backward
-                print(
-                    f"[HWCtrl-SCAN] Row completed (forward to {SCAN_PAN_MAX}°). Samples taken: {self.samples_this_row}")
+            # Check if we've reached the end of the scan range based on time/distance
+            elapsed_time = current_time - self.scan_start_time
+            distance_traveled = SCAN_VELOCITY_DPS * elapsed_time
 
-            elif self.scan_direction == -1 and self.internal_pan_pos <= SCAN_PAN_MIN:
-                # Reached minimum safe position
+            # More reliable end-of-row detection using time + small position check
+            if self.scan_direction == 1:
+                # Scanning forward: check if we've traveled the full distance OR reached the limit
+                if (distance_traveled >= self.scan_range_deg) or (self.internal_pan_pos >= (SCAN_PAN_MAX - 1)):
+                    self.scan_state = "MOVING_TO_NEXT_ROW"
+                    self.scan_direction = -1  # Next row will scan backward
+                    print(
+                        f"[HWCtrl-SCAN] Row completed (forward, {distance_traveled:.1f}° in {elapsed_time:.2f}s). Samples: {self.samples_this_row}")
+
+            elif self.scan_direction == -1:
+                # Scanning backward: check if we've traveled the full distance OR reached the limit
+                if (distance_traveled >= self.scan_range_deg) or (self.internal_pan_pos <= (SCAN_PAN_MIN + 1)):
+                    self.scan_state = "MOVING_TO_NEXT_ROW"
+                    self.scan_direction = 1  # Next row will scan forward
+                    print(
+                        f"[HWCtrl-SCAN] Row completed (backward, {distance_traveled:.1f}° in {elapsed_time:.2f}s). Samples: {self.samples_this_row}")
+
+            # Safety check: stop motor if we're getting too close to limits
+            if ((self.scan_direction == 1 and self.internal_pan_pos >= SCAN_PAN_MAX) or
+                    (self.scan_direction == -1 and self.internal_pan_pos <= SCAN_PAN_MIN)):
+                pan_vel = 0  # Emergency stop
                 self.scan_state = "MOVING_TO_NEXT_ROW"
-                self.scan_direction = 1  # Next row will scan forward
-                print(
-                    f"[HWCtrl-SCAN] Row completed (backward to {SCAN_PAN_MIN}°). Samples taken: {self.samples_this_row}")
+                print("[HWCtrl-SCAN] Emergency stop - reached safety limit")
 
         elif self.scan_state == "MOVING_TO_NEXT_ROW":
             # Move to next elevation and prepare for next row
@@ -341,18 +351,14 @@ class HardwareController:
 
                 # Only log data during active scanning (constant velocity motion)
                 if self.scan_state == "SCANNING" and self._should_sample_lidar(current_time):
-                    # Calculate precise position based on time and velocity
+                    # Calculate precise position based on time and velocity (for data logging only)
                     elapsed_scan_time = current_time - self.scan_start_time
                     precise_pan_displacement = SCAN_VELOCITY_DPS * elapsed_scan_time * self.scan_direction
                     precise_pan_pos = self.scan_start_position + precise_pan_displacement
 
-                    # Clamp to safe range instead of wrapping
-                    precise_pan_pos = max(SCAN_PAN_MIN, min(SCAN_PAN_MAX, precise_pan_pos))
-
+                    # For data logging, use the calculated position (don't clamp)
                     # Apply calibration offset
                     corrected_pan_pos = precise_pan_pos + (self.scan_direction * SCAN_PAN_CALIBRATION_OFFSET_DEG)
-                    # Keep corrected position within safe bounds too
-                    corrected_pan_pos = max(SCAN_PAN_MIN, min(SCAN_PAN_MAX, corrected_pan_pos))
 
                     # Log the data point
                     self.background_data_buffer.append([
