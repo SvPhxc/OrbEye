@@ -300,7 +300,7 @@ class HandTracker:
     LIDAR_FOV = 2.0
 
     def __init__(self, timeout=0.7, coast_timeout=1.5,
-                 prediction_factor=1, velocity_smoothing_factor=0.4):
+                 prediction_factor=1, velocity_smoothing_factor=0.8):
         """
         Initializes the HandTracker.
         Note: scan_radius, scan_points, and time_per_waypoint are now dynamically
@@ -520,7 +520,7 @@ class HandTracker:
             if dt > 0:
                 self.last_coast_update_time = current_time
 
-                predicted_delta_az = 2*self.smoothed_velocity['az'] * dt
+                predicted_delta_az = self.smoothed_velocity['az'] * dt
                 predicted_delta_el = self.smoothed_velocity['el'] * dt
 
                 self.coasting_target_pos['az'] += predicted_delta_az
