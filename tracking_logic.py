@@ -353,7 +353,7 @@ class HandTracker:
         # 1. SCAN RADIUS: Set to half the LiDAR's FOV.
         # This ensures the edge of the LiDAR's sensing cone passes through the
         # last known target position, maximizing the chance of a hit in a tight circle.
-        self.scan_radius = (self.LIDAR_FOV * 7)
+        self.scan_radius = (self.LIDAR_FOV * 10)
 
         # 2. SCAN POINTS: More points for closer targets, fewer for distant ones.
         # Closer targets have higher apparent velocity and benefit from a denser scan pattern.
@@ -367,7 +367,7 @@ class HandTracker:
 
         # 3. TIME PER WAYPOINT (Scan Speed): Scan faster for closer targets.
         # Linger longer on points for distant targets, which may have a weaker return signal.
-        min_time, max_time = 0.030, 0.03  # in seconds
+        min_time, max_time = 0.040, 0.04  # in seconds
         self.time_per_waypoint = min_time + (distance_m / effective_dist_max) * (max_time - min_time)
         # Clamp the value to stay within the defined min/max bounds.
         self.time_per_waypoint = max(min_time, min(max_time, self.time_per_waypoint))
