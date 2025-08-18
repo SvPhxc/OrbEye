@@ -59,9 +59,9 @@ SCAN_PAN_CALIBRATION_OFFSET_DEG = 0  # <--- TUNE THIS VALUE
 # 4. If needed, add a very small PAN_KI to help the motor hold its final position accurately.
 #
 MAX_PAN_SPEED_DPS = 720.0
-PAN_KP, PAN_KI, PAN_KD = 7.5, 0.0001, 0.0005
+PAN_KP, PAN_KI, PAN_KD = 6.5, 0.0001, 0.0005
 MAX_TILT_SPEED_DPS = 600.0
-TILT_KP, TILT_KI, TILT_KD = 7.5, 0.000, 0.000
+TILT_KP, TILT_KI, TILT_KD = 6.5, 0.000, 0.000
 
 
 # ==============================================================================
@@ -171,7 +171,7 @@ class HardwareController:
 
             while not self.shared_data["shutdown"].value:
                 dt = time.monotonic() - last_loop_time
-                if dt <= 0.0005: continue
+                if dt <= 0.001: continue
                 last_loop_time = time.monotonic()
                 if self.shared_data["background_scan_active"].value:
                     next_state = "BACKGROUND_SCAN"
