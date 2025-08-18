@@ -85,11 +85,12 @@ class HardwareController:
         self.scan_pan_direction = 1
         self.background_data_buffer = []
 
-        # --- NEW VARIABLE TO MANAGE SCAN STATE ---
+        # --- FIX: Initialize the attribute here ---
+        self.scan_is_turning = False
+
         self.scan_phase = None  # Can be "homing", "scanning"
 
     def _lidar_reader_thread(self):
-        # ... (unchanged)
         print("[HWCtrl-LIDAR] LiDAR reader thread started.")
         while not self.shutdown_event.is_set():
             try:
@@ -107,7 +108,6 @@ class HardwareController:
         print("[HWCtrl-LIDAR] LiDAR reader thread shut down.")
 
     def _execute_motor_commands(self, pan_velocity_dps, tilt_velocity_dps, dt):
-        # ... (unchanged)
         self.internal_pan_pos += (pan_velocity_dps * dt)
         self.internal_tilt_pos = max(0, min(90, self.internal_tilt_pos + (tilt_velocity_dps * dt)))
         if abs(pan_velocity_dps) > 0.1:
@@ -153,9 +153,9 @@ class HardwareController:
                     self.pan_pid.reset();
                     self.tilt_pid.reset()
                     if next_state == "BACKGROUND_SCAN":
-                        # --- MODIFIED: INITIATE HOMING PHASE ---
                         print("[HWCtrl-SCAN] Initializing scan. Homing to 0 degrees...")
                         self.scan_phase = "homing"
+                        self.scan_is_turning = False  # Reset turning state
                     current_state = next_state
 
                 pan_vel, tilt_vel = 0, 0
@@ -180,24 +180,20 @@ class HardwareController:
                         self.shared_data["target_reached"].value = target_reached
 
                 elif current_state == "BACKGROUND_SCAN":
-                    # --- NEW LOGIC: HANDLE HOMING AND SCANNING PHASES ---
                     if self.scan_phase == "homing":
-                        # Use the PD controller to drive to 0
                         current_wrapped_pos = self.internal_pan_pos % 360.0
                         self.pan_pid.set_setpoint(0.0)
                         pan_vel = self.pan_pid.update(current_wrapped_pos)
 
-                        # Check if we have arrived
                         pan_error = abs(self.pan_pid._last_error)
                         if pan_error < TARGET_REACHED_THRESHOLD_DEG and abs(pan_vel) < 1.0:
                             print("[HWCtrl-SCAN] Homing complete. Position zeroed.")
-                            self.internal_pan_pos = 0.0  # THE CRITICAL FIX: Reset odometer
+                            self.internal_pan_pos = 0.0
                             self.current_scan_el = SCAN_TILT_MAX
                             self.scan_pan_direction = 1
-                            self.scan_phase = "scanning"  # Proceed to scanning
+                            self.scan_phase = "scanning"
 
                     elif self.scan_phase == "scanning":
-                        # This is the original, unchanged scanning logic
                         if not self.scan_is_turning:
                             pan_vel = SCAN_PAN_SPEED_DPS * self.scan_pan_direction
                             is_past_max = self.scan_pan_direction == 1 and self.internal_pan_pos >= SCAN_PAN_MAX
@@ -221,7 +217,6 @@ class HardwareController:
                             else:
                                 self.scan_is_turning = False
 
-                    # Tilt control is always active during any scan phase
                     self.tilt_pid.set_setpoint(self.current_scan_el)
                     tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
@@ -232,7 +227,6 @@ class HardwareController:
                         dist, strength, ts = self.lidar_queue.get_nowait()
                         with self.shared_data["lidar_data"].get_lock():
                             self.shared_data["lidar_data"][:] = [dist, strength, ts]
-                        # Only log data during the actual scanning phase
                         if current_state == "BACKGROUND_SCAN" and self.scan_phase == "scanning" and not self.scan_is_turning:
                             current_log_pos = self.internal_pan_pos % 360.0
                             corrected_pan_pos = (current_log_pos + (
