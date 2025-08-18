@@ -1,5 +1,3 @@
-# tracking_logic.py
-
 import time
 import threading
 import numpy as np
@@ -53,7 +51,8 @@ class ClutterFilter:
             print("[ClutterFilter] 2D (directional) k-d tree built successfully.")
 
         except FileNotFoundError:
-            print(f"[ClutterFilter] WARNING: Background file '{background_file}' not found. Running without clutter filtering.")
+            print(
+                f"[ClutterFilter] WARNING: Background file '{background_file}' not found. Running without clutter filtering.")
         except Exception as e:
             print(f"[ClutterFilter] ERROR loading background data: {e}")
 
@@ -89,7 +88,7 @@ class ClutterFilter:
             return True
 
         except Exception:
-            return True # Fail-safe: if the query fails, accept the measurement.
+            return True  # Fail-safe: if the query fails, accept the measurement.
 
 
 class OrbitalEKF:
@@ -275,9 +274,6 @@ class Acquirer:
         return state
 
 
-
-
-
 import time
 import math
 from enum import Enum
@@ -290,7 +286,6 @@ class HandTrackerState(Enum):
     IDLE = 0
     SCANNING = 1
     COASTING = 2
-
 
 
 class HandTracker:
@@ -349,18 +344,16 @@ class HandTracker:
         self.coast_start_time = 0
         print("[HandTracker] Reset.")
 
-    def _update_scan_parameters(self, distance_m, shared_data=None):
+    def _update_scan_parameters(self, distance_m):
         """
         Dynamically adjusts scan points and speed based on the target's distance.
         This is the core of the distance-based adaptation.
         """
-        shared_data["satellite_points"].append(
-            (self.best_point['az'], self.best_point['el'], distance_m * 100, self.best_point['strength'],
-             self.best_point['time']))
+
         # 1. SCAN RADIUS: Set to half the LiDAR's FOV.
         # This ensures the edge of the LiDAR's sensing cone passes through the
         # last known target position, maximizing the chance of a hit in a tight circle.
-        self.scan_radius = (self.LIDAR_FOV *5)
+        self.scan_radius = (self.LIDAR_FOV * 5)
 
         # 2. SCAN POINTS: More points for closer targets, fewer for distant ones.
         # Closer targets have higher apparent velocity and benefit from a denser scan pattern.
@@ -475,18 +468,28 @@ class HandTracker:
 
                                 s = self.velocity_smoothing_factor
                                 self.smoothed_velocity['az'] = (s * self.smoothed_velocity['az']) + (
-                                            (1 - s) * (raw_delta_az / dt))
+                                        (1 - s) * (raw_delta_az / dt))
                                 self.smoothed_velocity['el'] = (s * self.smoothed_velocity['el']) + (
-                                            (1 - s) * (raw_delta_el / dt))
+                                        (1 - s) * (raw_delta_el / dt))
 
                                 # Predict based on one full scan cycle time
                                 prediction_time = len(self.scan_path) * self.time_per_waypoint
                                 next_center_az = self.best_point['az'] + (
-                                            self.smoothed_velocity['az'] * prediction_time * self.prediction_factor)
+                                        self.smoothed_velocity['az'] * prediction_time * self.prediction_factor)
                                 next_center_el = self.best_point['el'] + (
-                                            self.smoothed_velocity['el'] * prediction_time * self.prediction_factor)
+                                        self.smoothed_velocity['el'] * prediction_time * self.prediction_factor)
 
                         self.previous_best_point = self.best_point.copy()
+
+                        # Save the best point of the scan to shared_data
+                        with shared_data["satellite_points"].get_lock():
+                            # Assuming satellite_points is a list or can be treated as such
+                            # to append new points. If it's a single value, this needs adjustment.
+                            # For now, let's assume we are storing a list of best points.
+                            # If you want to overwrite it each time, remove the list creation/append.
+                            if "satellite_points_list" not in shared_data:
+                                shared_data["satellite_points_list"] = []
+                            shared_data["satellite_points_list"].append(self.best_point)
 
                         # ** Update scan parameters for the next cycle based on the latest distance **
                         self._update_scan_parameters(self.best_point['dist'])
@@ -511,8 +514,6 @@ class HandTracker:
                 self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
                                    'time': current_time}
 
-
-
                 # ** Update parameters based on reacquired distance **
                 self._update_scan_parameters(dist)
 
@@ -533,6 +534,7 @@ class HandTracker:
                 self.coasting_target_pos['el'] += predicted_delta_el
 
                 command_motors_to_target(self.coasting_target_pos['az'], self.coasting_target_pos['el'], shared_data)
+
 
 class ReactiveTracker:
     """Non-predictive tracker for immediate, reactive tracking of any target."""
@@ -628,7 +630,7 @@ def run_tracking_logic(shared_data):
     orbital_ekf = OrbitalEKF()
     acquirer = Acquirer()
     reactive_tracker = ReactiveTracker()
-    hand_tracker = HandTracker(shared_data["satellite_points"])
+    hand_tracker = HandTracker()
     state = TrackingState.IDLE
     last_prediction_time = time.time()
     prediction_interval = 0.1
