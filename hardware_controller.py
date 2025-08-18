@@ -21,7 +21,8 @@ SCAN_SAMPLE_RATE_HZ = 1000  # LiDAR sampling rate (samples per second)
 SCAN_DEGREES_PER_SAMPLE = SCAN_VELOCITY_DPS / SCAN_SAMPLE_RATE_HZ  # 12 degrees per sample at 120dps/10Hz
 
 # Define the boundaries and resolution for scanning
-SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360
+# IMPORTANT: Limited range to prevent cable damage - no full 360° rotation!
+SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360  # Safe range with cable protection margins
 SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90
 SCAN_STEP_DEG = 1
 
@@ -92,10 +93,12 @@ class HardwareController:
         self.samples_this_row = 0
 
         # Pre-calculate scan parameters for accuracy
-        self.scan_duration_per_row = 360.0 / SCAN_VELOCITY_DPS  # Time to scan one full row
+        self.scan_range_deg = SCAN_PAN_MAX - SCAN_PAN_MIN  # Total scan range per row
+        self.scan_duration_per_row = self.scan_range_deg / SCAN_VELOCITY_DPS  # Time to scan one row
         self.expected_samples_per_row = int(self.scan_duration_per_row * SCAN_SAMPLE_RATE_HZ)
 
         print(f"[HWCtrl] Scan parameters: {SCAN_VELOCITY_DPS} dps, {SCAN_SAMPLE_RATE_HZ} Hz")
+        print(f"[HWCtrl] Scan range: {SCAN_PAN_MIN}° to {SCAN_PAN_MAX}° ({self.scan_range_deg}°)")
         print(
             f"[HWCtrl] Expected: {self.scan_duration_per_row:.2f}s per row, {self.expected_samples_per_row} samples per row")
 
@@ -144,7 +147,10 @@ class HardwareController:
 
         elapsed_time = current_time - self.scan_start_time
         expected_displacement = SCAN_VELOCITY_DPS * elapsed_time * self.scan_direction
-        expected_pos = (self.scan_start_position + expected_displacement) % 360
+        expected_pos = self.scan_start_position + expected_displacement
+
+        # Clamp to safe range instead of wrapping
+        expected_pos = max(SCAN_PAN_MIN, min(SCAN_PAN_MAX, expected_pos))
         return expected_pos
 
     def _should_sample_lidar(self, current_time):
@@ -219,6 +225,68 @@ class HardwareController:
                 self.scan_direction = 1
                 print(f"[HWCtrl-SCAN] Row completed (backward). Samples taken: {self.samples_this_row}")
 
+        if self.scan_state == "IDLE":
+            # Initialize scan - move to starting position
+            self.current_scan_elevation = SCAN_TILT_MAX
+            self.scan_direction = 1  # Always start scanning forward
+            self.scan_state = "POSITIONING"
+            start_pos = SCAN_PAN_MIN  # Always start from minimum position
+            self.pan_pid.set_setpoint(start_pos)
+            self.tilt_pid.set_setpoint(self.current_scan_elevation)
+            print(
+                f"[HWCtrl-SCAN] Starting background scan. Moving to initial position: az={start_pos}, el={self.current_scan_elevation}")
+
+        elif self.scan_state == "POSITIONING":
+            # Move to scan start position for current row
+            target_start = SCAN_PAN_MIN if self.scan_direction == 1 else SCAN_PAN_MAX
+            self.pan_pid.set_setpoint(target_start)
+            self.tilt_pid.set_setpoint(self.current_scan_elevation)
+
+            pan_vel = self.pan_pid.update(self.internal_pan_pos)
+            tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
+
+            # Check if we've reached the starting position
+            pan_error = abs(self._get_shortest_pan_error(target_start, self.internal_pan_pos))
+            tilt_error = abs(self.current_scan_elevation - self.internal_tilt_pos)
+
+            if pan_error < TARGET_REACHED_THRESHOLD_DEG and tilt_error < TARGET_REACHED_THRESHOLD_DEG:
+                # Start the scanning row
+                self.scan_state = "SCANNING"
+                self.scan_start_time = current_time
+                self.scan_start_position = self.internal_pan_pos
+                self.last_sample_time = current_time
+                self.samples_this_row = 0
+                self.row_start_time = current_time
+                scan_end = SCAN_PAN_MAX if self.scan_direction == 1 else SCAN_PAN_MIN
+                print(f"[HWCtrl-SCAN] Starting scan row at elevation {self.current_scan_elevation:.1f}°")
+                print(f"[HWCtrl-SCAN] Direction: {self.scan_direction} (from {target_start}° to {scan_end}°)")
+
+        elif self.scan_state == "SCANNING":
+            # Constant velocity scanning within safe range
+            target_pan = self._get_expected_scan_position(current_time)
+
+            # Use direct velocity control for constant motion
+            pan_vel = SCAN_VELOCITY_DPS * self.scan_direction
+
+            # Keep tilt position steady
+            self.tilt_pid.set_setpoint(self.current_scan_elevation)
+            tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
+
+            # Check if we've reached the end of the safe scan range
+            if self.scan_direction == 1 and self.internal_pan_pos >= SCAN_PAN_MAX:
+                # Reached maximum safe position
+                self.scan_state = "MOVING_TO_NEXT_ROW"
+                self.scan_direction = -1  # Next row will scan backward
+                print(
+                    f"[HWCtrl-SCAN] Row completed (forward to {SCAN_PAN_MAX}°). Samples taken: {self.samples_this_row}")
+
+            elif self.scan_direction == -1 and self.internal_pan_pos <= SCAN_PAN_MIN:
+                # Reached minimum safe position
+                self.scan_state = "MOVING_TO_NEXT_ROW"
+                self.scan_direction = 1  # Next row will scan forward
+                print(
+                    f"[HWCtrl-SCAN] Row completed (backward to {SCAN_PAN_MIN}°). Samples taken: {self.samples_this_row}")
+
         elif self.scan_state == "MOVING_TO_NEXT_ROW":
             # Move to next elevation and prepare for next row
             self.current_scan_elevation -= SCAN_STEP_DEG
@@ -227,6 +295,8 @@ class HardwareController:
                 # Scan completely finished
                 self.scan_state = "FINISHED"
                 print("[HWCtrl-SCAN] Background scan completed!")
+                print(
+                    f"[HWCtrl-SCAN] Total scan coverage: {SCAN_PAN_MIN}° to {SCAN_PAN_MAX}° ({self.scan_range_deg}°) at each elevation")
 
                 # Auto-save data
                 if self.background_data_buffer:
@@ -240,18 +310,16 @@ class HardwareController:
 
                 self.shared_data["background_scan_active"].value = False
             else:
-                # Set up for next row
-                if self.scan_direction == 1:
-                    start_pos = SCAN_PAN_MIN
-                else:
-                    start_pos = SCAN_PAN_MAX
-
-                self.pan_pid.set_setpoint(start_pos)
+                # Prepare for next row - direction is already set from previous row completion
+                # Move to the appropriate starting position for the next scan direction
+                target_start = SCAN_PAN_MIN if self.scan_direction == 1 else SCAN_PAN_MAX
+                self.pan_pid.set_setpoint(target_start)
                 self.tilt_pid.set_setpoint(self.current_scan_elevation)
                 self.scan_state = "POSITIONING"
                 print(f"[HWCtrl-SCAN] Moving to next row: elevation {self.current_scan_elevation:.1f}°")
+                print(f"[HWCtrl-SCAN] Next row will scan {'forward' if self.scan_direction == 1 else 'backward'}")
 
-            # Use PID to move to position
+            # Use PID to move to position during transitions
             pan_vel = self.pan_pid.update(self.internal_pan_pos)
             tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
@@ -276,11 +344,15 @@ class HardwareController:
                     # Calculate precise position based on time and velocity
                     elapsed_scan_time = current_time - self.scan_start_time
                     precise_pan_displacement = SCAN_VELOCITY_DPS * elapsed_scan_time * self.scan_direction
-                    precise_pan_pos = (self.scan_start_position + precise_pan_displacement) % 360
+                    precise_pan_pos = self.scan_start_position + precise_pan_displacement
+
+                    # Clamp to safe range instead of wrapping
+                    precise_pan_pos = max(SCAN_PAN_MIN, min(SCAN_PAN_MAX, precise_pan_pos))
 
                     # Apply calibration offset
-                    corrected_pan_pos = (precise_pan_pos + (
-                                self.scan_direction * SCAN_PAN_CALIBRATION_OFFSET_DEG)) % 360
+                    corrected_pan_pos = precise_pan_pos + (self.scan_direction * SCAN_PAN_CALIBRATION_OFFSET_DEG)
+                    # Keep corrected position within safe bounds too
+                    corrected_pan_pos = max(SCAN_PAN_MIN, min(SCAN_PAN_MAX, corrected_pan_pos))
 
                     # Log the data point
                     self.background_data_buffer.append([
