@@ -91,19 +91,9 @@ class ClutterFilter:
             return True # Fail-safe: if the query fails, accept the measurement.
 
 
-class HandTrackerState:
-    IDLE = 0
-    SCANNING = 1
-    COASTING = 2
-    KALMAN_TRACKING = 3
 
-def command_motors_to_target(az, el, shared_data):
-    """
-    Placeholder function for commanding the motors.
-    In a real implementation, this would send commands to the drone's flight controller.
-    """
-    # print(f"Commanding motors to Az: {az:.2f}, El: {el:.2f}")
-    pass
+
+
 
 class KalmanFilter:
     def __init__(self, dt, process_variance, measurement_variance):
@@ -536,8 +526,8 @@ def run_tracking_logic(shared_data):
 
     # Initialize components
     clutter_filter = ClutterFilter(shared_data.get("background_path", "background_data.npy").value)
-    orbital_ekf = OrbitalEKF()
-    acquirer = Acquirer()
+    kf = KalmanFilter(dt=0.1, process_variance=1e-5, measurement_variance=1e-4)
+
     reactive_tracker = ReactiveTracker()
     hand_tracker = HandTracker()
 
