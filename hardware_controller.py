@@ -58,7 +58,7 @@ SCAN_PAN_CALIBRATION_OFFSET_DEG = 0  # <--- TUNE THIS VALUE
 # 3. With PAN_KP set, slowly increase PAN_KD to reduce overshoot at the end of a move. If the jump returns, this value is too high.
 # 4. If needed, add a very small PAN_KI to help the motor hold its final position accurately.
 #
-MAX_PAN_SPEED_DPS = 600.0
+MAX_PAN_SPEED_DPS = 720.0
 PAN_KP, PAN_KI, PAN_KD = 6.5, 0.0001, 0.0005
 MAX_TILT_SPEED_DPS = 600.0
 TILT_KP, TILT_KI, TILT_KD = 6.5, 0.000, 0.000
@@ -212,8 +212,11 @@ class HardwareController:
 
                     if current_state == "GOTO_POSITION":
                         self.shared_data["target_reached"].value = target_reached
-                elif current_state == "BACKGROUND_SCAN":
 
+                elif current_state == "BACKGROUND_SCAN":
+                    # --- MODIFIED ---: Entire background scan state logic was refactored for clarity and to add feedforward control.
+
+                    # 1. Check for scan completion
                     if self.current_scan_el < SCAN_TILT_MIN:
                         print("[HWCtrl] BACKGROUND_SCAN finished.")
                         if self.background_data_buffer:
@@ -226,41 +229,60 @@ class HardwareController:
                             except Exception as e:
                                 print(f"[HWCtrl] ERROR saving background data: {e}")
                         self.shared_data["background_scan_active"].value = False
+                        pan_vel, tilt_vel = 0, 0  # Ensure motors stop
 
+                    # 2. Handle the turnaround phase
                     elif self.scan_is_turning:
-                        # We are in a turnaround. Wait for the motor to settle at the edge.
+                        # Use PID to move precisely to the edge for the next scan line.
                         pan_error = abs(
                             self._get_shortest_pan_error(self.pan_pid.get_setpoint(), self.internal_pan_pos))
                         if pan_error < TARGET_REACHED_THRESHOLD_DEG:
-
+                            # Once we've reached the edge, reverse direction and move to the next tilt angle.
                             self.scan_pan_direction *= -1
                             self.current_scan_el -= SCAN_STEP_DEG
                             self.scan_is_turning = False
-                            print(f"[HWCtrl-SCAN] Row finished. New elevation: {self.current_scan_el:.1f} deg, Direction: {self.scan_pan_direction}")
+                            # Reset the virtual target to the motor's current position to start the next sweep smoothly.
+                            self.scan_target_az = self.internal_pan_pos
+                            print(
+                                f"[HWCtrl-SCAN] Row finished. New elevation: {self.current_scan_el:.1f} deg, Direction: {self.scan_pan_direction}")
 
+                        # During the turn, velocity is purely driven by the PID to reach the setpoint.
+                        pan_vel = self.pan_pid.update(self.internal_pan_pos)
+                        self.tilt_pid.set_setpoint(self.current_scan_el)
+                        tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
+
+                    # 3. Handle the sweeping phase
                     else:
-                        # We are sweeping. Move the virtual target.
+                        # Move the virtual target at the desired constant scan speed.
                         self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
 
-                        if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX-0.5:
-                            self.scan_target_az = SCAN_PAN_MAX
+                        # Check if the virtual target has reached a boundary, which triggers the turnaround.
+                        if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX:
+                            self.pan_pid.set_setpoint(SCAN_PAN_MAX)  # Set PID target for the turnaround maneuver.
                             self.scan_is_turning = True
-                        elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN+0.5:
-                            self.scan_target_az = SCAN_PAN_MIN
+                        elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN:
+                            self.pan_pid.set_setpoint(SCAN_PAN_MIN)  # Set PID target for the turnaround maneuver.
                             self.scan_is_turning = True
 
+                        # --- VELOCITY CALCULATION WITH FEEDFORWARD ---
+                        # This approach uses the PID for *correction* and adds the desired scan speed directly.
+                        # This makes the system proactive, accounting for acceleration/deceleration and reducing lag.
 
-                    pan_vel = SCAN_PAN_SPEED_DPS
+                        # The PID provides a *corrective* velocity based on the lag between the target and actual position.
+                        pid_correction_vel = self.pan_pid.update(self.internal_pan_pos)
 
-                    tilt_vel = SCAN_PAN_SPEED_DPS
+                        # The feedforward velocity is our desired base speed for the sweep.
+                        feedforward_vel = SCAN_PAN_SPEED_DPS * self.scan_pan_direction
 
-                else:  # HF_TRACKING
-                    pan_vel = self.pan_pid.update(self.shared_data["predicted_azimuth"].value
-                                                  if self.shared_data["predicted_azimuth"].value is not None else 0)
-                    tilt_vel = self.tilt_pid.update(self.shared_data["predicted_elevation"].value
-                                                    if self.shared_data["predicted_elevation"].value is not None else 0)
-                    pan_vel = max(-MAX_PAN_SPEED_DPS, min(MAX_PAN_SPEED_DPS, pan_vel))
-                    tilt_vel = max(-MAX_TILT_SPEED_DPS, min(MAX_TILT_SPEED_DPS, tilt_vel))
+                        # The final motor velocity is the sum of the proactive feedforward speed and the reactive PID correction.
+                        pan_vel = feedforward_vel + pid_correction_vel
+
+                        # Clamp the final velocity to the system's maximum capabilities.
+                        pan_vel = max(-MAX_PAN_SPEED_DPS, min(MAX_PAN_SPEED_DPS, pan_vel))
+
+                        # Tilt motor holds the current elevation steady during the sweep.
+                        self.tilt_pid.set_setpoint(self.current_scan_el)
+                        tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
                 self._execute_motor_commands(pan_vel, tilt_vel, dt)
 
@@ -270,12 +292,11 @@ class HardwareController:
                         with self.shared_data["lidar_data"].get_lock():
                             self.shared_data["lidar_data"][:] = [dist, strength, ts]
 
-                        # --- CODE MODIFIED HERE ---
                         # Only log data during the active sweep (not during a turn)
                         if current_state == "BACKGROUND_SCAN" and not self.scan_is_turning:
                             # Apply a calibration offset to the pan position to correct for ghosting.
                             corrected_pan_pos = self.internal_pan_pos + (
-                                        self.scan_pan_direction * SCAN_PAN_CALIBRATION_OFFSET_DEG)
+                                    self.scan_pan_direction * SCAN_PAN_CALIBRATION_OFFSET_DEG)
                             # Ensure the corrected position still wraps around 360 degrees
                             corrected_pan_pos %= 360.0
 
