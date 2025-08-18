@@ -111,7 +111,7 @@ class HardwareController:
         self.internal_pan_pos += (pan_velocity_dps * dt)
         self.internal_tilt_pos = max(0, min(90, self.internal_tilt_pos + (tilt_velocity_dps * dt)))
         if abs(pan_velocity_dps) > 0.1:
-            self.pi.write(STEPPER_DIR_PIN, 0 if pan_velocity_dps < 0 else 1)
+            self.pi.write(STEPPER_DIR_PIN, 1 if pan_velocity_dps < 0 else 0)
             frequency = abs(pan_velocity_dps) / MICROSTEP_ANGLE
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(min(frequency, 250000)), 500000)
         else:
