@@ -349,12 +349,14 @@ class HandTracker:
         self.coast_start_time = 0
         print("[HandTracker] Reset.")
 
-    def _update_scan_parameters(self, distance_m):
+    def _update_scan_parameters(self, distance_m, shared_data=None):
         """
         Dynamically adjusts scan points and speed based on the target's distance.
         This is the core of the distance-based adaptation.
         """
-        shared_data["satellite_points"].value.append((self.best_point['az'], self.best_point['el'], distance_m* 100, self.best_point['strength'], self.best_point['time']))
+        shared_data["satellite_points"].value.append(
+            (self.best_point['az'], self.best_point['el'], distance_m * 100, self.best_point['strength'],
+             self.best_point['time']))
         # 1. SCAN RADIUS: Set to half the LiDAR's FOV.
         # This ensures the edge of the LiDAR's sensing cone passes through the
         # last known target position, maximizing the chance of a hit in a tight circle.
@@ -626,8 +628,7 @@ def run_tracking_logic(shared_data):
     orbital_ekf = OrbitalEKF()
     acquirer = Acquirer()
     reactive_tracker = ReactiveTracker()
-    hand_tracker = HandTracker()
-
+    hand_tracker = HandTracker(shared_data["satellite_points"])
     state = TrackingState.IDLE
     last_prediction_time = time.time()
     prediction_interval = 0.1
