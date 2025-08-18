@@ -482,10 +482,7 @@ class HandTracker:
                         self.previous_best_point = self.best_point.copy()
 
                         # Save the best point of the scan to shared_data
-                        with shared_data["satellite_points"].get_lock():
-
-
-                            shared_data["satellite_points"].append(self.best_point)
+                     
 
                         # ** Update scan parameters for the next cycle based on the latest distance **
                         self._update_scan_parameters(self.best_point['dist'])
