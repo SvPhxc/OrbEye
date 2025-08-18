@@ -354,7 +354,7 @@ class HandTracker:
         Dynamically adjusts scan points and speed based on the target's distance.
         This is the core of the distance-based adaptation.
         """
-        shared_data["satellite_points"].value.append(
+        shared_data["satellite_points"].append(
             (self.best_point['az'], self.best_point['el'], distance_m * 100, self.best_point['strength'],
              self.best_point['time']))
         # 1. SCAN RADIUS: Set to half the LiDAR's FOV.
