@@ -35,7 +35,7 @@ SCAN_PAN_CALIBRATION_OFFSET_DEG = 0
 # and oscillate wildly. If it's too low, it will be very slow to reach the target.
 PAN_KP = 6.5
 TILT_KP = 6.5
-MAX_PAN_SPEED_DPS = 720.0
+MAX_PAN_SPEED_DPS = 360.0
 MAX_TILT_SPEED_DPS = 600.0
 # ==============================================================================
 
