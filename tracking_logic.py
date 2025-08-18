@@ -596,13 +596,9 @@ def run_tracking_logic(shared_data):
                                 shared_data["ekf_initialized"].value = True
                                 shared_data["acquire_points"].value = False
                                 shared_data["acquirer_status"].value = 0
-                elif shared_data["lidar_track_mode_active"].value:
-                    if state != TrackingState.TRACKING:
-                        print("[TrackingLogic] Switching to TRACKING mode (Predictive)")
-                        state = TrackingState.TRACKING
-                    if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
+              
 
-                
+
 
 
 
