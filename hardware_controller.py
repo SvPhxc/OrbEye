@@ -17,7 +17,7 @@ SCAN_PAN_SPEED_DPS = 360.0
 
 # --- Define the boundaries and resolution for scanning ---
 SCAN_PAN_MIN = 0.0
-SCAN_PAN_MAX = 360.0 - MICROSTEP_ANGLE
+SCAN_PAN_MAX = 360.0 - MICROSTEP_ANGLE*2
 SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90
 SCAN_STEP_DEG = 1
 
@@ -30,7 +30,7 @@ SCAN_PAN_CALIBRATION_OFFSET_DEG = 0
 # ==============================================================================
 # --- PD CONTROL TUNING GAINS ---
 MAX_PAN_SPEED_DPS = 360.0
-PAN_KP, PAN_KI, PAN_KD = 6.5, 0.0, 0.0005
+PAN_KP, PAN_KI, PAN_KD = 6.5, 0.0, 0.005
 MAX_TILT_SPEED_DPS = 600.0
 TILT_KP, TILT_KI, TILT_KD = 6.5, 0.0, 0.0
 
