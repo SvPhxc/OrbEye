@@ -14,7 +14,7 @@ STEPPER_SLEEP_PIN = 6
 MICROSTEP_ANGLE = 0.05625
 TARGET_REACHED_THRESHOLD_DEG = 0.4
 SCAN_PAN_SPEED_DPS = 600.0
-SCAN_TURNAROUND_SETTLE_DELAY_S = 0.05  # 50 milliseconds
+SCAN_TURNAROUND_SETTLE_DELAY_S = 0.2  # 50 milliseconds
 SCAN_TURNAROUND_DEG = 0.1
 
 # --- Define the boundaries and resolution for scanning ---
@@ -325,7 +325,7 @@ class HardwareController:
             traceback.print_exc()
         finally:
             print("[HWCtrl] Shutting down...")
-           
+
             self.shutdown_event.set()
             if 'lidar_thread' in locals() and locals()['lidar_thread'].is_alive(): locals()['lidar_thread'].join(
                 timeout=1)
