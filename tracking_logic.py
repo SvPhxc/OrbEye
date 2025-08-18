@@ -299,7 +299,7 @@ class HandTracker:
     # The Field of View (FOV) of the TF Mini-S is approximately 2 degrees.
     LIDAR_FOV = 2.0
 
-    def __init__(self, timeout=0.5, coast_timeout=1.5,
+    def __init__(self, timeout=0.7, coast_timeout=1.5,
                  prediction_factor=1, velocity_smoothing_factor=0.4):
         """
         Initializes the HandTracker.
@@ -353,11 +353,11 @@ class HandTracker:
         # 1. SCAN RADIUS: Set to half the LiDAR's FOV.
         # This ensures the edge of the LiDAR's sensing cone passes through the
         # last known target position, maximizing the chance of a hit in a tight circle.
-        self.scan_radius = (self.LIDAR_FOV * 6)
+        self.scan_radius = (self.LIDAR_FOV * 7)
 
         # 2. SCAN POINTS: More points for closer targets, fewer for distant ones.
         # Closer targets have higher apparent velocity and benefit from a denser scan pattern.
-        min_points, max_points = 8, 12
+        min_points, max_points = 12, 12
         # We assume a maximum effective tracking distance for this scaling logic (e.g., 12 meters).
         effective_dist_max = 12.0
         # Linearly interpolate the number of points based on distance.
@@ -367,7 +367,7 @@ class HandTracker:
 
         # 3. TIME PER WAYPOINT (Scan Speed): Scan faster for closer targets.
         # Linger longer on points for distant targets, which may have a weaker return signal.
-        min_time, max_time = 0.025, 0.04  # in seconds
+        min_time, max_time = 0.030, 0.03  # in seconds
         self.time_per_waypoint = min_time + (distance_m / effective_dist_max) * (max_time - min_time)
         # Clamp the value to stay within the defined min/max bounds.
         self.time_per_waypoint = max(min_time, min(max_time, self.time_per_waypoint))
@@ -520,7 +520,7 @@ class HandTracker:
             if dt > 0:
                 self.last_coast_update_time = current_time
 
-                predicted_delta_az = 3*self.smoothed_velocity['az'] * dt
+                predicted_delta_az = 2*self.smoothed_velocity['az'] * dt
                 predicted_delta_el = self.smoothed_velocity['el'] * dt
 
                 self.coasting_target_pos['az'] += predicted_delta_az
