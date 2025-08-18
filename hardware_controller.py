@@ -171,7 +171,7 @@ class HardwareController:
 
             while not self.shared_data["shutdown"].value:
                 dt = time.monotonic() - last_loop_time
-                if dt <= 0.01: continue
+                if dt <= 0.001: continue
                 last_loop_time = time.monotonic()
                 if self.shared_data["background_scan_active"].value:
                     next_state = "BACKGROUND_SCAN"
@@ -242,10 +242,10 @@ class HardwareController:
                         # We are sweeping. Move the virtual target.
                         self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
 
-                        if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX:
+                        if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX-0.5:
                             self.scan_target_az = SCAN_PAN_MAX
                             self.scan_is_turning = True
-                        elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN:
+                        elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN+0.5:
                             self.scan_target_az = SCAN_PAN_MIN
                             self.scan_is_turning = True
 
