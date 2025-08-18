@@ -30,9 +30,9 @@ SCAN_PAN_CALIBRATION_OFFSET_DEG = 0
 # ==============================================================================
 # --- PD CONTROL TUNING GAINS ---
 MAX_PAN_SPEED_DPS = 360.0
-PAN_KP, PAN_KI, PAN_KD = 3.5, 0.0, 0.005
+PAN_KP, PAN_KI, PAN_KD = 6.5, 0.0, 0.005
 MAX_TILT_SPEED_DPS = 600.0
-TILT_KP, TILT_KI, TILT_KD = 4.5, 0.0, 0.0
+TILT_KP, TILT_KI, TILT_KD = 6.5, 0.0, 0.0
 
 
 # ==============================================================================
