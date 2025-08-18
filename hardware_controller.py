@@ -288,7 +288,7 @@ class HardwareController:
                 self.shared_data["stepper_degrees"].value, self.shared_data[
                     "servo_degrees"].value = self.internal_pan_pos, self.internal_tilt_pos
 
-                time.sleep(0.0001)
+                time.sleep(0.001)
         except Exception as e:
             import traceback
             print(f"[HWCtrl] CRITICAL ERROR: {e}")
