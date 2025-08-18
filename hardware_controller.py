@@ -16,13 +16,13 @@ TARGET_REACHED_THRESHOLD_DEG = 0.4
 
 # --- IMPROVED SCAN PARAMETERS ---
 # Constant velocity scanning with precise timing
-SCAN_VELOCITY_DPS = 720.0  # Constant scan velocity in degrees per second
+SCAN_VELOCITY_DPS = 360.0  # Constant scan velocity in degrees per second
 SCAN_SAMPLE_RATE_HZ = 1000  # LiDAR sampling rate (samples per second)
 SCAN_DEGREES_PER_SAMPLE = SCAN_VELOCITY_DPS / SCAN_SAMPLE_RATE_HZ  # 12 degrees per sample at 120dps/10Hz
 
 # Define the boundaries and resolution for scanning
 # IMPORTANT: Limited range to prevent cable damage - no full 360° rotation!
-SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360  # Safe range with cable protection margins
+SCAN_PAN_MIN, SCAN_PAN_MAX = 1, 359  # Safe range with cable protection margins
 SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90
 SCAN_STEP_DEG = 1
 
