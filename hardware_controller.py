@@ -58,7 +58,7 @@ SCAN_PAN_CALIBRATION_OFFSET_DEG = 0  # <--- TUNE THIS VALUE
 # 3. With PAN_KP set, slowly increase PAN_KD to reduce overshoot at the end of a move. If the jump returns, this value is too high.
 # 4. If needed, add a very small PAN_KI to help the motor hold its final position accurately.
 #
-MAX_PAN_SPEED_DPS = 600.0
+MAX_PAN_SPEED_DPS = 720.0
 PAN_KP, PAN_KI, PAN_KD = 6.5, 0.0001, 0.0005
 MAX_TILT_SPEED_DPS = 600.0
 TILT_KP, TILT_KI, TILT_KD = 6.5, 0.000, 0.000
@@ -242,17 +242,17 @@ class HardwareController:
                         # We are sweeping. Move the virtual target.
                         self.scan_target_az += SCAN_PAN_SPEED_DPS * self.scan_pan_direction * dt
 
-                        if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX-0.5:
+                        if self.scan_pan_direction == 1 and self.scan_target_az >= SCAN_PAN_MAX:
                             self.scan_target_az = SCAN_PAN_MAX
                             self.scan_is_turning = True
-                        elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN+0.5:
+                        elif self.scan_pan_direction == -1 and self.scan_target_az <= SCAN_PAN_MIN:
                             self.scan_target_az = SCAN_PAN_MIN
                             self.scan_is_turning = True
 
-
-                    pan_vel = SCAN_PAN_SPEED_DPS
-
-                    tilt_vel = SCAN_PAN_SPEED_DPS
+                    self.pan_pid.set_setpoint(self.scan_target_az)
+                    pan_vel = self.pan_pid.update(self.internal_pan_pos)
+                    self.tilt_pid.set_setpoint(self.current_scan_el)
+                    tilt_vel = self.tilt_pid.update(self.internal_tilt_pos)
 
                 else:  # HF_TRACKING
                     pan_vel = self.pan_pid.update(self.shared_data["predicted_azimuth"].value
