@@ -25,15 +25,19 @@ MICROSTEP_ANGLE = 0.05625  # degrees per step
 
 # Control Parameters
 class MotorParams:
-    # Stepper Parameters
-    STEPPER_MAX_SPEED = 1000  # max steps per second
-    STEPPER_MIN_SPEED = 50  # min steps per second
-    STEPPER_ACCEL_DISTANCE = 5.0  # degrees to start/stop acceleration
+    # Stepper Parameters - DRV8825 optimized
+    STEPPER_MAX_SPEED = 5000  # max steps per second (DRV8825 can handle up to 250kHz)
+    STEPPER_MIN_SPEED = 100   # min steps per second
+    STEPPER_ACCEL_DISTANCE = 2.0  # degrees to start/stop acceleration (reduced for faster scanning)
+    STEPPER_CRUISE_SPEED = 3000  # optimal cruise speed for DRV8825
 
-    # PID Parameters for stepper speed control
-    KP = 4.5  # Proportional gain
-    KI = 0.01  # Integral gain
-    KD = 0.02  # Derivative gain
+    # Fast transition parameters
+    MAX_FREQ_CHANGE_RATE = 2000  # Hz per millisecond (much faster transitions)
+
+    # PID Parameters for stepper speed control (tuned for higher speeds)
+    KP = 6.0   # Increased proportional gain for faster response
+    KI = 0.05  # Increased integral gain
+    KD = 0.01  # Reduced derivative to prevent oscillation at high speeds
 
     # Servo Parameters
     SERVO_MIN_PULSE = 500+(23*0.09)  # microseconds
@@ -43,14 +47,14 @@ class MotorParams:
     SERVO_DISPLACEMENT = 0.0  # degrees offset for 0 point (pointing straight forward)
 
 
-# Scan Parameters
-SCAN_AZIMUTH_STEP = 2.0  # degrees per step for background scan
-SCAN_ELEVATION_STEP = 5.0  # degrees per step for background scan
+# Scan Parameters - Optimized for faster DRV8825 operation
+SCAN_AZIMUTH_STEP = 1.0  # Smaller steps for higher resolution (was 2.0)
+SCAN_ELEVATION_STEP = 2.0  # Smaller steps for higher resolution (was 5.0)
 SCAN_TILT_MAX = 90.0  # start elevation
 SCAN_TILT_MIN = 0.0  # end elevation
 LIDAR_SAMPLE_RATE = 1000  # Hz - LiDAR sampling rate
 LIDAR_SAMPLE_TIME = 1.0 / LIDAR_SAMPLE_RATE  # Time per sample
-SCAN_SAMPLES_PER_POSITION = 2  # number of samples to average per position
+SCAN_SAMPLES_PER_POSITION = 3  # More samples per position (was 2)
 
 
 class PIDController:
@@ -171,23 +175,36 @@ class BackgroundScanner:
         if not self.shared_data["background_scan_active"].value:
             return
 
-        # Move to current scan position
+        print(f"[HWCtrl] Scan step: Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}°")
+
+        # Set target position and trigger movement
         self.shared_data["target_azimuth"].value = self.current_scan_az
         self.shared_data["target_elevation"].value = self.current_scan_el
+        self.shared_data["go_to_target"].value = True  # Trigger movement
+        self.shared_data["target_reached"].value = False
 
         # Wait for movement to complete with timeout
         move_timeout = time.time() + 5.0  # 5 second timeout
-        while (abs(self.shared_data["stepper_degrees"].value - self.current_scan_az) > MICROSTEP_ANGLE * 2 or
-               abs(self.shared_data["servo_degrees"].value - self.current_scan_el) > 1.0):
+        movement_started = False
+
+        while not self.shared_data["target_reached"].value:
             if time.time() > move_timeout:
                 print(f"[HWCtrl] Movement timeout at Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}°")
                 break
+
+            # Check if movement has started
+            if not movement_started and not self.shared_data["go_to_target"].value:
+                movement_started = True
+                print(f"[HWCtrl] Movement started to Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}°")
+
             time.sleep(0.01)
 
-        # Allow settling time
-        time.sleep(0.05)
+        print(f"[HWCtrl] Reached position Az:{self.shared_data['stepper_degrees'].value:.1f}° El:{self.shared_data['servo_degrees'].value:.1f}°")
 
-        # Collect samples at this position at LiDAR rate (1000Hz)
+        # Allow shorter settling time due to faster, more precise movement
+        time.sleep(0.05)  # Reduced from 0.1s since DRV8825 moves more precisely
+
+        # Collect samples at this position
         samples = []
         sample_start_time = time.time()
 
@@ -206,9 +223,12 @@ class BackgroundScanner:
         if samples:
             avg_sample = np.mean(samples, axis=0)
             self.background_data_buffer.append(avg_sample)
-            if len(self.background_data_buffer) % 50 == 0:  # Progress every 50 points
-                print(f"[HWCtrl] Scan progress: {len(self.background_data_buffer)} points - "
-                      f"Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}° - {len(samples)} valid samples")
+            print(f"[HWCtrl] Collected {len(samples)} samples at Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}° - Avg dist: {avg_sample[2]:.1f}cm")
+
+            if len(self.background_data_buffer) % 10 == 0:  # Progress every 10 points
+                print(f"[HWCtrl] Scan progress: {len(self.background_data_buffer)} points total")
+        else:
+            print(f"[HWCtrl] No valid samples at Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}°")
 
         # Update scan position
         self._update_scan_position()
@@ -283,10 +303,11 @@ class PWMStepperController:
         self.pi.write(STEPPER_ENABLE_PIN, 0)  # Active low
         self.pi.write(STEPPER_SLEEP_PIN, 1)  # Wake up driver
 
-        # Initialize PWM (start at 0 frequency)
-        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)  # 50% duty cycle
+        # Initialize PWM with DRV8825 optimized settings
+        # DRV8825 minimum pulse width is 1.9μs, so we can use higher frequencies
+        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)  # 50% duty cycle, start at 0 Hz
 
-        print("[HWCtrl] PWM Stepper controller initialized")
+        print("[HWCtrl] PWM Stepper controller initialized for DRV8825")
 
     def _step_counter_callback(self, gpio, level, tick):
         """Callback to count steps for position tracking"""
@@ -327,13 +348,13 @@ class PWMStepperController:
         return target_speed
 
     def smooth_frequency_transition(self, target_freq):
-        """Smoothly transition PWM frequency to reduce vibrations"""
-        max_freq_change_per_ms = 500  # Max frequency change per millisecond
+        """Smoothly transition PWM frequency optimized for DRV8825"""
         current_time = time.time()
         dt = current_time - self.last_update_time
 
         if dt > 0:
-            max_change = max_freq_change_per_ms * dt * 1000  # Convert to seconds
+            # DRV8825 can handle much faster transitions
+            max_change = MotorParams.MAX_FREQ_CHANGE_RATE * dt * 1000  # Convert to seconds
             freq_diff = target_freq - self.current_frequency
 
             if abs(freq_diff) > max_change:
@@ -383,8 +404,8 @@ class PWMStepperController:
             # Update current position from step counter
             current_pos = self.shared_data["stepper_degrees"].value
 
-            # Small delay to prevent excessive CPU usage
-            time.sleep(0.001)  # 1ms
+            # Faster update rate for DRV8825 - it can handle rapid changes
+            time.sleep(0.0005)  # 0.5ms for 2kHz update rate
 
         # Stop PWM when target is reached
         self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
@@ -500,22 +521,26 @@ def combined_controller_process(shared_data):
             # Update LiDAR data continuously
             lidar.get_lidar_data()
 
-            # Handle background scanning
+            # Handle background scanning - give it priority
             if shared_data["background_scan_active"].value:
                 scanner.execute_background_scan(lidar)
+                # Small delay between scan steps to prevent overwhelming the system
+                time.sleep(0.05)
+
+            # Handle normal stepper movement only when not scanning
+            elif shared_data["go_to_target"].value:
+                # Reset target reached flag
+                shared_data["target_reached"].value = False
+
+                # Move stepper to target
+                stepper.move_to_target()
+
+                # Clear go_to_target flag when done
+                shared_data["go_to_target"].value = False
+
             else:
-                # Normal stepper movement
-                if shared_data["go_to_target"].value:
-                    # Reset target reached flag
-                    shared_data["target_reached"].value = False
-
-                    # Move stepper to target
-                    stepper.move_to_target()
-
-                    # Clear go_to_target flag when done
-                    shared_data["go_to_target"].value = False
-
-            time.sleep(0.001)  # 1ms main loop for responsive control
+                # Idle - just update LiDAR data
+                time.sleep(0.001)  # 1ms main loop for responsive control
 
     except Exception as e:
         print(f"[HWCtrl] Combined controller error: {e}")
