@@ -3,7 +3,7 @@
 Hardware Controller for Stepper Motor (Pan) and Servo (Tilt) Control
 Uses multiprocessing with shared data and PID control for smooth movement
 PWM-based stepper control for smooth operation with precise position tracking
-FIXED: Background scan movement issues
+FIXED: Continuous background scanning with data collection during movement
 """
 
 import time
@@ -28,7 +28,7 @@ MICROSTEP_ANGLE = 0.05625  # degrees per step
 class MotorParams:
     # Stepper Parameters - DRV8825 optimized
     STEPPER_MAX_SPEED = 5000  # max steps per second (DRV8825 can handle up to 250kHz)
-    STEPPER_MIN_SPEED = 360  # min steps per second
+    STEPPER_MIN_SPEED = 720  # min steps per second
     STEPPER_ACCEL_DISTANCE = 2.0  # degrees to start/stop acceleration (reduced for faster scanning)
     STEPPER_CRUISE_SPEED = 3000  # optimal cruise speed for DRV8825
 
@@ -48,14 +48,14 @@ class MotorParams:
     SERVO_DISPLACEMENT = 0.0  # degrees offset for 0 point (pointing straight forward)
 
 
-# Scan Parameters - Optimized for faster DRV8825 operation
-SCAN_AZIMUTH_STEP = 1.0  # Smaller steps for higher resolution (was 2.0)
-SCAN_ELEVATION_STEP = 2.0  # Smaller steps for higher resolution (was 5.0)
+# Continuous Scan Parameters
+SCAN_AZIMUTH_STEP = 0.5  # Degrees per sample for continuous scanning
+SCAN_ELEVATION_STEP = 2.0  # Elevation step when changing rings
 SCAN_TILT_MAX = 90.0  # start elevation
 SCAN_TILT_MIN = 0.0  # end elevation
-LIDAR_SAMPLE_RATE = 1000  # Hz - LiDAR sampling rate
-LIDAR_SAMPLE_TIME = 1.0 / LIDAR_SAMPLE_RATE  # Time per sample
-SCAN_SAMPLES_PER_POSITION = 3  # More samples per position (was 2)
+SCAN_AZIMUTH_SPEED = 30.0  # Degrees per second for continuous azimuth movement
+SCAN_DATA_RATE = 50  # Hz - Data collection rate during continuous movement
+SERVO_MOVE_TIME = 1.0  # Time to allow servo to move to new elevation
 
 
 class PIDController:
@@ -161,113 +161,173 @@ class LidarController:
         print("[HWCtrl-LIDAR] LiDAR controller stopped")
 
 
-class BackgroundScanner:
-    """Handles background scanning functionality"""
+class ContinuousBackgroundScanner:
+    """Handles continuous background scanning functionality"""
 
     def __init__(self, shared_data):
         self.shared_data = shared_data
-        self.current_scan_az = 0.0
-        self.current_scan_el = SCAN_TILT_MAX
+        self.current_elevation = SCAN_TILT_MAX
         self.background_data_buffer = []
-        self.scan_direction = 1  # 1 for forward, -1 for backward
+        self.scan_direction = 1  # 1 for forward (0->360), -1 for backward (360->0)
+        self.scan_active = False
 
-    def execute_background_scan(self, lidar_controller, stepper_controller, servo_controller):
-        """Execute one step of the background scan - FIXED VERSION"""
+    def start_continuous_scan(self, lidar_controller, stepper_controller, servo_controller):
+        """Start continuous scanning process"""
         if not self.shared_data["background_scan_active"].value:
             return
 
-        print(f"[HWCtrl] Scan step: Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}°")
+        print(f"[HWCtrl] Starting continuous scan at elevation {self.current_elevation:.1f}°")
 
-        # DIRECT MOVEMENT - bypass the shared data movement system during scan
-        current_az = self.shared_data["stepper_degrees"].value
-        current_el = self.shared_data["servo_degrees"].value
+        # Move servo to current elevation
+        print(f"[HWCtrl] Moving servo to {self.current_elevation:.1f}°")
+        servo_controller.move_to_angle(self.current_elevation)
+        time.sleep(SERVO_MOVE_TIME)  # Allow servo to reach position
 
-        print(f"[HWCtrl] Current position: Az:{current_az:.1f}° El:{current_el:.1f}°")
-        print(f"[HWCtrl] Target position: Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}°")
+        # Perform continuous azimuth sweep
+        self._perform_continuous_azimuth_sweep(lidar_controller, stepper_controller)
 
-        # Move servo first (faster)
-        if abs(self.current_scan_el - current_el) > 0.5:
-            print(f"[HWCtrl] Moving servo from {current_el:.1f}° to {self.current_scan_el:.1f}°")
-            servo_controller.move_to_angle(self.current_scan_el)
+        # Move to next elevation
+        self.current_elevation -= SCAN_ELEVATION_STEP
+        self.scan_direction *= -1  # Alternate direction for each ring
 
-        # Move stepper second
-        if abs(self.current_scan_az - current_az) > MICROSTEP_ANGLE:
-            print(f"[HWCtrl] Moving stepper from {current_az:.1f}° to {self.current_scan_az:.1f}°")
-            stepper_controller.move_to_angle(self.current_scan_az)
+        # Check if scan is complete
+        if self.current_elevation < SCAN_TILT_MIN:
+            print("[HWCtrl] CONTINUOUS BACKGROUND SCAN completed.")
+            self._save_scan_data()
+            self._reset_scan()
 
-        # Verify final positions
-        final_az = self.shared_data["stepper_degrees"].value
-        final_el = self.shared_data["servo_degrees"].value
-        print(f"[HWCtrl] Final position: Az:{final_az:.1f}° El:{final_el:.1f}°")
+    def _perform_continuous_azimuth_sweep(self, lidar_controller, stepper_controller):
+        """Perform continuous azimuth sweep while collecting data"""
 
-        # Allow settling time
-        time.sleep(0.1)  # Increased settling time
-
-        # Collect samples at this position
-        samples = []
-        sample_start_time = time.time()
-
-        for i in range(SCAN_SAMPLES_PER_POSITION):
-            sample_time = sample_start_time + (i * LIDAR_SAMPLE_TIME)
-
-            # Wait for precise timing
-            while time.time() < sample_time:
-                time.sleep(0.0001)  # 0.1ms precision
-
-            dist, strength, ts = lidar_controller.get_lidar_data()
-            if dist is not None and dist > 0:  # Valid reading
-                samples.append([self.current_scan_az, self.current_scan_el, dist, strength])
-
-        # Add averaged sample to buffer if we got valid data
-        if samples:
-            avg_sample = np.mean(samples, axis=0)
-            self.background_data_buffer.append(avg_sample)
-            print(f"[HWCtrl] Collected {len(samples)} samples - Avg dist: {avg_sample[2]:.1f}cm")
+        # Determine start and end positions based on scan direction
+        if self.scan_direction == 1:
+            start_az = 0.0
+            end_az = 360.0
+            print(f"[HWCtrl] Forward sweep: 0° -> 360°")
         else:
-            print(f"[HWCtrl] No valid samples at this position")
+            start_az = 360.0
+            end_az = 0.0
+            print(f"[HWCtrl] Backward sweep: 360° -> 0°")
 
-        # Update scan position
-        self._update_scan_position()
+        # Move to start position
+        stepper_controller.move_to_angle(start_az)
 
-    def _update_scan_position(self):
-        """Update scan position for next measurement"""
-        # Move azimuth in current direction
-        self.current_scan_az += SCAN_AZIMUTH_STEP * self.scan_direction
+        # Start continuous movement
+        print(f"[HWCtrl] Starting continuous movement from {start_az:.1f}° to {end_az:.1f}°")
+        movement_thread = threading.Thread(
+            target=self._continuous_azimuth_movement,
+            args=(stepper_controller, start_az, end_az)
+        )
+        movement_thread.daemon = True
+        movement_thread.start()
 
-        # Check if we've completed a full ring
-        ring_complete = False
-        if self.scan_direction == 1 and self.current_scan_az >= 360.0:
-            # Completed forward sweep
-            self.current_scan_az = 360.0
-            ring_complete = True
-        elif self.scan_direction == -1 and self.current_scan_az <= 0.0:
-            # Completed backward sweep
-            self.current_scan_az = 0.0
-            ring_complete = True
+        # Collect data during movement
+        self._collect_data_during_movement(lidar_controller, start_az, end_az)
 
-        # If ring is complete, move to next elevation and reverse direction
-        if ring_complete:
-            self.current_scan_el -= SCAN_ELEVATION_STEP
-            self.scan_direction *= -1  # Reverse direction for next ring
+        # Wait for movement to complete
+        movement_thread.join(timeout=15.0)  # 15 second timeout for full rotation
 
-            print(f"[HWCtrl] Completed elevation ring, moving to {self.current_scan_el:.1f}°")
+    def _continuous_azimuth_movement(self, stepper_controller, start_az, end_az):
+        """Perform continuous azimuth movement in separate thread"""
 
-        # Check if entire scan is complete
-        if self.current_scan_el < SCAN_TILT_MIN:
-            print("[HWCtrl] BACKGROUND_SCAN finished.")
-            if self.background_data_buffer:
-                # Expected rows: [azimuth, elevation, distance_cm, strength]
-                # Decode byte string for file path
+        # Calculate movement parameters
+        total_distance = abs(end_az - start_az)
+        movement_time = total_distance / SCAN_AZIMUTH_SPEED
+        steps_per_second = SCAN_AZIMUTH_SPEED / MICROSTEP_ANGLE
+
+        print(f"[HWCtrl] Movement: {total_distance:.1f}° in {movement_time:.1f}s at {steps_per_second:.0f} steps/sec")
+
+        # Set direction
+        direction = 1 if end_az > start_az else 0
+        stepper_controller.pi.write(STEPPER_DIR_PIN, direction)
+
+        # Start continuous PWM at calculated frequency
+        frequency = min(int(steps_per_second), MotorParams.STEPPER_MAX_SPEED)
+        stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, frequency, 500000)
+
+        # Setup step counting for position tracking
+        if not stepper_controller.step_callback:
+            stepper_controller.step_callback = stepper_controller.pi.callback(
+                STEPPER_PULSE_PIN, pigpio.RISING_EDGE, stepper_controller._step_counter_callback
+            )
+
+        # Run for calculated time
+        start_time = time.time()
+        while (time.time() - start_time) < movement_time and stepper_controller.running:
+            time.sleep(0.01)
+
+        # Stop movement
+        stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
+
+        final_pos = stepper_controller.shared_data["stepper_degrees"].value
+        print(f"[HWCtrl] Continuous movement completed. Final position: {final_pos:.1f}°")
+
+    def _collect_data_during_movement(self, lidar_controller, start_az, end_az):
+        """Collect LiDAR data during continuous movement"""
+
+        collection_interval = 1.0 / SCAN_DATA_RATE  # Time between samples
+        start_time = time.time()
+        last_sample_time = start_time
+
+        total_distance = abs(end_az - start_az)
+        movement_duration = total_distance / SCAN_AZIMUTH_SPEED
+
+        print(f"[HWCtrl] Data collection: {SCAN_DATA_RATE} Hz for {movement_duration:.1f}s")
+
+        sample_count = 0
+
+        while (time.time() - start_time) < movement_duration:
+            current_time = time.time()
+
+            # Check if it's time for next sample
+            if (current_time - last_sample_time) >= collection_interval:
+
+                # Get current position
+                current_az = self.shared_data["stepper_degrees"].value
+                current_el = self.current_elevation
+
+                # Get LiDAR data
+                dist, strength, timestamp = lidar_controller.get_lidar_data()
+
+                if dist is not None and dist > 0:
+                    # Store sample
+                    sample = [current_az, current_el, dist, strength]
+                    self.background_data_buffer.append(sample)
+                    sample_count += 1
+
+                    if sample_count % 100 == 0:  # Progress every 100 samples
+                        print(f"[HWCtrl] Collected {sample_count} samples at {current_az:.1f}°")
+
+                last_sample_time = current_time
+            else:
+                # Short sleep to prevent CPU spinning
+                time.sleep(0.001)
+
+        print(f"[HWCtrl] Data collection completed. Total samples: {sample_count}")
+
+    def _save_scan_data(self):
+        """Save collected scan data to file"""
+        if self.background_data_buffer:
+            try:
                 path = self.shared_data["background_path"].value.decode()
-                np.save(path, np.array(self.background_data_buffer))
+                data_array = np.array(self.background_data_buffer)
+                np.save(path, data_array)
                 print(f"[HWCtrl] Saved {len(self.background_data_buffer)} scan points to {path}")
-                self.background_data_buffer = []
-            self.shared_data["background_scan_active"].value = False
+                print(f"[HWCtrl] Data shape: {data_array.shape}")
+                print(f"[HWCtrl] Azimuth range: {data_array[:, 0].min():.1f}° to {data_array[:, 0].max():.1f}°")
+                print(f"[HWCtrl] Elevation range: {data_array[:, 1].min():.1f}° to {data_array[:, 1].max():.1f}°")
+            except Exception as e:
+                print(f"[HWCtrl] Error saving scan data: {e}")
+        else:
+            print("[HWCtrl] No scan data to save")
 
-            # Reset scan parameters for next scan
-            self.current_scan_az = 0.0
-            self.current_scan_el = SCAN_TILT_MAX
-            self.scan_direction = 1
+    def _reset_scan(self):
+        """Reset scan parameters for next scan"""
+        self.current_elevation = SCAN_TILT_MAX
+        self.scan_direction = 1
+        self.background_data_buffer = []
+        self.shared_data["background_scan_active"].value = False
+        print("[HWCtrl] Scan parameters reset for next scan")
 
 
 class PWMStepperController:
@@ -366,7 +426,7 @@ class PWMStepperController:
         return self.current_frequency
 
     def move_to_angle(self, target_angle):
-        """Direct movement to target angle - ADDED for background scan"""
+        """Direct movement to target angle"""
         print(f"[HWCtrl-Stepper] Direct move to {target_angle:.3f}°")
 
         # Set up step counting callback if not already done
@@ -461,7 +521,7 @@ class ServoController:
         return int(pulse_width)
 
     def move_to_angle(self, target_angle):
-        """Direct movement to target angle - ADDED for background scan"""
+        """Direct movement to target angle"""
         print(f"[HWCtrl-Servo] Direct move to {target_angle:.1f}°")
 
         pulse_width = self.angle_to_pulse_width(target_angle)
@@ -471,9 +531,7 @@ class ServoController:
         with self.shared_data["servo_degrees"].get_lock():
             self.shared_data["servo_degrees"].value = target_angle
 
-        # Give servo time to move
-        time.sleep(0.2)  # Servo movement time
-        print(f"[HWCtrl-Servo] Moved to {target_angle:.1f}°")
+        print(f"[HWCtrl-Servo] Command sent for {target_angle:.1f}°")
 
     def control_servo(self):
         """Control servo position based on target elevation"""
@@ -512,9 +570,9 @@ def combined_controller_process(shared_data):
         stepper = PWMStepperController(pi, shared_data)
         servo = ServoController(pi, shared_data)
         lidar = LidarController(shared_data)
-        scanner = BackgroundScanner(shared_data)
+        scanner = ContinuousBackgroundScanner(shared_data)
 
-        print("[HWCtrl] Combined controller initialized with PWM stepper")
+        print("[HWCtrl] Combined controller initialized with continuous scanning")
 
         # Start servo control thread
         servo_thread = threading.Thread(target=servo.control_servo)
@@ -526,11 +584,10 @@ def combined_controller_process(shared_data):
             # Update LiDAR data continuously
             lidar.get_lidar_data()
 
-            # Handle background scanning - FIXED to pass controller references
+            # Handle continuous background scanning
             if shared_data["background_scan_active"].value:
-                scanner.execute_background_scan(lidar, stepper, servo)
-                # Small delay between scan steps
-                time.sleep(0.1)
+                scanner.start_continuous_scan(lidar, stepper, servo)
+                # No additional delay needed - scanning handles its own timing
 
             # Handle normal stepper movement only when not scanning
             elif shared_data["go_to_target"].value:
@@ -568,7 +625,7 @@ def combined_controller_process(shared_data):
 
 def run_hardware_controller(shared_data):
     """Main function to start the combined hardware controller"""
-    print("[HWCtrl] Starting PWM-based hardware controller process...")
+    print("[HWCtrl] Starting continuous scanning hardware controller process...")
     try:
         combined_controller_process(shared_data)
     except KeyboardInterrupt:
