@@ -394,7 +394,7 @@ class TargetTracker:
                 self.target_velocity_el = alpha * new_vel_el + (1 - alpha) * self.target_velocity_el
 
                 # Limit maximum velocity
-                max_vel = 18.0  # degrees/second
+                max_vel = 50.0  # degrees/second
                 self.target_velocity_az = np.clip(self.target_velocity_az, -max_vel, max_vel)
                 self.target_velocity_el = np.clip(self.target_velocity_el, -max_vel, max_vel)
 
