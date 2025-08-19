@@ -411,7 +411,7 @@ class ContinuousBackgroundScanner:
                     self.background_data_buffer.append(sample)
                     sample_count += 1
 
-                    if sample_count % 50 == 0:  # Progress every 50 samples
+                    if sample_count % 1 == 0:  # Progress every 50 samples
                         print(f"[HWCtrl] Collected {sample_count} samples at {current_az:.1f}°, {current_el:.1f}°")
 
                 last_sample_time = current_time
