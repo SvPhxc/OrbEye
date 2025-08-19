@@ -815,7 +815,7 @@ class PWMStepperController:
         # Disable the stepper driver
         self.pi.write(STEPPER_ENABLE_PIN, 1)
         print("[HWCtrl] Stepper controller stopped.")
-
+        
 class ServoController:
     """Controls servo motor for tilt movement"""
 
