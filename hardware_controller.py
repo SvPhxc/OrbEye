@@ -42,7 +42,7 @@ class MotorParams:
     KD = 0.008  # Lower derivative for stability at high speed
 
     # Servo Parameters
-    SERVO_MIN_PULSE = 500  # microseconds (standard servo min)
+    SERVO_MIN_PULSE = 520  # microseconds (standard servo min)
     SERVO_MAX_PULSE = 1750  # microseconds (standard servo max)
     SERVO_MIN_ANGLE = 0  # degrees (physical limit)
     SERVO_MAX_ANGLE = 90  # degrees (physical limit)
@@ -50,7 +50,7 @@ class MotorParams:
     # Servo mounting offset - adjust this to set your zero point
     # If servo points 15 degrees up when at "0", set this to -15
     # This ensures displayed angles are always positive (0-90)
-    SERVO_ZERO_OFFSET = 10  # degrees - adjust for your mounting
+    SERVO_ZERO_OFFSET = 0  # degrees - adjust for your mounting
 
     # Pan angle limits
     PAN_MIN_ANGLE = 0.0  # degrees
