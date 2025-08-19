@@ -37,20 +37,20 @@ class MotorParams:
     MAX_FREQ_CHANGE_RATE = 5000  # Hz per millisecond (very fast transitions)
 
     # PID Parameters - tuned for high-speed operation
-    KP = 8.0  # Higher proportional for faster response
+    KP = 4.0  # Higher proportional for faster response
     KI = 0.08  # Slightly higher integral
     KD = 0.008  # Lower derivative for stability at high speed
 
     # Servo Parameters
     SERVO_MIN_PULSE = 500  # microseconds (standard servo min)
-    SERVO_MAX_PULSE = 2000  # microseconds (standard servo max)
+    SERVO_MAX_PULSE = 1500  # microseconds (standard servo max)
     SERVO_MIN_ANGLE = 0  # degrees (physical limit)
     SERVO_MAX_ANGLE = 90  # degrees (physical limit)
 
     # Servo mounting offset - adjust this to set your zero point
     # If servo points 15 degrees up when at "0", set this to -15
     # This ensures displayed angles are always positive (0-90)
-    SERVO_ZERO_OFFSET = 18.0+28.0  # degrees - adjust for your mounting
+    SERVO_ZERO_OFFSET = 0  # degrees - adjust for your mounting
 
     # Pan angle limits
     PAN_MIN_ANGLE = 0.0  # degrees
