@@ -111,10 +111,10 @@ class TargetTracker:
         # Tracking parameters
         self.scan_radius_az = 10.0  # Degrees to scan left/right from center
         self.scan_radius_el = 10.0  # Degrees to scan up/down from center
-        self.scan_points = 16  # Number of points to scan in the circle
+        self.scan_points = 12  # Number of points to scan in the circle
         self.min_strength_threshold = 100  # Minimum strength to consider a valid target
-        self.sample_time = 0.05  # Time to sample at each scan point (seconds)
-        self.samples_per_point = 2  # Number of samples to average at each point
+        self.sample_time = 0.005  # Time to sample at each scan point (seconds)
+        self.samples_per_point = 1  # Number of samples to average at each point
 
         # Tracking state
         self.current_target_az = None
@@ -125,7 +125,7 @@ class TargetTracker:
         # Performance tracking
         self.last_scan_time = 0
         self.target_history = []  # Store last N target positions for smoothing
-        self.history_size = 5
+        self.history_size = 3
 
         print("[Tracker] Target tracker initialized")
         print(f"[Tracker] Scan radius: ±{self.scan_radius_az}° azimuth, ±{self.scan_radius_el}° elevation")
@@ -208,7 +208,7 @@ class TargetTracker:
             self._move_to_position(scan_az, scan_el)
 
             # Wait for movement to complete
-            time.sleep(0.005)  # Small delay for movement
+            time.sleep(0.001)  # Small delay for movement
 
             # Collect samples at this position
             samples = self._collect_samples()
