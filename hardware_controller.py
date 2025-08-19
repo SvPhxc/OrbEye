@@ -35,11 +35,11 @@ class MotorParams:
     KD = 0.2  # Derivative gain
 
     # Servo Parameters
-    SERVO_MIN_PULSE = 500  # microseconds
-    SERVO_MAX_PULSE = 2500  # microseconds
+    SERVO_MIN_PULSE = 500+(23*0.09)  # microseconds
+    SERVO_MAX_PULSE = 1750  # microseconds
     SERVO_MIN_ANGLE = 0  # degrees
     SERVO_MAX_ANGLE = 90  # degrees
-    SERVO_DISPLACEMENT = 23.0  # degrees offset for 0 point (pointing straight forward)
+    SERVO_DISPLACEMENT = 0.0  # degrees offset for 0 point (pointing straight forward)
 
 
 # Scan Parameters
@@ -49,7 +49,7 @@ SCAN_TILT_MAX = 90.0  # start elevation
 SCAN_TILT_MIN = 0.0  # end elevation
 LIDAR_SAMPLE_RATE = 1000  # Hz - LiDAR sampling rate
 LIDAR_SAMPLE_TIME = 1.0 / LIDAR_SAMPLE_RATE  # Time per sample
-SCAN_SAMPLES_PER_POSITION = 5  # number of samples to average per position
+SCAN_SAMPLES_PER_POSITION = 2  # number of samples to average per position
 
 
 class PIDController:
