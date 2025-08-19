@@ -27,7 +27,7 @@ MICROSTEP_ANGLE = 0.05625  # degrees per step
 class MotorParams:
     # Stepper Parameters - DRV8825 optimized
     STEPPER_MAX_SPEED = 5000  # max steps per second (DRV8825 can handle up to 250kHz)
-    STEPPER_MIN_SPEED = 100   # min steps per second
+    STEPPER_MIN_SPEED = 100  # min steps per second
     STEPPER_ACCEL_DISTANCE = 2.0  # degrees to start/stop acceleration (reduced for faster scanning)
     STEPPER_CRUISE_SPEED = 3000  # optimal cruise speed for DRV8825
 
@@ -35,13 +35,13 @@ class MotorParams:
     MAX_FREQ_CHANGE_RATE = 2000  # Hz per millisecond (much faster transitions)
 
     # PID Parameters for stepper speed control (tuned for higher speeds)
-    KP = 6.0   # Increased proportional gain for faster response
+    KP = 6.0  # Increased proportional gain for faster response
     KI = 0.05  # Increased integral gain
     KD = 0.01  # Reduced derivative to prevent oscillation at high speeds
 
     # Servo Parameters
-    SERVO_MIN_PULSE = 500+(23*0.09)  # microseconds
-    SERVO_MAX_PULSE = 1750  # microseconds
+    SERVO_MIN_PULSE = 500 + (23 * 0.09)  # microseconds
+    SERVO_MAX_PULSE = 1750+ (23 * 0.09)  # microseconds
     SERVO_MIN_ANGLE = 0  # degrees
     SERVO_MAX_ANGLE = 90  # degrees
     SERVO_DISPLACEMENT = 0.0  # degrees offset for 0 point (pointing straight forward)
@@ -199,7 +199,8 @@ class BackgroundScanner:
 
             time.sleep(0.01)
 
-        print(f"[HWCtrl] Reached position Az:{self.shared_data['stepper_degrees'].value:.1f}° El:{self.shared_data['servo_degrees'].value:.1f}°")
+        print(
+            f"[HWCtrl] Reached position Az:{self.shared_data['stepper_degrees'].value:.1f}° El:{self.shared_data['servo_degrees'].value:.1f}°")
 
         # Allow shorter settling time due to faster, more precise movement
         time.sleep(0.05)  # Reduced from 0.1s since DRV8825 moves more precisely
@@ -223,7 +224,8 @@ class BackgroundScanner:
         if samples:
             avg_sample = np.mean(samples, axis=0)
             self.background_data_buffer.append(avg_sample)
-            print(f"[HWCtrl] Collected {len(samples)} samples at Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}° - Avg dist: {avg_sample[2]:.1f}cm")
+            print(
+                f"[HWCtrl] Collected {len(samples)} samples at Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}° - Avg dist: {avg_sample[2]:.1f}cm")
 
             if len(self.background_data_buffer) % 10 == 0:  # Progress every 10 points
                 print(f"[HWCtrl] Scan progress: {len(self.background_data_buffer)} points total")
