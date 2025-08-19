@@ -43,7 +43,7 @@ class MotorParams:
 
     # Servo Parameters
     SERVO_MIN_PULSE = 500  # microseconds (standard servo min)
-    SERVO_MAX_PULSE = 1500  # microseconds (standard servo max)
+    SERVO_MAX_PULSE = 1750  # microseconds (standard servo max)
     SERVO_MIN_ANGLE = 0  # degrees (physical limit)
     SERVO_MAX_ANGLE = 90  # degrees (physical limit)
 
