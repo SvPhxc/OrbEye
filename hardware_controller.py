@@ -39,7 +39,7 @@ class MotorParams:
     MAX_FREQ_CHANGE_RATE = 3000  # Hz per millisecond (very fast transitions)
 
     # PID Parameters - tuned for high-speed operation
-    KP = 1.2  # Higher proportional for faster response
+    KP = 0.6  # Higher proportional for faster response
     KI = 0.02  # Slightly higher integral
     KD = 0.8  # Lower derivative for stability at high speed
 
