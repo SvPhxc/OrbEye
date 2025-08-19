@@ -133,7 +133,7 @@ class TargetTracker:
         # Balanced optimization parameters
         self.scan_radius_az = 10.0  # Reasonable scan radius
         self.scan_radius_el = 10.0
-        self.scan_points = 32  # Balanced number of scan points
+        self.scan_points = 12  # Balanced number of scan points
         self.min_strength_threshold = 1500
 
         # Prevent getting stuck on high strength targets
@@ -144,7 +144,7 @@ class TargetTracker:
         # Movement parameters
         self.movement_timeout = 0.4  # Reasonable timeout
         self.position_tolerance = 0.0  # Degrees
-        self.min_movement_delay = 0.04  # Minimum delay for movement
+        self.min_movement_delay = 0.06  # Minimum delay for movement
 
         # Tracking state
         self.current_target_az = None
