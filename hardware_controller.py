@@ -34,7 +34,7 @@ class MotorParams:
     STEPPER_MIN_SPEED = 100  # min steps per second
     STEPPER_ACCEL_DISTANCE = 1.5  # Reduced for faster acceleration
     STEPPER_CRUISE_SPEED = 6400  # Higher cruise speed for scans
-    ACCEL_STEPS = 400  # e.g., use 800 steps to ramp up and 800 to ramp down
+    ACCEL_STEPS = 100  # e.g., use 800 steps to ramp up and 800 to ramp down
 
     # Ultra-fast transition for scanning
     MAX_FREQ_CHANGE_RATE = 3000  # Hz per millisecond (very fast transitions)
