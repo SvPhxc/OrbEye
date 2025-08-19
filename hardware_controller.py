@@ -2,6 +2,7 @@
 """
 Hardware Controller for Stepper Motor (Pan) and Servo (Tilt) Control
 Uses multiprocessing with shared data and PID control for smooth movement
+PWM-based stepper control for smooth operation with precise position tracking
 """
 
 import time
@@ -254,15 +255,23 @@ class BackgroundScanner:
             self.scan_direction = 1
 
 
-# --- FIX: Added missing class definition ---
-class StepperController:
-    """Controls stepper motor with PID speed control"""
+class PWMStepperController:
+    """PWM-based stepper motor controller with precise position tracking"""
 
     def __init__(self, pi, shared_data):
         self.pi = pi
         self.shared_data = shared_data
         self.pid = PIDController(MotorParams.KP, MotorParams.KI, MotorParams.KD)
         self.running = True
+
+        # Position tracking
+        self.step_count = 0
+        self.current_frequency = 0
+        self.target_frequency = 0
+        self.last_update_time = time.time()
+
+        # PWM callback for step counting
+        self.step_callback = None
 
         # Setup GPIO pins
         self.pi.set_mode(STEPPER_PULSE_PIN, pigpio.OUTPUT)
@@ -274,10 +283,27 @@ class StepperController:
         self.pi.write(STEPPER_ENABLE_PIN, 0)  # Active low
         self.pi.write(STEPPER_SLEEP_PIN, 1)  # Wake up driver
 
-        print("[HWCtrl] Stepper controller initialized")
+        # Initialize PWM (start at 0 frequency)
+        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)  # 50% duty cycle
 
-    def calculate_target_speed(self, distance_to_target):
-        """Calculate target speed based on distance using PID and acceleration profile"""
+        print("[HWCtrl] PWM Stepper controller initialized")
+
+    def _step_counter_callback(self, gpio, level, tick):
+        """Callback to count steps for position tracking"""
+        if level == 1:  # Rising edge
+            direction = self.pi.read(STEPPER_DIR_PIN)
+            if direction:
+                self.step_count += 1
+            else:
+                self.step_count -= 1
+
+            # Update shared position data
+            degrees = self.step_count * MICROSTEP_ANGLE
+            with self.shared_data["stepper_degrees"].get_lock():
+                self.shared_data["stepper_degrees"].value = degrees
+
+    def calculate_target_frequency(self, distance_to_target):
+        """Calculate target PWM frequency based on distance and PID"""
 
         # Acceleration/deceleration profile
         if abs(distance_to_target) <= MotorParams.STEPPER_ACCEL_DISTANCE:
@@ -295,14 +321,45 @@ class StepperController:
         target_speed = base_speed + abs(pid_output) * 100  # Scale PID output
 
         # Clamp speed to limits
-        return max(MotorParams.STEPPER_MIN_SPEED,
-                   min(MotorParams.STEPPER_MAX_SPEED, target_speed))
+        target_speed = max(MotorParams.STEPPER_MIN_SPEED,
+                           min(MotorParams.STEPPER_MAX_SPEED, target_speed))
+
+        return target_speed
+
+    def smooth_frequency_transition(self, target_freq):
+        """Smoothly transition PWM frequency to reduce vibrations"""
+        max_freq_change_per_ms = 500  # Max frequency change per millisecond
+        current_time = time.time()
+        dt = current_time - self.last_update_time
+
+        if dt > 0:
+            max_change = max_freq_change_per_ms * dt * 1000  # Convert to seconds
+            freq_diff = target_freq - self.current_frequency
+
+            if abs(freq_diff) > max_change:
+                # Limit the frequency change rate
+                if freq_diff > 0:
+                    self.current_frequency += max_change
+                else:
+                    self.current_frequency -= max_change
+            else:
+                self.current_frequency = target_freq
+
+        self.last_update_time = current_time
+        return self.current_frequency
 
     def move_to_target(self):
-        """Move stepper to target azimuth with PID speed control"""
+        """Move stepper to target azimuth using PWM control"""
+
+        # Set up step counting callback
+        if not self.step_callback:
+            self.step_callback = self.pi.callback(STEPPER_PULSE_PIN, pigpio.RISING_EDGE,
+                                                  self._step_counter_callback)
 
         target_pos = self.shared_data["target_azimuth"].value
         current_pos = self.shared_data["stepper_degrees"].value
+
+        print(f"[HWCtrl] Moving from {current_pos:.3f}° to {target_pos:.3f}°")
 
         while abs(target_pos - current_pos) >= MICROSTEP_ANGLE and self.running:
             error = target_pos - current_pos
@@ -311,30 +368,48 @@ class StepperController:
             direction = 1 if error > 0 else 0
             self.pi.write(STEPPER_DIR_PIN, direction)
 
-            # Calculate speed based on distance to target
-            target_speed = self.calculate_target_speed(error)
-            step_delay = 0.5 / (2 * target_speed)  # Half period for pulse
+            # Calculate target frequency
+            target_freq = self.calculate_target_frequency(error)
 
-            # Send pulse
-            self.pi.write(STEPPER_PULSE_PIN, 1)
-            time.sleep(step_delay)
-            self.pi.write(STEPPER_PULSE_PIN, 0)
-            time.sleep(step_delay)
+            # Apply smooth frequency transition
+            smooth_freq = self.smooth_frequency_transition(target_freq)
 
-            # Update position
-            step_change = MICROSTEP_ANGLE if direction else -MICROSTEP_ANGLE
-            with self.shared_data["stepper_degrees"].get_lock():
-                self.shared_data["stepper_degrees"].value += step_change
-                current_pos = self.shared_data["stepper_degrees"].value
+            # Update PWM frequency
+            if smooth_freq > 0:
+                self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(smooth_freq), 500000)  # 50% duty cycle
+            else:
+                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
+
+            # Update current position from step counter
+            current_pos = self.shared_data["stepper_degrees"].value
+
+            # Small delay to prevent excessive CPU usage
+            time.sleep(0.001)  # 1ms
+
+        # Stop PWM when target is reached
+        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
+
+        # Final position update
+        final_pos = self.shared_data["stepper_degrees"].value
+        print(f"[HWCtrl] Target reached. Final position: {final_pos:.3f}°, Error: {abs(target_pos - final_pos):.3f}°")
 
         # Target reached
         self.shared_data["target_reached"].value = True
 
     def stop(self):
-        """Stop the stepper controller"""
+        """Stop the PWM stepper controller"""
         self.running = False
+
+        # Stop PWM
+        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
+
+        # Clean up callback
+        if self.step_callback:
+            self.step_callback.cancel()
+
+        # Disable stepper
         self.pi.write(STEPPER_ENABLE_PIN, 1)  # Disable stepper
-        print("[HWCtrl] Stepper controller stopped")
+        print("[HWCtrl] PWM Stepper controller stopped")
 
 
 class ServoController:
@@ -384,7 +459,7 @@ class ServoController:
                 with self.shared_data["servo_degrees"].get_lock():
                     self.shared_data["servo_degrees"].value = target_elevation
 
-            time.sleep(0.001)  # 20Hz update rate
+            time.sleep(0.001)  # 50Hz update rate
 
     def stop(self):
         """Stop the servo controller"""
@@ -399,6 +474,7 @@ def combined_controller_process(shared_data):
     stepper = None
     servo = None
     lidar = None
+    servo_thread = None
 
     try:
         pi = pigpio.pi()
@@ -407,12 +483,12 @@ def combined_controller_process(shared_data):
             return
 
         # Initialize controllers
-        stepper = StepperController(pi, shared_data)
+        stepper = PWMStepperController(pi, shared_data)  # Use PWM stepper controller
         servo = ServoController(pi, shared_data)
         lidar = LidarController(shared_data)
         scanner = BackgroundScanner(shared_data)
 
-        print("[HWCtrl] Combined controller initialized")
+        print("[HWCtrl] Combined controller initialized with PWM stepper")
 
         # Start servo control thread
         servo_thread = threading.Thread(target=servo.control_servo)
@@ -448,8 +524,9 @@ def combined_controller_process(shared_data):
         if stepper:
             stepper.stop()
         if servo:
-            servo_thread.join(timeout=1.0)  # Ensure thread is joined
             servo.stop()
+        if servo_thread:
+            servo_thread.join(timeout=1.0)  # Ensure thread is joined
         if lidar:
             lidar.stop()
         if pi and pi.connected:
@@ -457,14 +534,12 @@ def combined_controller_process(shared_data):
         print("[HWCtrl] Shutdown complete.")
 
 
-# --- FIX: Renamed function to be called by main.py ---
 def run_hardware_controller(shared_data):
     """Main function to start the combined hardware controller"""
 
-    print("[HWCtrl] Starting hardware controller process...")
+    print("[HWCtrl] Starting PWM-based hardware controller process...")
     try:
         combined_controller_process(shared_data)
     except KeyboardInterrupt:
         print("[HWCtrl] Process interrupted by user.")
     print("[HWCtrl] Hardware controller process stopped.")
-
