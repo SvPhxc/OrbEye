@@ -30,16 +30,16 @@ HIGH_CONFIDENCE_THRESHOLD = 100  # Strong signal threshold
 ACQUISITION_STRENGTH_THRESHOLD = 20  # Even lower for acquisition
 
 # Clutter Filter Parameters
-ANGULAR_TOLERANCE = 1.0  # Degrees - for background matching
+ANGULAR_TOLERANCE = 0.0  # Degrees - for background matching
 DISTANCE_MARGIN_CM = 50.0  # Reduced margin for better detection
-CACHE_SIZE = 1500  # Number of cached clutter filter queries
+CACHE_SIZE = 75000  # Number of cached clutter filter queries
 DISABLE_CLUTTER_FOR_ACQUISITION = True  # Disable clutter filter during acquisition
 
 # Movement Parameters
 MOVEMENT_TIMEOUT = 1.0  # Seconds to wait for movement
-POSITION_TOLERANCE = 2.0  # Degrees - acceptable position error
+POSITION_TOLERANCE = 0.0  # Degrees - acceptable position error
 POSITION_VERIFY_DELAY = 0.015  # Slightly longer stabilization
-MAX_POSITION_ERROR = 3.0  # Maximum acceptable position error in degrees
+MAX_POSITION_ERROR = 0.0  # Maximum acceptable position error in degrees
 
 # Normal Tracking Parameters
 SCAN_RADIUS_AZ = 10.0  # Degrees - normal scan radius azimuth
