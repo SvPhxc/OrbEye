@@ -394,6 +394,28 @@ class ContinuousBackgroundScanner:
 
         final_pos = stepper_controller.shared_data["stepper_degrees"].value
         print(f"[HWCtrl] Continuous movement completed. Final position: {final_pos:.1f}°")
+        
+    def _reset_hardware_after_scan(self, stepper_controller):
+        """Reset hardware state after scan completion"""
+        # Ensure PWM is fully stopped
+        stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
+
+        # Clear any pending waves
+        stepper_controller.pi.wave_tx_stop()
+        stepper_controller.pi.wave_clear()
+
+        # Small delay for hardware to settle
+        time.sleep(0.05)
+
+        # Ensure callback is properly set up for normal operation
+        if stepper_controller.step_callback:
+            stepper_controller.step_callback.cancel()
+
+        stepper_controller.step_callback = stepper_controller.pi.callback(
+            STEPPER_PULSE_PIN, pigpio.RISING_EDGE,
+            stepper_controller._step_counter_callback
+        )
+
 
     def _collect_data_during_movement(self, lidar_controller, start_az, end_az):
         """Collect LiDAR data during continuous movement"""
