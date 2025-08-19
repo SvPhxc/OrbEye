@@ -3,6 +3,7 @@
 Hardware Controller for Stepper Motor (Pan) and Servo (Tilt) Control
 Uses multiprocessing with shared data and PID control for smooth movement
 PWM-based stepper control for smooth operation with precise position tracking
+FIXED: Background scan movement issues
 """
 
 import time
@@ -27,7 +28,7 @@ MICROSTEP_ANGLE = 0.05625  # degrees per step
 class MotorParams:
     # Stepper Parameters - DRV8825 optimized
     STEPPER_MAX_SPEED = 5000  # max steps per second (DRV8825 can handle up to 250kHz)
-    STEPPER_MIN_SPEED = 720  # min steps per second
+    STEPPER_MIN_SPEED = 360  # min steps per second
     STEPPER_ACCEL_DISTANCE = 2.0  # degrees to start/stop acceleration (reduced for faster scanning)
     STEPPER_CRUISE_SPEED = 3000  # optimal cruise speed for DRV8825
 
@@ -41,7 +42,7 @@ class MotorParams:
 
     # Servo Parameters
     SERVO_MIN_PULSE = 500 + (23 * 0.09)  # microseconds
-    SERVO_MAX_PULSE = 1750+ (23 * 0.09)  # microseconds
+    SERVO_MAX_PULSE = 1750 + (23 * 0.09)  # microseconds
     SERVO_MIN_ANGLE = 0  # degrees
     SERVO_MAX_ANGLE = 90  # degrees
     SERVO_DISPLACEMENT = 0.0  # degrees offset for 0 point (pointing straight forward)
@@ -170,40 +171,37 @@ class BackgroundScanner:
         self.background_data_buffer = []
         self.scan_direction = 1  # 1 for forward, -1 for backward
 
-    def execute_background_scan(self, lidar_controller):
-        """Execute one step of the background scan at LiDAR sampling rate"""
+    def execute_background_scan(self, lidar_controller, stepper_controller, servo_controller):
+        """Execute one step of the background scan - FIXED VERSION"""
         if not self.shared_data["background_scan_active"].value:
             return
 
         print(f"[HWCtrl] Scan step: Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}°")
 
-        # Set target position and trigger movement
-        self.shared_data["target_azimuth"].value = self.current_scan_az
-        self.shared_data["target_elevation"].value = self.current_scan_el
-        self.shared_data["go_to_target"].value = True  # Trigger movement
-        self.shared_data["target_reached"].value = False
+        # DIRECT MOVEMENT - bypass the shared data movement system during scan
+        current_az = self.shared_data["stepper_degrees"].value
+        current_el = self.shared_data["servo_degrees"].value
 
-        # Wait for movement to complete with timeout
-        move_timeout = time.time() + 5.0  # 5 second timeout
-        movement_started = False
+        print(f"[HWCtrl] Current position: Az:{current_az:.1f}° El:{current_el:.1f}°")
+        print(f"[HWCtrl] Target position: Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}°")
 
-        while not self.shared_data["target_reached"].value:
-            if time.time() > move_timeout:
-                print(f"[HWCtrl] Movement timeout at Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}°")
-                break
+        # Move servo first (faster)
+        if abs(self.current_scan_el - current_el) > 0.5:
+            print(f"[HWCtrl] Moving servo from {current_el:.1f}° to {self.current_scan_el:.1f}°")
+            servo_controller.move_to_angle(self.current_scan_el)
 
-            # Check if movement has started
-            if not movement_started and not self.shared_data["go_to_target"].value:
-                movement_started = True
-                print(f"[HWCtrl] Movement started to Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}°")
+        # Move stepper second
+        if abs(self.current_scan_az - current_az) > MICROSTEP_ANGLE:
+            print(f"[HWCtrl] Moving stepper from {current_az:.1f}° to {self.current_scan_az:.1f}°")
+            stepper_controller.move_to_angle(self.current_scan_az)
 
-            time.sleep(0.01)
+        # Verify final positions
+        final_az = self.shared_data["stepper_degrees"].value
+        final_el = self.shared_data["servo_degrees"].value
+        print(f"[HWCtrl] Final position: Az:{final_az:.1f}° El:{final_el:.1f}°")
 
-        print(
-            f"[HWCtrl] Reached position Az:{self.shared_data['stepper_degrees'].value:.1f}° El:{self.shared_data['servo_degrees'].value:.1f}°")
-
-        # Allow shorter settling time due to faster, more precise movement
-        time.sleep(0.05)  # Reduced from 0.1s since DRV8825 moves more precisely
+        # Allow settling time
+        time.sleep(0.1)  # Increased settling time
 
         # Collect samples at this position
         samples = []
@@ -224,13 +222,9 @@ class BackgroundScanner:
         if samples:
             avg_sample = np.mean(samples, axis=0)
             self.background_data_buffer.append(avg_sample)
-            print(
-                f"[HWCtrl] Collected {len(samples)} samples at Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}° - Avg dist: {avg_sample[2]:.1f}cm")
-
-            if len(self.background_data_buffer) % 10 == 0:  # Progress every 10 points
-                print(f"[HWCtrl] Scan progress: {len(self.background_data_buffer)} points total")
+            print(f"[HWCtrl] Collected {len(samples)} samples - Avg dist: {avg_sample[2]:.1f}cm")
         else:
-            print(f"[HWCtrl] No valid samples at Az:{self.current_scan_az:.1f}° El:{self.current_scan_el:.1f}°")
+            print(f"[HWCtrl] No valid samples at this position")
 
         # Update scan position
         self._update_scan_position()
@@ -256,8 +250,7 @@ class BackgroundScanner:
             self.current_scan_el -= SCAN_ELEVATION_STEP
             self.scan_direction *= -1  # Reverse direction for next ring
 
-            print(f"[HWCtrl] Completed elevation ring at {self.current_scan_el + SCAN_ELEVATION_STEP:.1f}°, "
-                  f"next ring direction: {'forward' if self.scan_direction == 1 else 'backward'}")
+            print(f"[HWCtrl] Completed elevation ring, moving to {self.current_scan_el:.1f}°")
 
         # Check if entire scan is complete
         if self.current_scan_el < SCAN_TILT_MIN:
@@ -305,8 +298,10 @@ class PWMStepperController:
         self.pi.write(STEPPER_ENABLE_PIN, 0)  # Active low
         self.pi.write(STEPPER_SLEEP_PIN, 1)  # Wake up driver
 
+        # Give driver time to wake up
+        time.sleep(0.01)
+
         # Initialize PWM with DRV8825 optimized settings
-        # DRV8825 minimum pulse width is 1.9μs, so we can use higher frequencies
         self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)  # 50% duty cycle, start at 0 Hz
 
         print("[HWCtrl] PWM Stepper controller initialized for DRV8825")
@@ -327,7 +322,6 @@ class PWMStepperController:
 
     def calculate_target_frequency(self, distance_to_target):
         """Calculate target PWM frequency based on distance and PID"""
-
         # Acceleration/deceleration profile
         if abs(distance_to_target) <= MotorParams.STEPPER_ACCEL_DISTANCE:
             # Close to target - decelerate
@@ -371,21 +365,20 @@ class PWMStepperController:
         self.last_update_time = current_time
         return self.current_frequency
 
-    def move_to_target(self):
-        """Move stepper to target azimuth using PWM control"""
+    def move_to_angle(self, target_angle):
+        """Direct movement to target angle - ADDED for background scan"""
+        print(f"[HWCtrl-Stepper] Direct move to {target_angle:.3f}°")
 
-        # Set up step counting callback
+        # Set up step counting callback if not already done
         if not self.step_callback:
             self.step_callback = self.pi.callback(STEPPER_PULSE_PIN, pigpio.RISING_EDGE,
                                                   self._step_counter_callback)
 
-        target_pos = self.shared_data["target_azimuth"].value
         current_pos = self.shared_data["stepper_degrees"].value
+        print(f"[HWCtrl-Stepper] Current position: {current_pos:.3f}°")
 
-        print(f"[HWCtrl] Moving from {current_pos:.3f}° to {target_pos:.3f}°")
-
-        while abs(target_pos - current_pos) >= MICROSTEP_ANGLE and self.running:
-            error = target_pos - current_pos
+        while abs(target_angle - current_pos) >= MICROSTEP_ANGLE and self.running:
+            error = target_angle - current_pos
 
             # Determine direction
             direction = 1 if error > 0 else 0
@@ -399,24 +392,25 @@ class PWMStepperController:
 
             # Update PWM frequency
             if smooth_freq > 0:
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(smooth_freq), 500000)  # 50% duty cycle
+                self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(smooth_freq), 500000)
             else:
                 self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
 
             # Update current position from step counter
             current_pos = self.shared_data["stepper_degrees"].value
 
-            # Faster update rate for DRV8825 - it can handle rapid changes
-            time.sleep(0.0005)  # 0.5ms for 2kHz update rate
+            time.sleep(0.001)  # 1ms update rate
 
         # Stop PWM when target is reached
         self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
 
-        # Final position update
         final_pos = self.shared_data["stepper_degrees"].value
-        print(f"[HWCtrl] Target reached. Final position: {final_pos:.3f}°, Error: {abs(target_pos - final_pos):.3f}°")
+        print(f"[HWCtrl-Stepper] Reached {final_pos:.3f}°, Error: {abs(target_angle - final_pos):.3f}°")
 
-        # Target reached
+    def move_to_target(self):
+        """Move stepper to target azimuth using PWM control"""
+        target_pos = self.shared_data["target_azimuth"].value
+        self.move_to_angle(target_pos)
         self.shared_data["target_reached"].value = True
 
     def stop(self):
@@ -449,7 +443,7 @@ class ServoController:
 
     def angle_to_pulse_width(self, angle):
         """Convert angle to servo pulse width with displacement correction"""
-        # Apply displacement correction (subtract to make 0 point straight forward)
+        # Apply displacement correction
         corrected_angle = angle + MotorParams.SERVO_DISPLACEMENT
 
         # Clamp angle to servo limits
@@ -466,23 +460,32 @@ class ServoController:
 
         return int(pulse_width)
 
+    def move_to_angle(self, target_angle):
+        """Direct movement to target angle - ADDED for background scan"""
+        print(f"[HWCtrl-Servo] Direct move to {target_angle:.1f}°")
+
+        pulse_width = self.angle_to_pulse_width(target_angle)
+        self.pi.set_servo_pulsewidth(SERVO_PIN, pulse_width)
+
+        # Update shared data
+        with self.shared_data["servo_degrees"].get_lock():
+            self.shared_data["servo_degrees"].value = target_angle
+
+        # Give servo time to move
+        time.sleep(0.2)  # Servo movement time
+        print(f"[HWCtrl-Servo] Moved to {target_angle:.1f}°")
+
     def control_servo(self):
         """Control servo position based on target elevation"""
-
         while self.running:
             target_elevation = self.shared_data["target_elevation"].value
             current_servo = self.shared_data["servo_degrees"].value
 
             # Check if servo needs to move
             if abs(target_elevation - current_servo) > 0.5:  # 0.5 degree tolerance
-                pulse_width = self.angle_to_pulse_width(target_elevation)
-                self.pi.set_servo_pulsewidth(SERVO_PIN, pulse_width)
+                self.move_to_angle(target_elevation)
 
-                # Update current position
-                with self.shared_data["servo_degrees"].get_lock():
-                    self.shared_data["servo_degrees"].value = target_elevation
-
-            time.sleep(0.001)  # 50Hz update rate
+            time.sleep(0.05)  # 20Hz update rate
 
     def stop(self):
         """Stop the servo controller"""
@@ -506,7 +509,7 @@ def combined_controller_process(shared_data):
             return
 
         # Initialize controllers
-        stepper = PWMStepperController(pi, shared_data)  # Use PWM stepper controller
+        stepper = PWMStepperController(pi, shared_data)
         servo = ServoController(pi, shared_data)
         lidar = LidarController(shared_data)
         scanner = BackgroundScanner(shared_data)
@@ -523,11 +526,11 @@ def combined_controller_process(shared_data):
             # Update LiDAR data continuously
             lidar.get_lidar_data()
 
-            # Handle background scanning - give it priority
+            # Handle background scanning - FIXED to pass controller references
             if shared_data["background_scan_active"].value:
-                scanner.execute_background_scan(lidar)
-                # Small delay between scan steps to prevent overwhelming the system
-                time.sleep(0.05)
+                scanner.execute_background_scan(lidar, stepper, servo)
+                # Small delay between scan steps
+                time.sleep(0.1)
 
             # Handle normal stepper movement only when not scanning
             elif shared_data["go_to_target"].value:
@@ -542,10 +545,12 @@ def combined_controller_process(shared_data):
 
             else:
                 # Idle - just update LiDAR data
-                time.sleep(0.001)  # 1ms main loop for responsive control
+                time.sleep(0.01)  # 10ms main loop
 
     except Exception as e:
         print(f"[HWCtrl] Combined controller error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         print("[HWCtrl] Shutting down...")
         if stepper:
@@ -553,7 +558,7 @@ def combined_controller_process(shared_data):
         if servo:
             servo.stop()
         if servo_thread:
-            servo_thread.join(timeout=1.0)  # Ensure thread is joined
+            servo_thread.join(timeout=1.0)
         if lidar:
             lidar.stop()
         if pi and pi.connected:
@@ -563,10 +568,13 @@ def combined_controller_process(shared_data):
 
 def run_hardware_controller(shared_data):
     """Main function to start the combined hardware controller"""
-
     print("[HWCtrl] Starting PWM-based hardware controller process...")
     try:
         combined_controller_process(shared_data)
     except KeyboardInterrupt:
         print("[HWCtrl] Process interrupted by user.")
+    except Exception as e:
+        print(f"[HWCtrl] Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
     print("[HWCtrl] Hardware controller process stopped.")
