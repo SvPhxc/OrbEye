@@ -30,7 +30,7 @@ class MotorParams:
     STEPPER_ACCEL_DISTANCE = 10.0  # degrees to start/stop acceleration
 
     # PID Parameters for stepper speed control
-    KP = 0.8  # Proportional gain
+    KP = 4  # Proportional gain
     KI = 0.1  # Integral gain
     KD = 0.2  # Derivative gain
 
@@ -38,8 +38,8 @@ class MotorParams:
     SERVO_MIN_PULSE = 500  # microseconds
     SERVO_MAX_PULSE = 2500  # microseconds
     SERVO_MIN_ANGLE = 0  # degrees
-    SERVO_MAX_ANGLE = 180  # degrees
-    SERVO_DISPLACEMENT = 90.0  # degrees offset for 0 point (pointing straight forward)
+    SERVO_MAX_ANGLE = 90  # degrees
+    SERVO_DISPLACEMENT = 23.0  # degrees offset for 0 point (pointing straight forward)
 
 
 # Scan Parameters
