@@ -27,30 +27,30 @@ MICROSTEP_ANGLE = 0.05625  # degrees per step
 
 # Control Parameters
 class MotorParams:
-    # Stepper Parameters - DRV8825 optimized
-    STEPPER_MAX_SPEED = 5000  # max steps per second (DRV8825 can handle up to 250kHz)
+    # Stepper Parameters - DRV8825 optimized for speed
+    STEPPER_MAX_SPEED = 8000  # Increased max (DRV8825 can handle up to 250kHz)
     STEPPER_MIN_SPEED = 720  # min steps per second
-    STEPPER_ACCEL_DISTANCE = 2.0  # degrees to start/stop acceleration (reduced for faster scanning)
-    STEPPER_CRUISE_SPEED = 3000  # optimal cruise speed for DRV8825
+    STEPPER_ACCEL_DISTANCE = 1.5  # Reduced for faster acceleration
+    STEPPER_CRUISE_SPEED = 5000  # Higher cruise speed for scans
 
-    # Fast transition parameters
-    MAX_FREQ_CHANGE_RATE = 2000  # Hz per millisecond (much faster transitions)
+    # Ultra-fast transition for scanning
+    MAX_FREQ_CHANGE_RATE = 5000  # Hz per millisecond (very fast transitions)
 
-    # PID Parameters for stepper speed control (tuned for higher speeds)
-    KP = 6.0  # Increased proportional gain for faster response
-    KI = 0.05  # Increased integral gain
-    KD = 0.01  # Reduced derivative to prevent oscillation at high speeds
+    # PID Parameters - tuned for high-speed operation
+    KP = 8.0  # Higher proportional for faster response
+    KI = 0.08  # Slightly higher integral
+    KD = 0.008  # Lower derivative for stability at high speed
 
     # Servo Parameters
     SERVO_MIN_PULSE = 500  # microseconds (standard servo min)
-    SERVO_MAX_PULSE = 2500  # microseconds (standard servo max)
+    SERVO_MAX_PULSE = 1750  # microseconds (standard servo max)
     SERVO_MIN_ANGLE = 0  # degrees (physical limit)
     SERVO_MAX_ANGLE = 90  # degrees (physical limit)
 
     # Servo mounting offset - adjust this to set your zero point
     # If servo points 15 degrees up when at "0", set this to -15
     # This ensures displayed angles are always positive (0-90)
-    SERVO_ZERO_OFFSET = 23.0  # degrees - adjust for your mounting
+    SERVO_ZERO_OFFSET = 18.0  # degrees - adjust for your mounting
 
     # Pan angle limits
     PAN_MIN_ANGLE = 0.0  # degrees
@@ -58,14 +58,59 @@ class MotorParams:
 
 
 # Continuous Scan Parameters
-SCAN_AZIMUTH_STEP = 1  # Degrees per sample for continuous scanning
-SCAN_ELEVATION_STEP = 1.0  # Elevation step when changing rings
+# Speed Profiles for different scan modes
+class ScanProfiles:
+    # FAST SCAN - Lower resolution, high speed
+    FAST = {
+        "azimuth_speed": 180.0,  # 90 deg/sec (4 seconds per rotation)
+        "elevation_step": 1.0,  # 5 degree steps (18 rings for 0-90)
+        "data_rate": 1000,  # 30 Hz sampling
+        "servo_move_time": 0.05,  # Faster servo movement
+        "servo_settle_time": 0.05,  # Minimal settling
+    }
+
+    # NORMAL SCAN - Balanced speed and resolution
+    NORMAL = {
+        "azimuth_speed": 60.0,  # 60 deg/sec (6 seconds per rotation)
+        "elevation_step": 3.0,  # 3 degree steps (30 rings)
+        "data_rate": 40,  # 40 Hz sampling
+        "servo_move_time": 0.8,  # Normal servo movement
+        "servo_settle_time": 0.2,  # Short settling
+    }
+
+    # HIGH QUALITY - Higher resolution, slower speed
+    HIGH_QUALITY = {
+        "azimuth_speed": 30.0,  # 30 deg/sec (12 seconds per rotation)
+        "elevation_step": 2.0,  # 2 degree steps (45 rings)
+        "data_rate": 50,  # 50 Hz sampling
+        "servo_move_time": 1.0,  # Safe servo movement
+        "servo_settle_time": 0.3,  # Good settling
+    }
+
+    # ULTRA FAST - Maximum speed, minimum resolution
+    ULTRA_FAST = {
+        "azimuth_speed": 120.0,  # 120 deg/sec (3 seconds per rotation)
+        "elevation_step": 10.0,  # 10 degree steps (9 rings only)
+        "data_rate": 25,  # 25 Hz sampling
+        "servo_move_time": 0.3,  # Very fast servo
+        "servo_settle_time": 0.05,  # Almost no settling
+    }
+
+
+# Select scan profile here
+CURRENT_SCAN_PROFILE = ScanProfiles.FAST  # Change this to select speed
+
+# Apply selected profile
+SCAN_AZIMUTH_SPEED = CURRENT_SCAN_PROFILE["azimuth_speed"]
+SCAN_ELEVATION_STEP = CURRENT_SCAN_PROFILE["elevation_step"]
+SCAN_DATA_RATE = CURRENT_SCAN_PROFILE["data_rate"]
+SERVO_MOVE_TIME = CURRENT_SCAN_PROFILE["servo_move_time"]
+SERVO_SETTLE_TIME = CURRENT_SCAN_PROFILE["servo_settle_time"]
+
+# Fixed parameters
+SCAN_AZIMUTH_STEP = 0.5  # Not used in continuous mode
 SCAN_TILT_MAX = 90.0  # start elevation
 SCAN_TILT_MIN = 0.0  # end elevation
-SCAN_AZIMUTH_SPEED = 30.0  # Degrees per second for continuous azimuth movement
-SCAN_DATA_RATE = 50  # Hz - Data collection rate during continuous movement
-SERVO_MOVE_TIME = 0.1  # Time to allow servo to move to new elevation (increased)
-SERVO_SETTLE_TIME = 0.5  # Additional time for servo to settle
 
 
 class PIDController:
@@ -180,13 +225,18 @@ class ContinuousBackgroundScanner:
         self.background_data_buffer = []
         self.scan_direction = 1  # 1 for forward (0->360), -1 for backward (360->0)
         self.scan_active = False
+        self.scan_start_time = None
+
+        # Calculate and display expected scan time
+        self._estimate_scan_time()
 
     def start_continuous_scan(self, lidar_controller, stepper_controller, servo_controller):
-        """Start continuous scanning process"""
+        """Start continuous scanning process with optimized servo movement"""
         if not self.shared_data["background_scan_active"].value:
             return
 
         print(f"[HWCtrl] Starting continuous scan at elevation {self.current_elevation:.1f}°")
+        print(f"[HWCtrl] Scan profile: {SCAN_AZIMUTH_SPEED}°/s, {SCAN_ELEVATION_STEP}° steps")
 
         # Move servo to current elevation using shared data system
         print(f"[HWCtrl] Moving servo to {self.current_elevation:.1f}°")
@@ -194,30 +244,48 @@ class ContinuousBackgroundScanner:
         # Set target elevation in shared data for servo thread to handle
         self.shared_data["target_elevation"].value = self.current_elevation
 
-        # Wait for servo to reach position
+        # Adaptive wait based on scan profile
         start_wait = time.time()
-        while time.time() - start_wait < SERVO_MOVE_TIME:
+        timeout = SERVO_MOVE_TIME
+
+        # For first move, always wait full time
+        if self.current_elevation == SCAN_TILT_MAX:
+            timeout = max(SERVO_MOVE_TIME, 1.0)
+
+        while time.time() - start_wait < timeout:
             current_servo = self.shared_data["servo_degrees"].value
             if abs(current_servo - self.current_elevation) < 1.0:  # Within 1 degree
                 print(f"[HWCtrl] Servo reached {current_servo:.1f}° (target: {self.current_elevation:.1f}°)")
-                time.sleep(SERVO_SETTLE_TIME)  # Let servo settle
+                if SERVO_SETTLE_TIME > 0.01:  # Only settle if needed
+                    time.sleep(SERVO_SETTLE_TIME)
                 break
-            time.sleep(0.05)
+            time.sleep(0.001)  # Faster polling
         else:
-            print(f"[HWCtrl] Warning: Servo move timeout. Current: {self.shared_data['servo_degrees'].value:.1f}°")
+            # Don't stop scan on timeout for fast profiles
+            if SCAN_AZIMUTH_SPEED < 60:  # Only warn for slower scans
+                print(f"[HWCtrl] Warning: Servo move timeout. Current: {self.shared_data['servo_degrees'].value:.1f}°")
 
         # Perform continuous azimuth sweep
         self._perform_continuous_azimuth_sweep(lidar_controller, stepper_controller)
 
-        # Move to next elevation
+        # Pre-move servo to next elevation during data processing
         self.current_elevation -= SCAN_ELEVATION_STEP
+        if self.current_elevation >= SCAN_TILT_MIN:
+            # Start moving servo to next position immediately
+            print(f"[HWCtrl] Pre-positioning servo to next elevation: {self.current_elevation:.1f}°")
+            self.shared_data["target_elevation"].value = self.current_elevation
+
         self.scan_direction *= -1  # Alternate direction for each ring
 
         # Check if scan is complete
         if self.current_elevation < SCAN_TILT_MIN:
             print("[HWCtrl] CONTINUOUS BACKGROUND SCAN completed.")
+            total_time = time.time() - self.scan_start_time if hasattr(self, 'scan_start_time') else 0
+            print(f"[HWCtrl] Total scan time: {total_time:.1f} seconds")
             self._save_scan_data()
             self._reset_scan()
+        elif not hasattr(self, 'scan_start_time'):
+            self.scan_start_time = time.time()
 
     def _perform_continuous_azimuth_sweep(self, lidar_controller, stepper_controller):
         """Perform continuous azimuth sweep while collecting data"""
@@ -251,7 +319,7 @@ class ContinuousBackgroundScanner:
         movement_thread.join(timeout=15.0)  # 15 second timeout for full rotation
 
     def _continuous_azimuth_movement(self, stepper_controller, start_az, end_az):
-        """Perform continuous azimuth movement in separate thread"""
+        """Perform continuous azimuth movement in separate thread with optimized speed"""
 
         # Calculate movement parameters
         total_distance = abs(end_az - start_az)
@@ -265,8 +333,19 @@ class ContinuousBackgroundScanner:
         stepper_controller.pi.write(STEPPER_DIR_PIN, direction)
 
         # Start continuous PWM at calculated frequency
-        frequency = min(int(steps_per_second), MotorParams.STEPPER_MAX_SPEED)
-        stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, frequency, 500000)
+        # Use higher speed for fast scans
+        if SCAN_AZIMUTH_SPEED > 60:
+            # For high-speed scans, start at cruise speed immediately
+            frequency = min(int(steps_per_second), MotorParams.STEPPER_MAX_SPEED)
+            stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, frequency, 500000)
+        else:
+            # For normal scans, ramp up
+            target_freq = min(int(steps_per_second), MotorParams.STEPPER_MAX_SPEED)
+            ramp_steps = 10
+            for i in range(ramp_steps):
+                freq = int((target_freq / ramp_steps) * (i + 1))
+                stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, freq, 500000)
+                time.sleep(0.001)
 
         # Setup step counting for position tracking
         if not stepper_controller.step_callback:
@@ -279,7 +358,16 @@ class ContinuousBackgroundScanner:
         while (time.time() - start_time) < movement_time and stepper_controller.running:
             time.sleep(0.001)
 
-        # Stop movement
+        # Stop movement with deceleration for slower scans
+        if SCAN_AZIMUTH_SPEED <= 60:
+            # Gentle deceleration
+            current_freq = int(steps_per_second)
+            while current_freq > 1000:
+                current_freq = int(current_freq * 0.9)
+                stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, current_freq, 500000)
+                time.sleep(0.001)
+
+        # Full stop
         stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
 
         final_pos = stepper_controller.shared_data["stepper_degrees"].value
@@ -344,12 +432,34 @@ class ContinuousBackgroundScanner:
         else:
             print("[HWCtrl] No scan data to save")
 
+    def _estimate_scan_time(self):
+        """Calculate and display expected scan time"""
+        num_rings = int((SCAN_TILT_MAX - SCAN_TILT_MIN) / SCAN_ELEVATION_STEP) + 1
+        time_per_rotation = 360.0 / SCAN_AZIMUTH_SPEED
+        time_per_servo = SERVO_MOVE_TIME + SERVO_SETTLE_TIME
+        total_scan_time = (num_rings * time_per_rotation) + ((num_rings - 1) * time_per_servo)
+
+        samples_per_rotation = int(time_per_rotation * SCAN_DATA_RATE)
+        total_samples = samples_per_rotation * num_rings
+
+        print(f"[HWCtrl] ========== SCAN CONFIGURATION ==========")
+        print(
+            f"[HWCtrl] Profile: {'ULTRA_FAST' if SCAN_AZIMUTH_SPEED >= 120 else 'FAST' if SCAN_AZIMUTH_SPEED >= 90 else 'NORMAL' if SCAN_AZIMUTH_SPEED >= 60 else 'HIGH_QUALITY'}")
+        print(f"[HWCtrl] Azimuth speed: {SCAN_AZIMUTH_SPEED}°/s")
+        print(f"[HWCtrl] Elevation steps: {SCAN_ELEVATION_STEP}°")
+        print(f"[HWCtrl] Number of rings: {num_rings}")
+        print(f"[HWCtrl] Time per rotation: {time_per_rotation:.1f}s")
+        print(f"[HWCtrl] Expected total time: {total_scan_time:.1f}s ({total_scan_time / 60:.1f} minutes)")
+        print(f"[HWCtrl] Expected samples: ~{total_samples:,}")
+        print(f"[HWCtrl] ========================================")
+
     def _reset_scan(self):
         """Reset scan parameters for next scan"""
         self.current_elevation = SCAN_TILT_MAX
         self.scan_direction = 1
         self.background_data_buffer = []
         self.shared_data["background_scan_active"].value = False
+        self.scan_start_time = None
         print("[HWCtrl] Scan parameters reset for next scan")
 
 
@@ -382,7 +492,7 @@ class PWMStepperController:
         self.pi.write(STEPPER_SLEEP_PIN, 1)  # Wake up driver
 
         # Give driver time to wake up
-        time.sleep(0.01)
+        time.sleep(0.001)
 
         # Initialize PWM with DRV8825 optimized settings
         self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)  # 50% duty cycle, start at 0 Hz
@@ -598,7 +708,7 @@ class ServoController:
             if abs(target_elevation - current_servo) > 0.5:  # 0.5 degree tolerance
                 self.move_to_angle(target_elevation)
 
-            time.sleep(0.05)  # 20Hz update rate
+            time.sleep(0.001)  # 1000Hz update rate
 
     def stop(self):
         """Stop the servo controller"""
@@ -624,6 +734,7 @@ def combined_controller_process(shared_data):
         print(f"[HWCtrl] Initializing with servo zero offset: {MotorParams.SERVO_ZERO_OFFSET}°")
         print(f"[HWCtrl] Pan limits: {MotorParams.PAN_MIN_ANGLE}° - {MotorParams.PAN_MAX_ANGLE}°")
         print(f"[HWCtrl] Tilt limits: {MotorParams.SERVO_MIN_ANGLE}° - {MotorParams.SERVO_MAX_ANGLE}°")
+        print(f"[HWCtrl] Scan speed profile: {SCAN_AZIMUTH_SPEED}°/s azimuth, {SCAN_ELEVATION_STEP}° elevation steps")
 
         # Initialize controllers
         stepper = PWMStepperController(pi, shared_data)
@@ -661,7 +772,7 @@ def combined_controller_process(shared_data):
 
             else:
                 # Idle - just update LiDAR data
-                time.sleep(0.01)  # 10ms main loop
+                time.sleep(0.001)  # 1ms main loop
 
     except Exception as e:
         print(f"[HWCtrl] Combined controller error: {e}")
