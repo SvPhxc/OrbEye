@@ -586,7 +586,7 @@ class PWMStepperController:
         return self.current_frequency
 
     def move_to_angle(self, target_angle):
-        """Direct movement to target angle with angle limiting and overshoot prevention"""
+        """Direct movement to target angle with PID control for all movement sizes."""
         # Clamp target angle to valid range
         target_angle = max(MotorParams.PAN_MIN_ANGLE,
                            min(MotorParams.PAN_MAX_ANGLE, target_angle))
@@ -601,7 +601,7 @@ class PWMStepperController:
         current_pos = self.shared_data["stepper_degrees"].value
         print(f"[HWCtrl-Stepper] Current position: {current_pos:.3f}°")
 
-        # Define a tighter tolerance for small movements
+        # Define a tolerance to prevent hunting at the target
         tolerance = MICROSTEP_ANGLE * 2  # Allow 2 microsteps tolerance
 
         while self.running:
@@ -614,49 +614,28 @@ class PWMStepperController:
             elif error < -180:
                 error += 360
 
-            # Check if we're close enough
+            # Check if we're within the tolerance
             if abs(error) < tolerance:
                 print(f"[HWCtrl-Stepper] Target reached. Position: {current_pos:.3f}°, Error: {error:.3f}°")
                 break
 
-            # For very small movements, use minimum speed to prevent overshoot
-            if abs(error) < 1.0:  # Less than 1 degree
-                # Use minimum speed and direct control
-                direction = 1 if error > 0 else 0
-                self.pi.write(STEPPER_DIR_PIN, direction)
+            # --- Unified PID-based movement logic ---
+            # Determine direction based on the sign of the error
+            direction = 1 if error > 0 else 0
+            self.pi.write(STEPPER_DIR_PIN, direction)
 
-                # Pulse slowly for precise control
-                steps_needed = int(abs(error) / MICROSTEP_ANGLE)
-                if steps_needed > 0:
-                    # Use very slow speed for precision
-                    self.pi.hardware_PWM(STEPPER_PULSE_PIN, MotorParams.STEPPER_MIN_SPEED, 500000)
-                    # Calculate time needed
-                    time_needed = steps_needed / MotorParams.STEPPER_MIN_SPEED
-                    time.sleep(time_needed)
-                    # Stop immediately
-                    self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
-                    # Allow position to update
-                    time.sleep(0.01)
-                else:
-                    # We're within tolerance
-                    break
+            # Calculate target frequency using the PID controller
+            # The PID controller will naturally reduce the speed as the error approaches zero
+            target_freq = self.calculate_target_frequency(error)
+
+            # Apply smooth frequency transition
+            smooth_freq = self.smooth_frequency_transition(target_freq)
+
+            # Update PWM frequency
+            if smooth_freq > 0:
+                self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(smooth_freq), 500000)
             else:
-                # Normal movement for larger distances
-                # Determine direction
-                direction = 1 if error > 0 else 0
-                self.pi.write(STEPPER_DIR_PIN, direction)
-
-                # Calculate target frequency
-                target_freq = self.calculate_target_frequency(error)
-
-                # Apply smooth frequency transition
-                smooth_freq = self.smooth_frequency_transition(target_freq)
-
-                # Update PWM frequency
-                if smooth_freq > 0:
-                    self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(smooth_freq), 500000)
-                else:
-                    self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
+                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
 
             time.sleep(0.001)  # 1ms update rate
 
