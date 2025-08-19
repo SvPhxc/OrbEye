@@ -6,7 +6,7 @@ import signal
 import time
 from multiprocessing import Process, Array, Value, Manager
 import traceback
-from tracking_logic import run_tracking_logic
+from tracking_logic import run_tracker_process
 from tle_generator import run_tle_generator  # <-- IMPORT THE NEW PROCESS
 
 # Import all process functions
