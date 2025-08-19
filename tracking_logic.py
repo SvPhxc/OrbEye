@@ -83,13 +83,13 @@ class AsyncLidarProcessor:
                         except queue.Empty:
                             pass
 
-                time.sleep(0.0005)  # Very fast sampling
+                time.sleep(0.001)  # Very fast sampling
 
             except Exception as e:
                 print(f"[AsyncLidar] Processing error: {e}")
                 time.sleep(0.001)
 
-    def get_recent_samples(self, max_age=0.1, position_tolerance=3.0):
+    def get_recent_samples(self, max_age=0.4, position_tolerance=3.0):
         """
         Get recent samples near a specific position.
 
@@ -316,8 +316,8 @@ class AdvancedTargetTracker:
         self.clutter_filter = self._init_clutter_filter(background_file)
 
         # Adaptive parameters
-        self.min_strength_threshold = 60  # Lower threshold for distant targets
-        self.good_target_threshold = 150  # Early termination threshold
+        self.min_strength_threshold = 400  # Lower threshold for distant targets
+        self.good_target_threshold = 6000  # Early termination threshold
         self.movement_step_size = 2.0  # Larger steps for faster movement
         self.position_tolerance = 3.0  # Relaxed positioning tolerance
 
@@ -517,7 +517,7 @@ class AdvancedTargetTracker:
             if az_diff < tolerance and el_diff < tolerance:
                 break
 
-            time.sleep(0.0005)  # Very short sleep
+            time.sleep(0.001)  # Very short sleep
 
     def _get_current_sample(self):
         """Get current sample directly."""
