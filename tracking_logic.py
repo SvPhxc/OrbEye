@@ -127,7 +127,7 @@ class TargetTracker:
         self.angle_handler = AngleHandler()
 
         # LiDAR rate limiting (1000Hz max)
-        self.lidar_min_interval = 0.001  # 1ms minimum between reads
+        self.lidar_min_interval = 0.002  # 1ms minimum between reads
         self.last_lidar_read = 0
 
         # Balanced optimization parameters
@@ -144,7 +144,7 @@ class TargetTracker:
         # Movement parameters
         self.movement_timeout = 0.3  # Reasonable timeout
         self.position_tolerance = 0.0  # Degrees
-        self.min_movement_delay = 0.01  # Minimum delay for movement
+        self.min_movement_delay = 0.02  # Minimum delay for movement
 
         # Tracking state
         self.current_target_az = None
@@ -157,7 +157,7 @@ class TargetTracker:
         self.target_history = deque(maxlen=3)
         self.position_history = deque(maxlen=4)
         self.lost_target_count = 0
-        self.max_lost_count = 3
+        self.max_lost_count = 5
 
         # Performance monitoring
         self.cycle_count = 0
@@ -302,7 +302,7 @@ class TargetTracker:
             score = strength
 
             # Penalize extremely high strength slightly to avoid getting stuck
-            if strength > 400:
+            if strength > 7000:
                 score *= 0.9
 
             return score
@@ -389,12 +389,12 @@ class TargetTracker:
                 new_vel_el = (new_el - self.current_target_el) / dt
 
                 # Smooth velocity with exponential moving average
-                alpha = 0.3
+                alpha = 0.5
                 self.target_velocity_az = alpha * new_vel_az + (1 - alpha) * self.target_velocity_az
                 self.target_velocity_el = alpha * new_vel_el + (1 - alpha) * self.target_velocity_el
 
                 # Limit maximum velocity
-                max_vel = 50.0  # degrees/second
+                max_vel = 18.0  # degrees/second
                 self.target_velocity_az = np.clip(self.target_velocity_az, -max_vel, max_vel)
                 self.target_velocity_el = np.clip(self.target_velocity_el, -max_vel, max_vel)
 
