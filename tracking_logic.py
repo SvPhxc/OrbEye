@@ -142,9 +142,9 @@ class TargetTracker:
         self.last_high_strength = 0
 
         # Movement parameters
-        self.movement_timeout = 0.3  # Reasonable timeout
+        self.movement_timeout = 0.4  # Reasonable timeout
         self.position_tolerance = 0.0  # Degrees
-        self.min_movement_delay = 0.035  # Minimum delay for movement
+        self.min_movement_delay = 0.04  # Minimum delay for movement
 
         # Tracking state
         self.current_target_az = None
@@ -232,7 +232,7 @@ class TargetTracker:
             if az_diff < self.position_tolerance and el_diff < self.position_tolerance:
                 return True
 
-            time.sleep(0.002)
+            time.sleep(0.001)
 
         return True
 
@@ -303,7 +303,7 @@ class TargetTracker:
 
             # Penalize extremely high strength slightly to avoid getting stuck
             if strength > 7000:
-                score *= 0.9
+                score *= 0.95
 
             return score
 
@@ -389,7 +389,7 @@ class TargetTracker:
                 new_vel_el = (new_el - self.current_target_el) / dt
 
                 # Smooth velocity with exponential moving average
-                alpha = 0.2
+                alpha = 0.4
                 self.target_velocity_az = alpha * new_vel_az + (1 - alpha) * self.target_velocity_az
                 self.target_velocity_el = alpha * new_vel_el + (1 - alpha) * self.target_velocity_el
 
