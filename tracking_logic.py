@@ -389,7 +389,7 @@ class TargetTracker:
                 new_vel_el = (new_el - self.current_target_el) / dt
 
                 # Smooth velocity with exponential moving average
-                alpha = 0.3
+                alpha = 0.2
                 self.target_velocity_az = alpha * new_vel_az + (1 - alpha) * self.target_velocity_az
                 self.target_velocity_el = alpha * new_vel_el + (1 - alpha) * self.target_velocity_el
 
@@ -474,8 +474,8 @@ class TargetTracker:
 
                     # Expand search area if consistently lost
                     if self.lost_target_count >= self.max_lost_count:
-                        self.scan_radius_az = min(self.scan_radius_az * 1.5, 25.0)
-                        self.scan_radius_el = min(self.scan_radius_el * 1.5, 20.0)
+                        self.scan_radius_az = min(self.scan_radius_az * 1.5, 15.0)
+                        self.scan_radius_el = min(self.scan_radius_el * 1.5, 15.0)
                         self.lost_target_count = 0
                         print(f"[Tracker] Expanding search to ±{self.scan_radius_az:.1f}°")
 
@@ -491,8 +491,8 @@ class TargetTracker:
                           f"{lidar_rate:.0f}Hz LiDAR rate")
 
                 # Ensure minimum cycle time to prevent overwhelming the system
-                if cycle_time < 0.02:  # Minimum 20ms per cycle
-                    time.sleep(0.02 - cycle_time)
+                if cycle_time < 0.005:  # Minimum 20ms per cycle
+                    time.sleep(0.005 - cycle_time)
 
         except KeyboardInterrupt:
             print("[Tracker] Interrupted")
