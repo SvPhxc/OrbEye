@@ -127,14 +127,14 @@ class TargetTracker:
         self.angle_handler = AngleHandler()
 
         # LiDAR rate limiting (1000Hz max)
-        self.lidar_min_interval = 0.002  # 1ms minimum between reads
+        self.lidar_min_interval = 0.004  # 1ms minimum between reads
         self.last_lidar_read = 0
 
         # Balanced optimization parameters
         self.scan_radius_az = 8.0  # Reasonable scan radius
         self.scan_radius_el = 8.0
-        self.scan_points = 12  # Balanced number of scan points
-        self.min_strength_threshold = 1000
+        self.scan_points = 16  # Balanced number of scan points
+        self.min_strength_threshold = 1500
 
         # Prevent getting stuck on high strength targets
         self.max_strength_lock = 16000  # Don't lock on targets above this
@@ -144,7 +144,7 @@ class TargetTracker:
         # Movement parameters
         self.movement_timeout = 0.3  # Reasonable timeout
         self.position_tolerance = 0.0  # Degrees
-        self.min_movement_delay = 0.02  # Minimum delay for movement
+        self.min_movement_delay = 0.025  # Minimum delay for movement
 
         # Tracking state
         self.current_target_az = None
@@ -389,7 +389,7 @@ class TargetTracker:
                 new_vel_el = (new_el - self.current_target_el) / dt
 
                 # Smooth velocity with exponential moving average
-                alpha = 0.5
+                alpha = 0.3
                 self.target_velocity_az = alpha * new_vel_az + (1 - alpha) * self.target_velocity_az
                 self.target_velocity_el = alpha * new_vel_el + (1 - alpha) * self.target_velocity_el
 
