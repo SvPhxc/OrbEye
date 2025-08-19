@@ -127,7 +127,7 @@ class TargetTracker:
         self.angle_handler = AngleHandler()
 
         # LiDAR rate limiting (1000Hz max)
-        self.lidar_min_interval = 0.004  # 1ms minimum between reads
+        self.lidar_min_interval = 0.001  # 1ms minimum between reads
         self.last_lidar_read = 0
 
         # Balanced optimization parameters
@@ -142,9 +142,9 @@ class TargetTracker:
         self.last_high_strength = 0
 
         # Movement parameters
-        self.movement_timeout = 0.4  # Reasonable timeout
+        self.movement_timeout = 0.6  # Reasonable timeout
         self.position_tolerance = 0.0  # Degrees
-        self.min_movement_delay = 0.1  # Minimum delay for movement
+        self.min_movement_delay = 0.15  # Minimum delay for movement
 
         # Tracking state
         self.current_target_az = None
@@ -154,10 +154,10 @@ class TargetTracker:
         self.last_update_time = None
 
         # History tracking
-        self.target_history = deque(maxlen=3)
-        self.position_history = deque(maxlen=4)
+        self.target_history = deque(maxlen=5)
+        self.position_history = deque(maxlen=6)
         self.lost_target_count = 0
-        self.max_lost_count = 5
+        self.max_lost_count = 8
 
         # Performance monitoring
         self.cycle_count = 0
