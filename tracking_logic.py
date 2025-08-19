@@ -111,9 +111,9 @@ class TargetTracker:
         # Tracking parameters
         self.scan_radius_az = 10.0  # Degrees to scan left/right from center
         self.scan_radius_el = 10.0  # Degrees to scan up/down from center
-        self.scan_points = 12  # Number of points to scan in the circle
+        self.scan_points = 8  # Number of points to scan in the circle
         self.min_strength_threshold = 100  # Minimum strength to consider a valid target
-        self.sample_time = 0.005  # Time to sample at each scan point (seconds)
+        self.sample_time = 0.002  # Time to sample at each scan point (seconds)
         self.samples_per_point = 1  # Number of samples to average at each point
 
         # Tracking state
@@ -427,7 +427,7 @@ class TargetTracker:
                     time.sleep(0.1)  # Wait while disabled
 
                 # Small delay between cycles
-                time.sleep(0.05)
+                time.sleep(0.002)
 
         except KeyboardInterrupt:
             print("[Tracker] Tracking interrupted by user")
