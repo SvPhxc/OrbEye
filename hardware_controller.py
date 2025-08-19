@@ -4,6 +4,7 @@ Hardware Controller for Stepper Motor (Pan) and Servo (Tilt) Control
 Uses multiprocessing with shared data and PID control for smooth movement
 PWM-based stepper control for smooth operation with precise position tracking
 FIXED: Continuous background scanning with data collection during movement
+FIXED: Proper servo movement and angle limiting
 """
 
 import time
@@ -41,21 +42,30 @@ class MotorParams:
     KD = 0.01  # Reduced derivative to prevent oscillation at high speeds
 
     # Servo Parameters
-    SERVO_MIN_PULSE = 500 + (23 * 0.09)  # microseconds
-    SERVO_MAX_PULSE = 1750 + (23 * 0.09)  # microseconds
-    SERVO_MIN_ANGLE = 0  # degrees
-    SERVO_MAX_ANGLE = 90  # degrees
-    SERVO_DISPLACEMENT = 0.0  # degrees offset for 0 point (pointing straight forward)
+    SERVO_MIN_PULSE = 500  # microseconds (standard servo min)
+    SERVO_MAX_PULSE = 2500  # microseconds (standard servo max)
+    SERVO_MIN_ANGLE = 0  # degrees (physical limit)
+    SERVO_MAX_ANGLE = 90  # degrees (physical limit)
+
+    # Servo mounting offset - adjust this to set your zero point
+    # If servo points 15 degrees up when at "0", set this to -15
+    # This ensures displayed angles are always positive (0-90)
+    SERVO_ZERO_OFFSET = 23.0  # degrees - adjust for your mounting
+
+    # Pan angle limits
+    PAN_MIN_ANGLE = 0.0  # degrees
+    PAN_MAX_ANGLE = 360.0  # degrees
 
 
 # Continuous Scan Parameters
-SCAN_AZIMUTH_STEP = 0.5  # Degrees per sample for continuous scanning
-SCAN_ELEVATION_STEP = 2.0  # Elevation step when changing rings
+SCAN_AZIMUTH_STEP = 1  # Degrees per sample for continuous scanning
+SCAN_ELEVATION_STEP = 1.0  # Elevation step when changing rings
 SCAN_TILT_MAX = 90.0  # start elevation
 SCAN_TILT_MIN = 0.0  # end elevation
 SCAN_AZIMUTH_SPEED = 30.0  # Degrees per second for continuous azimuth movement
 SCAN_DATA_RATE = 50  # Hz - Data collection rate during continuous movement
-SERVO_MOVE_TIME = 1.0  # Time to allow servo to move to new elevation
+SERVO_MOVE_TIME = 0.1  # Time to allow servo to move to new elevation (increased)
+SERVO_SETTLE_TIME = 0.5  # Additional time for servo to settle
 
 
 class PIDController:
@@ -178,10 +188,23 @@ class ContinuousBackgroundScanner:
 
         print(f"[HWCtrl] Starting continuous scan at elevation {self.current_elevation:.1f}°")
 
-        # Move servo to current elevation
+        # Move servo to current elevation using shared data system
         print(f"[HWCtrl] Moving servo to {self.current_elevation:.1f}°")
-        servo_controller.move_to_angle(self.current_elevation)
-        time.sleep(SERVO_MOVE_TIME)  # Allow servo to reach position
+
+        # Set target elevation in shared data for servo thread to handle
+        self.shared_data["target_elevation"].value = self.current_elevation
+
+        # Wait for servo to reach position
+        start_wait = time.time()
+        while time.time() - start_wait < SERVO_MOVE_TIME:
+            current_servo = self.shared_data["servo_degrees"].value
+            if abs(current_servo - self.current_elevation) < 1.0:  # Within 1 degree
+                print(f"[HWCtrl] Servo reached {current_servo:.1f}° (target: {self.current_elevation:.1f}°)")
+                time.sleep(SERVO_SETTLE_TIME)  # Let servo settle
+                break
+            time.sleep(0.05)
+        else:
+            print(f"[HWCtrl] Warning: Servo move timeout. Current: {self.shared_data['servo_degrees'].value:.1f}°")
 
         # Perform continuous azimuth sweep
         self._perform_continuous_azimuth_sweep(lidar_controller, stepper_controller)
@@ -254,7 +277,7 @@ class ContinuousBackgroundScanner:
         # Run for calculated time
         start_time = time.time()
         while (time.time() - start_time) < movement_time and stepper_controller.running:
-            time.sleep(0.01)
+            time.sleep(0.001)
 
         # Stop movement
         stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
@@ -284,7 +307,7 @@ class ContinuousBackgroundScanner:
 
                 # Get current position
                 current_az = self.shared_data["stepper_degrees"].value
-                current_el = self.current_elevation
+                current_el = self.shared_data["servo_degrees"].value  # Use actual servo position
 
                 # Get LiDAR data
                 dist, strength, timestamp = lidar_controller.get_lidar_data()
@@ -295,8 +318,8 @@ class ContinuousBackgroundScanner:
                     self.background_data_buffer.append(sample)
                     sample_count += 1
 
-                    if sample_count % 100 == 0:  # Progress every 100 samples
-                        print(f"[HWCtrl] Collected {sample_count} samples at {current_az:.1f}°")
+                    if sample_count % 50 == 0:  # Progress every 50 samples
+                        print(f"[HWCtrl] Collected {sample_count} samples at {current_az:.1f}°, {current_el:.1f}°")
 
                 last_sample_time = current_time
             else:
@@ -375,8 +398,14 @@ class PWMStepperController:
             else:
                 self.step_count -= 1
 
-            # Update shared position data
+            # Update shared position data with angle limiting
             degrees = self.step_count * MICROSTEP_ANGLE
+
+            # Wrap around at 360 degrees
+            degrees = degrees % 360.0
+            if degrees < 0:
+                degrees += 360.0
+
             with self.shared_data["stepper_degrees"].get_lock():
                 self.shared_data["stepper_degrees"].value = degrees
 
@@ -426,7 +455,11 @@ class PWMStepperController:
         return self.current_frequency
 
     def move_to_angle(self, target_angle):
-        """Direct movement to target angle"""
+        """Direct movement to target angle with angle limiting"""
+        # Clamp target angle to valid range
+        target_angle = max(MotorParams.PAN_MIN_ANGLE,
+                           min(MotorParams.PAN_MAX_ANGLE, target_angle))
+
         print(f"[HWCtrl-Stepper] Direct move to {target_angle:.3f}°")
 
         # Set up step counting callback if not already done
@@ -439,6 +472,12 @@ class PWMStepperController:
 
         while abs(target_angle - current_pos) >= MICROSTEP_ANGLE and self.running:
             error = target_angle - current_pos
+
+            # Handle wrap-around for shortest path
+            if error > 180:
+                error -= 360
+            elif error < -180:
+                error += 360
 
             # Determine direction
             direction = 1 if error > 0 else 0
@@ -499,39 +538,55 @@ class ServoController:
 
         # Initialize servo
         self.pi.set_mode(SERVO_PIN, pigpio.OUTPUT)
-        print("[HWCtrl] Servo controller initialized")
+
+        # Set initial position to middle
+        initial_angle = 45.0  # Start at 45 degrees
+        self.move_to_angle(initial_angle)
+
+        print(f"[HWCtrl] Servo controller initialized (zero offset: {MotorParams.SERVO_ZERO_OFFSET}°)")
 
     def angle_to_pulse_width(self, angle):
-        """Convert angle to servo pulse width with displacement correction"""
-        # Apply displacement correction
-        corrected_angle = angle + MotorParams.SERVO_DISPLACEMENT
+        """Convert angle to servo pulse width with mounting offset correction"""
+        # Clamp input angle to valid range (0-90 degrees as seen by user)
+        user_angle = max(MotorParams.SERVO_MIN_ANGLE,
+                         min(MotorParams.SERVO_MAX_ANGLE, angle))
 
-        # Clamp angle to servo limits
-        corrected_angle = max(MotorParams.SERVO_MIN_ANGLE,
-                              min(MotorParams.SERVO_MAX_ANGLE, corrected_angle))
+        # Apply mounting offset to get physical servo angle
+        # If mounting causes servo to point up when it should be at 0,
+        # we subtract the offset to compensate
+        physical_angle = user_angle - MotorParams.SERVO_ZERO_OFFSET
+
+        # Ensure physical angle is within servo's physical limits
+        physical_angle = max(MotorParams.SERVO_MIN_ANGLE,
+                             min(MotorParams.SERVO_MAX_ANGLE, physical_angle))
 
         # Convert to pulse width
         pulse_range = MotorParams.SERVO_MAX_PULSE - MotorParams.SERVO_MIN_PULSE
         angle_range = MotorParams.SERVO_MAX_ANGLE - MotorParams.SERVO_MIN_ANGLE
 
         pulse_width = MotorParams.SERVO_MIN_PULSE + (
-                (corrected_angle - MotorParams.SERVO_MIN_ANGLE) / angle_range * pulse_range
+                (physical_angle - MotorParams.SERVO_MIN_ANGLE) / angle_range * pulse_range
         )
 
         return int(pulse_width)
 
     def move_to_angle(self, target_angle):
-        """Direct movement to target angle"""
-        print(f"[HWCtrl-Servo] Direct move to {target_angle:.1f}°")
+        """Direct movement to target angle with angle limiting"""
+        # Ensure angle is within valid range (what user sees)
+        target_angle = max(MotorParams.SERVO_MIN_ANGLE,
+                           min(MotorParams.SERVO_MAX_ANGLE, target_angle))
+
+        print(f"[HWCtrl-Servo] Moving to {target_angle:.1f}° (user angle)")
 
         pulse_width = self.angle_to_pulse_width(target_angle)
         self.pi.set_servo_pulsewidth(SERVO_PIN, pulse_width)
 
-        # Update shared data
+        # Update shared data with user-visible angle
         with self.shared_data["servo_degrees"].get_lock():
             self.shared_data["servo_degrees"].value = target_angle
 
-        print(f"[HWCtrl-Servo] Command sent for {target_angle:.1f}°")
+        physical_angle = target_angle - MotorParams.SERVO_ZERO_OFFSET
+        print(f"[HWCtrl-Servo] Physical angle: {physical_angle:.1f}°, Pulse: {pulse_width}μs")
 
     def control_servo(self):
         """Control servo position based on target elevation"""
@@ -539,7 +594,7 @@ class ServoController:
             target_elevation = self.shared_data["target_elevation"].value
             current_servo = self.shared_data["servo_degrees"].value
 
-            # Check if servo needs to move
+            # Check if servo needs to move (with hysteresis to prevent hunting)
             if abs(target_elevation - current_servo) > 0.5:  # 0.5 degree tolerance
                 self.move_to_angle(target_elevation)
 
@@ -565,6 +620,10 @@ def combined_controller_process(shared_data):
         if not pi.connected:
             print("[HWCtrl] Failed to connect to pigpio daemon")
             return
+
+        print(f"[HWCtrl] Initializing with servo zero offset: {MotorParams.SERVO_ZERO_OFFSET}°")
+        print(f"[HWCtrl] Pan limits: {MotorParams.PAN_MIN_ANGLE}° - {MotorParams.PAN_MAX_ANGLE}°")
+        print(f"[HWCtrl] Tilt limits: {MotorParams.SERVO_MIN_ANGLE}° - {MotorParams.SERVO_MAX_ANGLE}°")
 
         # Initialize controllers
         stepper = PWMStepperController(pi, shared_data)
