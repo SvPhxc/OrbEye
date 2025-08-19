@@ -27,12 +27,12 @@ class MotorParams:
     # Stepper Parameters
     STEPPER_MAX_SPEED = 1000  # max steps per second
     STEPPER_MIN_SPEED = 50  # min steps per second
-    STEPPER_ACCEL_DISTANCE = 10.0  # degrees to start/stop acceleration
+    STEPPER_ACCEL_DISTANCE = 5.0  # degrees to start/stop acceleration
 
     # PID Parameters for stepper speed control
-    KP = 4  # Proportional gain
-    KI = 0.1  # Integral gain
-    KD = 0.2  # Derivative gain
+    KP = 4.5  # Proportional gain
+    KI = 0.01  # Integral gain
+    KD = 0.02  # Derivative gain
 
     # Servo Parameters
     SERVO_MIN_PULSE = 500+(23*0.09)  # microseconds
@@ -313,7 +313,7 @@ class StepperController:
 
             # Calculate speed based on distance to target
             target_speed = self.calculate_target_speed(error)
-            step_delay = 1.0 / (2 * target_speed)  # Half period for pulse
+            step_delay = 0.5 / (2 * target_speed)  # Half period for pulse
 
             # Send pulse
             self.pi.write(STEPPER_PULSE_PIN, 1)
@@ -384,7 +384,7 @@ class ServoController:
                 with self.shared_data["servo_degrees"].get_lock():
                     self.shared_data["servo_degrees"].value = target_elevation
 
-            time.sleep(0.05)  # 20Hz update rate
+            time.sleep(0.001)  # 20Hz update rate
 
     def stop(self):
         """Stop the servo controller"""
@@ -468,61 +468,3 @@ def run_hardware_controller(shared_data):
         print("[HWCtrl] Process interrupted by user.")
     print("[HWCtrl] Hardware controller process stopped.")
 
-
-if __name__ == "__main__":
-    """Test the hardware controller independently"""
-    import ctypes
-
-    # Create shared data structure
-    manager = Manager()
-    shared_data = manager.dict({
-        "go_to_target": Value('b', False),
-        "target_reached": Value('b', False),
-        "target_azimuth": Value('d', 90.0),
-        "target_elevation": Value('d', 45.0),
-        "stepper_degrees": Value('d', 0.0),
-        "servo_degrees": Value('d', 90.0),
-        # LiDAR parameters
-        "lidar_port": Value(ctypes.c_char_p, b'/dev/ttyUSB0'),
-        "lidar_data": Array('d', [0.0, 0.0, 0.0]),  # [distance, strength, timestamp]
-        # Background scan parameters
-        "background_scan_active": Value('b', False),
-        "background_path": Value(ctypes.c_char_p, b'background_scan.npy'),
-        # System control
-        "shutdown": Value('b', False),
-    })
-
-    # Start the controller process for testing
-    controller_proc = Process(target=run_hardware_controller, args=(shared_data,))
-    controller_proc.start()
-    print("Hardware controller test process started.")
-
-    try:
-        # Test movement
-        print("\n--- Test 1: Moving to 180°, 60° ---")
-        shared_data["target_azimuth"].value = 180.0
-        shared_data["target_elevation"].value = 60.0
-        shared_data["go_to_target"].value = True
-
-        # Wait for movement to complete
-        while shared_data["go_to_target"].value:
-            time.sleep(0.1)
-        print("--- Test 1: Movement complete. ---\n")
-        time.sleep(2)
-
-        # Optional: Test background scan
-        # print("--- Test 2: Starting background scan ---")
-        # shared_data["background_scan_active"].value = True
-        # while shared_data["background_scan_active"].value:
-        #     time.sleep(1)
-        # print("--- Test 2: Background scan complete. ---\n")
-
-    except KeyboardInterrupt:
-        print("\nTest interrupted by user")
-    finally:
-        print("Requesting shutdown of test process...")
-        shared_data["shutdown"].value = True
-        controller_proc.join(timeout=5)
-        if controller_proc.is_alive():
-            controller_proc.terminate()
-        print("Test finished.")
