@@ -39,9 +39,9 @@ class MotorParams:
     MAX_FREQ_CHANGE_RATE = 3000  # Hz per millisecond (very fast transitions)
 
     # PID Parameters - tuned for high-speed operation
-    KP = 1.4  # Higher proportional for faster response
+    KP = 1.0  # Higher proportional for faster response
     KI = 0.0  # Slightly higher integral
-    KD = 0.2  # Lower derivative for stability at high speed
+    KD = 0.4  # Lower derivative for stability at high speed
 
     # Servo Parameters
     SERVO_MIN_PULSE = 670  # microseconds (standard servo min)
