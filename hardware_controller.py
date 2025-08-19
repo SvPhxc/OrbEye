@@ -309,38 +309,35 @@ class ContinuousBackgroundScanner:
             return True  # Scan continues
 
     def _perform_continuous_azimuth_sweep(self, lidar_controller, stepper_controller):
-        """
-        Perform a continuous azimuth sweep using the main move_to_angle method.
-        This ensures consistent, safe movement and prevents hardware conflicts.
-        """
-        if self.scan_direction == 1:
-            start_az, end_az = 0.0, 360.0
-            print("[HWCtrl] Forward sweep: 0° -> 360°")
-        else:
-            start_az, end_az = 360.0, 0.0
-            print("[HWCtrl] Backward sweep: 360° -> 0°")
+        """Perform continuous azimuth sweep while collecting data"""
 
-        # First, ensure the motor is at the starting position of the sweep
-        print(f"[HWCtrl] Positioning for sweep start at {start_az:.1f}°...")
+        # Determine start and end positions based on scan direction
+        if self.scan_direction == 1:
+            start_az = 0.0
+            end_az = 360.0
+            print(f"[HWCtrl] Forward sweep: 0° -> 360°")
+        else:
+            start_az = 360.0
+            end_az = 0.0
+            print(f"[HWCtrl] Backward sweep: 360° -> 0°")
+
+        # Move to start position
         stepper_controller.move_to_angle(start_az)
 
-        # Give a moment to settle before starting the data collection sweep
-        time.sleep(0.1)
-
-        # Start the main sweep movement in a separate thread
-        print(f"[HWCtrl] Starting continuous sweep movement to {end_az:.1f}°...")
+        # Start continuous movement
+        print(f"[HWCtrl] Starting continuous movement from {start_az:.1f}° to {end_az:.1f}°")
         movement_thread = threading.Thread(
-            target=stepper_controller.move_to_angle,
-            args=(end_az,)
+            target=self._continuous_azimuth_movement,
+            args=(stepper_controller, start_az, end_az)
         )
         movement_thread.daemon = True
         movement_thread.start()
 
-        # Collect data while the move_to_angle function is running
-        self._collect_data_during_movement(lidar_controller, movement_thread)
+        # Collect data during movement
+        self._collect_data_during_movement(lidar_controller, start_az, end_az)
 
-        # Wait for the movement to complete (it should already be done)
-        movement_thread.join(timeout=3.0)
+        # Wait for movement to complete
+        movement_thread.join(timeout=15.0)  # 15 second timeout for full rotation
 
     def _continuous_azimuth_movement(self, stepper_controller, start_az, end_az):
         """Perform continuous azimuth movement in separate thread with optimized speed"""
@@ -397,33 +394,44 @@ class ContinuousBackgroundScanner:
         final_pos = stepper_controller.shared_data["stepper_degrees"].value
         print(f"[HWCtrl] Continuous movement completed. Final position: {final_pos:.1f}°")
 
-    def _collect_data_during_movement(self, lidar_controller, movement_thread):
-        """Collect LiDAR data as long as the movement thread is active."""
-        collection_interval = 1.0 / SCAN_DATA_RATE
-        last_sample_time = time.time()
+    def _collect_data_during_movement(self, lidar_controller, start_az, end_az):
+        """Collect LiDAR data during continuous movement"""
+
+        collection_interval = 1.0 / SCAN_DATA_RATE  # Time between samples
+        start_time = time.time()
+        last_sample_time = start_time
+
+        total_distance = abs(end_az - start_az)
+        movement_duration = total_distance / SCAN_AZIMUTH_SPEED
+
+        print(f"[HWCtrl] Data collection: {SCAN_DATA_RATE} Hz for {movement_duration:.1f}s")
+
         sample_count = 0
 
-        print(f"[HWCtrl] Data collection started at {SCAN_DATA_RATE} Hz...")
-
-        # Collect data as long as the motor is moving
-        while movement_thread.is_alive():
+        while (time.time() - start_time) < movement_duration:
             current_time = time.time()
-            if (current_time - last_sample_time) >= collection_interval:
-                last_sample_time = current_time
 
-                # Get current position (which is being updated by the callback)
+            # Check if it's time for next sample
+            if (current_time - last_sample_time) >= collection_interval:
+
+                # Get current position
                 current_az = self.shared_data["stepper_degrees"].value
-                current_el = self.shared_data["servo_degrees"].value
+                current_el = self.shared_data["servo_degrees"].value  # Use actual servo position
 
                 # Get LiDAR data
                 dist, strength, timestamp = lidar_controller.get_lidar_data()
 
                 if dist is not None and dist > 0:
+                    # Store sample
                     sample = [current_az, current_el, dist, strength]
                     self.background_data_buffer.append(sample)
                     sample_count += 1
+
+
+
+                last_sample_time = current_time
             else:
-                # Brief sleep to prevent this loop from hogging the CPU
+                # Short sleep to prevent CPU spinning
                 time.sleep(0.001)
 
         print(f"[HWCtrl] Data collection completed. Total samples: {sample_count}")
