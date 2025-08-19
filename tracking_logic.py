@@ -208,7 +208,7 @@ class TargetTracker:
             self._move_to_position(scan_az, scan_el)
 
             # Wait for movement to complete
-            time.sleep(0.05)  # Small delay for movement
+            time.sleep(0.005)  # Small delay for movement
 
             # Collect samples at this position
             samples = self._collect_samples()
