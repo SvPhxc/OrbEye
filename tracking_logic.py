@@ -64,7 +64,7 @@ class SmoothMovementController:
 
         # Execute movement
         self.shared_data["target_azimuth"].value = target_az
-        self.shared_data["target_elevation"].value = elevation
+        self.shared_data["target_elevation"].value = target_el
         self.shared_data["go_to_target"].value = True
 
         # Wait for movement with reasonable timeout
