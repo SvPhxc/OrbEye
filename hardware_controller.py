@@ -426,7 +426,7 @@ class ContinuousBackgroundScanner:
                     self.background_data_buffer.append(sample)
                     sample_count += 1
 
-                    if sample_count % 1 == 0:  # Progress every 50 samples
+                    
 
                 last_sample_time = current_time
             else:
