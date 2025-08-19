@@ -40,8 +40,8 @@ class MotorParams:
 
     # PID Parameters - tuned for high-speed operation
     KP = 1.2  # Higher proportional for faster response
-    KI = 0.08  # Slightly higher integral
-    KD = 0.08  # Lower derivative for stability at high speed
+    KI = 0.02  # Slightly higher integral
+    KD = 0.8  # Lower derivative for stability at high speed
 
     # Servo Parameters
     SERVO_MIN_PULSE = 670  # microseconds (standard servo min)
@@ -426,7 +426,7 @@ class ContinuousBackgroundScanner:
                     self.background_data_buffer.append(sample)
                     sample_count += 1
 
-                    
+
 
                 last_sample_time = current_time
             else:
