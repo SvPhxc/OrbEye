@@ -35,6 +35,7 @@ class MotorParams:
     STEPPER_ACCEL_DISTANCE = 1.5  # Reduced for faster acceleration
     STEPPER_CRUISE_SPEED = 6400  # Higher cruise speed for scans
     ACCEL_STEPS = 150  # e.g., use 800 steps to ramp up and 800 to ramp down
+    SERVO_ZERO_OFFSET = 0  # degrees - adjust for your servo mounting   
 
     # Ultra-fast transition for scanning
     MAX_FREQ_CHANGE_RATE = 3000  # Hz per millisecond (very fast transitions)
