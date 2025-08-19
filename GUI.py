@@ -265,7 +265,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     # ===== Controls handlers =====
     def on_reactive_mode_toggled(self, checked):
-        self.shared_data["reactive_mode"].value = checked
+        self.shared_data["demo"].value = checked
 
     def toggle_background_plot(self):
         """Loads data from file and displays/hides the plot."""

@@ -329,26 +329,20 @@ class TargetTracker:
         print(f"[Acquisition] Starting from azimuth {start_az:.1f}°")
 
         # Calculate azimuth scan points without going over 360
-        az_points = []
-        current_offset = 0
-        direction = 1  # Start going right
+        az_points = [start_az]
+        offset = ACQUISITION_AZ_STEP
 
-        # Build a sequence that doesn't exceed 360° total rotation
-        while current_offset <= ACQUISITION_AZ_RANGE:
-            if current_offset == 0:
-                az_points.append(start_az)
-            else:
-                # Add both positive and negative offsets
-                az_points.append(start_az + current_offset * direction)
-                direction *= -1  # Switch direction
-                if direction == 1:  # After adding negative, increment offset
-                    current_offset += ACQUISITION_AZ_STEP
+        # The total range is 60°, so we scan 30° to the left and 30° to the right.
+        # We use ACQUISITION_AZ_RANGE / 2 as the limit for the offset.
+        while offset <= (ACQUISITION_AZ_RANGE / 2):
+            az_points.append(start_az + offset)  # Point to the right
+            az_points.append(start_az - offset)  # Point to the left
+            offset += ACQUISITION_AZ_STEP
 
         # Normalize all azimuth points to [0, 360)
         az_points = [self.angle_handler.normalize(az) for az in az_points]
 
         print(f"[Acquisition] Scanning {len(az_points)} azimuth points across {len(ACQUISITION_ELEVATIONS)} elevations")
-
         scan_count = 0
         for el_idx, elevation in enumerate(ACQUISITION_ELEVATIONS):
             if self.shared_data["shutdown"].value:
