@@ -43,14 +43,14 @@ class MotorParams:
 
     # Servo Parameters
     SERVO_MIN_PULSE = 500  # microseconds (standard servo min)
-    SERVO_MAX_PULSE = 1750  # microseconds (standard servo max)
+    SERVO_MAX_PULSE = 2500  # microseconds (standard servo max)
     SERVO_MIN_ANGLE = 0  # degrees (physical limit)
     SERVO_MAX_ANGLE = 90  # degrees (physical limit)
 
     # Servo mounting offset - adjust this to set your zero point
     # If servo points 15 degrees up when at "0", set this to -15
     # This ensures displayed angles are always positive (0-90)
-    SERVO_ZERO_OFFSET = 18.0  # degrees - adjust for your mounting
+    SERVO_ZERO_OFFSET = 18.0+28.0  # degrees - adjust for your mounting
 
     # Pan angle limits
     PAN_MIN_ANGLE = 0.0  # degrees
@@ -62,7 +62,7 @@ class MotorParams:
 class ScanProfiles:
     # FAST SCAN - Lower resolution, high speed
     FAST = {
-        "azimuth_speed": 180.0,  # 90 deg/sec (4 seconds per rotation)
+        "azimuth_speed": 360.0,  # 90 deg/sec (4 seconds per rotation)
         "elevation_step": 1.0,  # 5 degree steps (18 rings for 0-90)
         "data_rate": 1000,  # 30 Hz sampling
         "servo_move_time": 0.05,  # Faster servo movement
