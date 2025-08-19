@@ -117,7 +117,7 @@ if __name__ == "__main__":
         "estimated_azimuth": Value('d', 0.0),
         "estimated_elevation": Value('d', 0.0),
         "generate_plot_on_stop": Value('b', False),  # For GUI button
-        "demo": value('b',True)
+        "demo": Value('b',True),
 
         # --- Heatmap Tracker (for Debug Mode) ---
         "heatmap_measurement": Array('d', [0.0, 0.0, 0.0]),
