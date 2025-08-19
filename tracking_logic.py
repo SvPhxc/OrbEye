@@ -109,12 +109,12 @@ class TargetTracker:
         self.clutter_filter = ClutterFilter(background_file=background_file)
 
         # Tracking parameters
-        self.scan_radius_az = 15.0  # Degrees to scan left/right from center
+        self.scan_radius_az = 10.0  # Degrees to scan left/right from center
         self.scan_radius_el = 10.0  # Degrees to scan up/down from center
         self.scan_points = 16  # Number of points to scan in the circle
         self.min_strength_threshold = 100  # Minimum strength to consider a valid target
         self.sample_time = 0.05  # Time to sample at each scan point (seconds)
-        self.samples_per_point = 3  # Number of samples to average at each point
+        self.samples_per_point = 2  # Number of samples to average at each point
 
         # Tracking state
         self.current_target_az = None
@@ -334,8 +334,8 @@ class TargetTracker:
         """
         Expand search radius when target is lost.
         """
-        self.scan_radius_az = min(self.scan_radius_az * 1.5, 45.0)  # Max 45 degrees
-        self.scan_radius_el = min(self.scan_radius_el * 1.5, 30.0)  # Max 30 degrees
+        self.scan_radius_az = min(self.scan_radius_az * 1.5, 15.0)  # Max 45 degrees
+        self.scan_radius_el = min(self.scan_radius_el * 1.5, 15.0)  # Max 30 degrees
         print(f"[Tracker] Expanding search radius to ±{self.scan_radius_az:.1f}° az, "
               f"±{self.scan_radius_el:.1f}° el")
 
@@ -460,71 +460,3 @@ def run_tracker_process(shared_data, background_file="background_scan.npy"):
         print("[Tracker] Process ended")
 
 
-if __name__ == "__main__":
-    # This would typically be called from your main control program
-    # Example usage:
-
-    from multiprocessing import Manager
-
-    # Create shared data structure (this would come from your main program)
-    manager = Manager()
-    shared_data = {
-        "shutdown": manager.Value('b', False),
-        "debug_mode": manager.Value('b', False),  # Controls tracking
-        "stepper_degrees": manager.Value('d', 0.0),
-        "servo_degrees": manager.Value('d', 45.0),
-        "target_azimuth": manager.Value('d', 0.0),
-        "target_elevation": manager.Value('d', 45.0),
-        "go_to_target": manager.Value('b', False),
-        "target_reached": manager.Value('b', False),
-        "lidar_data": manager.Array('d', [0, 0, 0]),
-        "lidar_port": manager.Value('c', b"/dev/ttyUSB0"),
-        "background_scan_active": manager.Value('b', False),
-        "background_path": manager.Value('c', b"background_scan.npy"),
-        "satellite_points": manager.Array('d', [0.0, 0.0, 0.0, 0.0, 0.0]),  # [az, el, dist, str, timestamp]
-    }
-
-    print("=" * 60)
-    print("LiDAR TARGET TRACKER")
-    print("=" * 60)
-    print("\nThis tracker will:")
-    print("1. Wait for debug_mode to be enabled")
-    print("2. Scan in a circle around the current position")
-    print("3. Find the highest strength viable target")
-    print("4. Save best point to satellite_points array")
-    print("5. Move to the target and continue tracking")
-    print("\nControls:")
-    print("- Set debug_mode = True to start tracking")
-    print("- Set debug_mode = False to stop tracking")
-    print("- Set shutdown = True to exit completely")
-    print("\nSatellite points array format:")
-    print("[azimuth, elevation, distance, strength, timestamp]")
-    print("\nMake sure:")
-    print("- Hardware controller is running")
-    print("- Background scan file exists (or will track all targets)")
-    print("\nPress Ctrl+C to stop")
-    print("=" * 60)
-
-
-    # Simulate enabling debug mode after 3 seconds for testing
-    def test_enabler():
-        import time
-        time.sleep(3)
-        print("\n[TEST] Enabling debug_mode...")
-        shared_data["debug_mode"].value = True
-        time.sleep(30)
-        print("\n[TEST] Disabling debug_mode...")
-        shared_data["debug_mode"].value = False
-        time.sleep(5)
-        print("\n[TEST] Shutting down...")
-        shared_data["shutdown"].value = True
-
-
-    import threading
-
-    test_thread = threading.Thread(target=test_enabler)
-    test_thread.daemon = True
-    test_thread.start()
-
-    # Run the tracker
-    run_tracker_process(shared_data, "background_scan.npy")
