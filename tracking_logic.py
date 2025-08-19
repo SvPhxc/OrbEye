@@ -389,7 +389,7 @@ class TargetTracker:
                 new_vel_el = (new_el - self.current_target_el) / dt
 
                 # Smooth velocity with exponential moving average
-                alpha = 0.4
+                alpha = 0.2
                 self.target_velocity_az = alpha * new_vel_az + (1 - alpha) * self.target_velocity_az
                 self.target_velocity_el = alpha * new_vel_el + (1 - alpha) * self.target_velocity_el
 
