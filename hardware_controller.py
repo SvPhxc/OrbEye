@@ -31,15 +31,15 @@ MICROSTEP_ANGLE = 0.05625  # degrees per step
 class MotorParams:
     # Stepper Parameters - DRV8825 optimized for speed
     STEPPER_MAX_SPEED = 8000  # Increased max (DRV8825 can handle up to 250kHz)
-    STEPPER_MIN_SPEED = 720  # min steps per second
+    STEPPER_MIN_SPEED = 100  # min steps per second
     STEPPER_ACCEL_DISTANCE = 1.5  # Reduced for faster acceleration
-    STEPPER_CRUISE_SPEED = 5000  # Higher cruise speed for scans
+    STEPPER_CRUISE_SPEED = 6400  # Higher cruise speed for scans
 
     # Ultra-fast transition for scanning
-    MAX_FREQ_CHANGE_RATE = 5000  # Hz per millisecond (very fast transitions)
+    MAX_FREQ_CHANGE_RATE = 3000  # Hz per millisecond (very fast transitions)
 
     # PID Parameters - tuned for high-speed operation
-    KP = 4.0  # Higher proportional for faster response
+    KP = 2.0  # Higher proportional for faster response
     KI = 0.08  # Slightly higher integral
     KD = 0.008  # Lower derivative for stability at high speed
 
@@ -200,12 +200,26 @@ class LidarController:
 
     def get_lidar_data(self):
         """Get latest LiDAR data and update shared data"""
-        try:
-            dist, strength, ts = self.lidar_queue.get_nowait()
+        # Drain the queue to get the most recent measurement.
+        # This reduces latency between when a measurement is taken and
+        # when it is correlated with the system's current position.
+        last_data = None
+        while not self.lidar_queue.empty():
+            try:
+                # Keep getting items until the queue is empty, storing the last one
+                last_data = self.lidar_queue.get_nowait()
+            except queue.Empty:
+                # This can happen in a multithreaded environment, it's safe to ignore.
+                break
+
+        # If we successfully retrieved at least one data point, process the last one.
+        if last_data:
+            dist, strength, ts = last_data
             with self.shared_data["lidar_data"].get_lock():
                 self.shared_data["lidar_data"][:] = [dist, strength, ts]
             return dist, strength, ts
-        except queue.Empty:
+        else:
+            # The queue was empty, so no new data is available.
             return None, None, None
 
     def stop(self):
