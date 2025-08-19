@@ -39,9 +39,9 @@ class MotorParams:
     MAX_FREQ_CHANGE_RATE = 3000  # Hz per millisecond (very fast transitions)
 
     # PID Parameters - tuned for high-speed operation
-    KP = 2.0  # Higher proportional for faster response
+    KP = 1.2  # Higher proportional for faster response
     KI = 0.08  # Slightly higher integral
-    KD = 0.008  # Lower derivative for stability at high speed
+    KD = 0.08  # Lower derivative for stability at high speed
 
     # Servo Parameters
     SERVO_MIN_PULSE = 670  # microseconds (standard servo min)
@@ -110,7 +110,7 @@ SERVO_MOVE_TIME = CURRENT_SCAN_PROFILE["servo_move_time"]
 SERVO_SETTLE_TIME = CURRENT_SCAN_PROFILE["servo_settle_time"]
 
 # Fixed parameters
-SCAN_AZIMUTH_STEP = 0.5  # Not used in continuous mode
+SCAN_AZIMUTH_STEP = 1  # Not used in continuous mode
 SCAN_TILT_MAX = 90.0  # start elevation
 SCAN_TILT_MIN = 0.0  # end elevation
 
@@ -169,6 +169,7 @@ class LidarController:
             port = "/dev/serial0"
             self.ser = serial.Serial(port, 115200, timeout=0.1)
             self.ser.write(bytearray([0x5A, 0x06, 0x03, 0xE8, 0x03, 0x4E]))
+            self.ser.write(bytearray([0x5A 0x05 0x11 0x70]))
             print(f"[HWCtrl-LIDAR] LiDAR initialized on port {port}")
 
             # Start reader thread
@@ -426,7 +427,6 @@ class ContinuousBackgroundScanner:
                     sample_count += 1
 
                     if sample_count % 1 == 0:  # Progress every 50 samples
-                        print(f"[HWCtrl] Collected {sample_count} samples at {current_az:.1f}°, {current_el:.1f}°")
 
                 last_sample_time = current_time
             else:
