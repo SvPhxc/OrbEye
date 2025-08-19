@@ -299,6 +299,7 @@ class ContinuousBackgroundScanner:
             total_time = time.time() - self.scan_start_time
             print(f"[HWCtrl] Total scan time: {total_time:.1f} seconds")
             self._save_scan_data()
+            self._reset_hardware_after_scan(stepper_controller)
             self._reset_scan()
             return False  # Scan complete
         else:
@@ -630,6 +631,27 @@ class PWMStepperController:
         target_pos = self.shared_data["target_azimuth"].value
         self.move_to_angle(target_pos)
         self.shared_data["target_reached"].value = True
+
+    def _reset_hardware_after_scan(self, stepper_controller):
+        """Reset hardware state after scan completion"""
+        # Ensure PWM is fully stopped
+        stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
+
+        # Clear any pending waves
+        stepper_controller.pi.wave_tx_stop()
+        stepper_controller.pi.wave_clear()
+
+        # Small delay for hardware to settle
+        time.sleep(0.05)
+
+        # Ensure callback is properly set up for normal operation
+        if stepper_controller.step_callback:
+            stepper_controller.step_callback.cancel()
+
+        stepper_controller.step_callback = stepper_controller.pi.callback(
+            STEPPER_PULSE_PIN, pigpio.RISING_EDGE,
+            stepper_controller._step_counter_callback
+        )
 
     def stop(self):
         """Stops the stepper controller and cleans up resources."""
