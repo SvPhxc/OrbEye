@@ -188,7 +188,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         self.btn_reactive_mode = QCheckBox("Enable Reactive Mode (No Prediction)")
         self.btn_reactive_mode.toggled.connect(self.on_reactive_mode_toggled)
-        controls_layout.addWidget(self.chk_reactive_mode)
+        controls_layout.addWidget(self.btn_reactive_mode)
 
         controls_layout.addStretch()
 
