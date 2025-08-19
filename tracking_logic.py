@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
-Optimized LiDAR Target Tracker with Rate Limiting
+Optimized LiDAR Target Tracker with Rate Limiting and Point Acquisition Mode
 Key improvements:
-- Fixed angle wraparound issues at 0°/360° boundary
-- Respects 1000Hz LiDAR polling limit
-- Prevents getting stuck on high strength targets
-- Adaptive scanning without over-optimization
-- Predictive movement with proper timing
+- Added a point acquisition mode triggered by a flag.
+- Implemented a wide scan to find the first target.
+- Engages tracker after initial point acquisition.
+- Uses a "target_reached" flag to signal successful acquisition.
+- Fixed angle wraparound issues at 0°/360° boundary.
+- Respects 1000Hz LiDAR polling limit.
+- Prevents getting stuck on high strength targets.
+- Adaptive scanning without over-optimization.
+- Predictive movement with proper timing.
 """
 
 import time
@@ -29,7 +33,7 @@ class ClutterFilter:
         self.background_tree = None
         self.background_data = None
         self._query_cache = {}
-        self._cache_size = 70000
+        self._cache_size = 1500
 
         try:
             self.background_data = np.load(background_file)
@@ -131,20 +135,20 @@ class TargetTracker:
         self.last_lidar_read = 0
 
         # Balanced optimization parameters
-        self.scan_radius_az = 10.0  # Reasonable scan radius
-        self.scan_radius_el = 10.0
-        self.scan_points = 12  # Balanced number of scan points
-        self.min_strength_threshold = 1500
+        self.scan_radius_az = 8.0  # Reasonable scan radius
+        self.scan_radius_el = 8.0
+        self.scan_points = 5  # Balanced number of scan points
+        self.min_strength_threshold = 80
 
         # Prevent getting stuck on high strength targets
-        self.max_strength_lock = 16000  # Don't lock on targets above this
-        self.strength_decay_factor = 0.9  # Decay factor for high strength memory
+        self.max_strength_lock = 300  # Don't lock on targets above this
+        self.strength_decay_factor = 0.95  # Decay factor for high strength memory
         self.last_high_strength = 0
 
         # Movement parameters
-        self.movement_timeout = 0.6  # Reasonable timeout
-        self.position_tolerance = 0.0  # Degrees
-        self.min_movement_delay = 0.15  # Minimum delay for movement
+        self.movement_timeout = 0.5  # Increased timeout for acquisition
+        self.position_tolerance = 2.5  # Degrees
+        self.min_movement_delay = 0.002  # Minimum delay for movement
 
         # Tracking state
         self.current_target_az = None
@@ -154,10 +158,10 @@ class TargetTracker:
         self.last_update_time = None
 
         # History tracking
-        self.target_history = deque(maxlen=5)
-        self.position_history = deque(maxlen=6)
+        self.target_history = deque(maxlen=3)
+        self.position_history = deque(maxlen=4)
         self.lost_target_count = 0
-        self.max_lost_count = 8
+        self.max_lost_count = 3
 
         # Performance monitoring
         self.cycle_count = 0
@@ -217,37 +221,29 @@ class TargetTracker:
             return True
 
         # Wait for movement with timeout
-        timeout = time.time() + self.movement_timeout
-        while self.shared_data["go_to_target"].value and time.time() < timeout:
+        start_time = time.time()
+        while time.time() - start_time < self.movement_timeout:
             if self.shared_data["shutdown"].value:
                 return False
 
-            # Check if close enough
-            current_az = self.shared_data["stepper_degrees"].value
-            current_el = self.shared_data["servo_degrees"].value
-
-            az_diff = abs(self.angle_handler.difference(current_az, target_az))
-            el_diff = abs(current_el - elevation)
-
-            if az_diff < self.position_tolerance and el_diff < self.position_tolerance:
+            # The motor controller should set go_to_target to False when done
+            if not self.shared_data["go_to_target"].value:
                 return True
 
-            time.sleep(0.001)
+            time.sleep(0.01)
 
-        return True
+        # Timeout occurred
+        print("[Tracker] Warning: move_to_position timed out.")
+        return False
 
     def scan_pattern(self, center_az, center_el):
         """Scan in a pattern around center point with rate limiting."""
         scan_results = []
         scan_start = time.time()
 
-        print(f"[Tracker] Scanning around ({center_az:.1f}°, {center_el:.1f}°)")
-
         # Generate scan points in a logical order
         scan_sequence = []
-
-        # Add center point first
-        scan_sequence.append((center_az, center_el))
+        scan_sequence.append((center_az, center_el))  # Add center point first
 
         # Add circle points
         for i in range(self.scan_points):
@@ -260,7 +256,7 @@ class TargetTracker:
 
         # Scan each point
         for scan_az, scan_el in scan_sequence:
-            if self.shared_data["shutdown"].value or not self.shared_data["debug_mode"].value:
+            if self.shared_data["shutdown"].value:
                 break
 
             # Don't spend too long scanning
@@ -269,25 +265,18 @@ class TargetTracker:
 
             # Move to scan point
             self.move_to_position(scan_az, scan_el, wait=False)
-
-            # Small delay for movement to start
-            time.sleep(0.003)
+            time.sleep(0.01)  # Small delay for movement to start
 
             # Read LiDAR with rate limiting
             distance, strength = self.read_lidar_safe()
 
             if distance > 0:
-                # Get actual position
                 actual_az = self.shared_data["stepper_degrees"].value
                 actual_el = self.shared_data["servo_degrees"].value
 
-                # Check if valid target
                 if self.clutter_filter.is_valid_target(actual_az, actual_el, distance, strength):
                     if strength >= self.min_strength_threshold:
                         scan_results.append((actual_az, actual_el, distance, strength))
-
-                        # Don't terminate early on high strength to avoid getting stuck
-                        # Just continue scanning normally
 
         return scan_results
 
@@ -296,22 +285,14 @@ class TargetTracker:
         if not scan_results:
             return None
 
-        # Sort by strength but apply penalties for being too strong (might be stuck)
         def score_target(target):
             az, el, dist, strength = target
             score = strength
-
-            # Penalize extremely high strength slightly to avoid getting stuck
-            if strength > 7000:
-                score *= 0.95
-
+            if strength > 400:  # Penalize extremely high strength to avoid getting stuck
+                score *= 0.9
             return score
 
         best = max(scan_results, key=score_target)
-
-        print(f"[Tracker] Best target: ({best[0]:.1f}°, {best[1]:.1f}°) "
-              f"dist={best[2]:.0f}cm, str={best[3]:.0f}")
-
         return best
 
     def smooth_position(self, new_az, new_el):
@@ -321,21 +302,17 @@ class TargetTracker:
         if len(self.position_history) < 2:
             return new_az, new_el
 
-        # Check if any angles are near the boundary
         az_values = [p[0] for p in self.position_history]
         near_boundary = any(self.angle_handler.is_near_boundary(az) for az in az_values)
 
         if near_boundary:
-            # Use circular mean for angles near boundary
             smooth_az = self.angle_handler.circular_mean(az_values)
         else:
-            # Simple weighted average away from boundary
             weights = np.linspace(0.3, 1.0, len(self.position_history))
             weights /= weights.sum()
             smooth_az = sum(az * w for (az, _), w in zip(self.position_history, weights))
             smooth_az = self.angle_handler.normalize(smooth_az)
 
-        # Simple average for elevation
         el_values = [p[1] for p in self.position_history]
         smooth_el = np.average(el_values, weights=weights)
 
@@ -368,8 +345,6 @@ class TargetTracker:
             return self.current_target_az, self.current_target_el
 
         dt = min(time.time() - self.last_update_time, 0.1)  # Cap prediction time
-
-        # Apply velocity with damping
         pred_az = self.current_target_az + self.target_velocity_az * dt * 0.5
         pred_el = self.current_target_el + self.target_velocity_el * dt * 0.5
 
@@ -382,104 +357,159 @@ class TargetTracker:
         """Update velocity estimates."""
         if self.last_update_time is not None:
             dt = time.time() - self.last_update_time
-            if dt > 0 and dt < 1.0:  # Ignore large time gaps
-                # Use angle difference for azimuth velocity
+            if dt > 0 and dt < 1.0:
                 az_diff = self.angle_handler.difference(self.current_target_az, new_az)
                 new_vel_az = az_diff / dt
                 new_vel_el = (new_el - self.current_target_el) / dt
 
-                # Smooth velocity with exponential moving average
-                alpha = 0.2
+                alpha = 0.3
                 self.target_velocity_az = alpha * new_vel_az + (1 - alpha) * self.target_velocity_az
                 self.target_velocity_el = alpha * new_vel_el + (1 - alpha) * self.target_velocity_el
 
-                # Limit maximum velocity
                 max_vel = 50.0  # degrees/second
                 self.target_velocity_az = np.clip(self.target_velocity_az, -max_vel, max_vel)
                 self.target_velocity_el = np.clip(self.target_velocity_el, -max_vel, max_vel)
 
+    # ### NEW METHOD for Point Acquisition ###
+    def acquire_first_point(self):
+        """Perform a wide scan to find the first valid target."""
+        print("[Tracker] Starting point acquisition scan...")
+        all_scan_results = []
+
+        # Define a wide scan area (e.g., 180 degrees)
+        # Scan at a few different elevation levels
+        for el in [30, 45, 60]:
+            if self.shared_data["shutdown"].value: return False
+
+            # Scan across a wide azimuth range
+            for az in range(90, 271, 15):  # Scan from 90 to 270 degrees
+                if self.shared_data["shutdown"].value: return False
+
+                if self.move_to_position(az, el, wait=True):
+                    distance, strength = self.read_lidar_safe()
+
+                    if distance > 0 and self.clutter_filter.is_valid_target(az, el, distance, strength):
+                        if strength >= self.min_strength_threshold:
+                            print(f"[Acquire] Found potential target at ({az}°, {el}°), str={strength}")
+                            all_scan_results.append((az, el, distance, strength))
+                else:
+                    print(f"[Acquire] Failed to move to ({az}, {el})")
+
+        if not all_scan_results:
+            print("[Acquire] No valid targets found in wide scan.")
+            self.shared_data["acquire_points"].value = False  # Reset flag
+            return False
+
+        # Find the best target from the wide scan
+        initial_target = self.find_best_target(all_scan_results)
+        if not initial_target:
+            self.shared_data["acquire_points"].value = False  # Reset flag
+            return False
+
+        print(
+            f"[Acquire] Best initial target at ({initial_target[0]:.1f}°, {initial_target[1]:.1f}°). Engaging tracker.")
+
+        # Move to the best initial target's position to start a fine scan
+        self.move_to_position(initial_target[0], initial_target[1], wait=True)
+
+        # Now perform a local, fine-grained scan to lock on
+        fine_scan_results = self.scan_pattern(initial_target[0], initial_target[1])
+        final_target = self.find_best_target(fine_scan_results)
+
+        if final_target:
+            print(f"[Acquire] Lock confirmed at ({final_target[0]:.1f}°, {final_target[1]:.1f}°)")
+            # Set this as the current tracked target
+            self.current_target_az, self.current_target_el = self.smooth_position(final_target[0], final_target[1])
+            self.last_update_time = time.time()
+            self.update_satellite_points(self.current_target_az, self.current_target_el, final_target[2],
+                                         final_target[3])
+
+            # ### SET TARGET REACHED FLAG ###
+            self.shared_data["target_reached"].value = True
+
+            # Switch off the acquisition flag, as the job is done
+            self.shared_data["acquire_points"].value = False
+            return True
+        else:
+            print("[Acquire] Failed to confirm target with fine scan.")
+            self.shared_data["acquire_points"].value = False  # Reset flag
+            return False
+
     def run(self):
-        """Main tracking loop with proper rate limiting."""
-        print("[Tracker] Starting rate-limited tracking")
+        """Main tracking loop with state management for different modes."""
+        print("[Tracker] Starting tracking loop")
 
         try:
             while not self.shared_data["shutdown"].value:
+
+                # ### NEW: Point Acquisition Mode ###
+                if self.shared_data["acquire_points"].value:
+                    # Clear any previous tracking state
+                    self.current_target_az = None
+                    self.current_target_el = None
+                    self.clear_satellite_points()
+                    self.shared_data["target_reached"].value = False
+
+                    # Run the acquisition process
+                    self.acquire_first_point()
+
+                    # After attempting acquisition, wait for the flag to be cleared or changed
+                    while self.shared_data["acquire_points"].value and not self.shared_data["shutdown"].value:
+                        time.sleep(0.1)
+                    continue
+
+                # ### Existing: Continuous Tracking Mode ###
                 if not self.shared_data["debug_mode"].value:
-                    # Not in debug mode
                     if self.current_target_az is not None:
-                        print("[Tracker] Debug mode disabled")
+                        print("[Tracker] Continuous tracking disabled")
                         self.current_target_az = None
                         self.current_target_el = None
                         self.clear_satellite_points()
                     time.sleep(0.05)
                     continue
 
-                # Initialize if needed
                 if self.current_target_az is None:
+                    # Initialize tracking at the current position or a default start
                     self.current_target_az = self.shared_data["stepper_degrees"].value
                     self.current_target_el = self.shared_data["servo_degrees"].value
                     self.last_update_time = time.time()
-
                     if self.current_target_az == 0 and self.current_target_el == 0:
                         self.current_target_az = 180.0
                         self.current_target_el = 45.0
-
-                    print(f"[Tracker] Starting at ({self.current_target_az:.1f}°, "
-                          f"{self.current_target_el:.1f}°)")
+                    print(
+                        f"[Tracker] Starting continuous tracking at ({self.current_target_az:.1f}°, {self.current_target_el:.1f}°)")
 
                 cycle_start = time.time()
 
-                # Predict next position
                 pred_az, pred_el = self.predict_position()
-
-                # Scan around predicted position
                 scan_results = self.scan_pattern(pred_az, pred_el)
-
-                # Find best target
                 best_target = self.find_best_target(scan_results)
 
                 if best_target:
-                    # Target found
                     self.lost_target_count = 0
-
-                    # Reset scan radius
                     if self.scan_radius_az > 10:
                         self.scan_radius_az = 8.0
                         self.scan_radius_el = 8.0
 
-                    # Smooth position
                     smooth_az, smooth_el = self.smooth_position(best_target[0], best_target[1])
-
-                    # Update velocity
                     self.update_velocity(smooth_az, smooth_el)
-
-                    # Update target position
                     self.current_target_az = smooth_az
                     self.current_target_el = smooth_el
                     self.last_update_time = time.time()
 
-                    # Update satellite points
-                    self.update_satellite_points(smooth_az, smooth_el,
-                                                 best_target[2], best_target[3])
-
-                    # Move to smoothed position
+                    self.update_satellite_points(smooth_az, smooth_el, best_target[2], best_target[3])
                     self.move_to_position(smooth_az, smooth_el, wait=False)
-
                 else:
-                    # Target lost
                     self.lost_target_count += 1
                     print(f"[Tracker] Target lost ({self.lost_target_count}/{self.max_lost_count})")
-
                     self.clear_satellite_points()
 
-                    # Expand search area if consistently lost
                     if self.lost_target_count >= self.max_lost_count:
-                        self.scan_radius_az = min(self.scan_radius_az * 1.5, 15.0)
-                        self.scan_radius_el = min(self.scan_radius_el * 1.5, 15.0)
+                        self.scan_radius_az = min(self.scan_radius_az * 1.5, 25.0)
+                        self.scan_radius_el = min(self.scan_radius_el * 1.5, 20.0)
                         self.lost_target_count = 0
                         print(f"[Tracker] Expanding search to ±{self.scan_radius_az:.1f}°")
 
-                # Performance monitoring
                 cycle_time = time.time() - cycle_start
                 self.cycle_count += 1
                 self.total_cycle_time += cycle_time
@@ -487,12 +517,10 @@ class TargetTracker:
                 if self.cycle_count % 50 == 0:
                     avg_cycle = self.total_cycle_time / self.cycle_count
                     lidar_rate = self.lidar_reads / self.total_cycle_time
-                    print(f"[Tracker] Stats: {avg_cycle * 1000:.1f}ms/cycle, "
-                          f"{lidar_rate:.0f}Hz LiDAR rate")
+                    print(f"[Tracker] Stats: {avg_cycle * 1000:.1f}ms/cycle, {lidar_rate:.0f}Hz LiDAR rate")
 
-                # Ensure minimum cycle time to prevent overwhelming the system
-                if cycle_time < 0.005:  # Minimum 20ms per cycle
-                    time.sleep(0.005 - cycle_time)
+                if cycle_time < 0.02:
+                    time.sleep(0.02 - cycle_time)
 
         except KeyboardInterrupt:
             print("[Tracker] Interrupted")
