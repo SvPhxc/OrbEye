@@ -5,6 +5,8 @@ Uses multiprocessing with shared data and PID control for smooth movement
 PWM-based stepper control for smooth operation with precise position tracking
 FIXED: Continuous background scanning with data collection during movement
 FIXED: Proper servo movement and angle limiting
+FIXED: Background scan completion and movement after scan
+FIXED: Overshoot issue for small movements
 """
 
 import time
@@ -42,7 +44,7 @@ class MotorParams:
     KD = 0.008  # Lower derivative for stability at high speed
 
     # Servo Parameters
-    SERVO_MIN_PULSE = 500  # microseconds (standard servo min)
+    SERVO_MIN_PULSE = 670  # microseconds (standard servo min)
     SERVO_MAX_PULSE = 1670  # microseconds (standard servo max)
     SERVO_MIN_ANGLE = 0  # degrees (physical limit)
     SERVO_MAX_ANGLE = 90  # degrees (physical limit)
@@ -50,7 +52,7 @@ class MotorParams:
     # Servo mounting offset - adjust this to set your zero point
     # If servo points 15 degrees up when at "0", set this to -15
     # This ensures displayed angles are always positive (0-90)
-    SERVO_ZERO_OFFSET = -10  # degrees - adjust for your mounting
+    SERVO_ZERO_OFFSET = 0  # degrees - adjust for your mounting
 
     # Pan angle limits
     PAN_MIN_ANGLE = 0.0  # degrees
@@ -233,7 +235,11 @@ class ContinuousBackgroundScanner:
     def start_continuous_scan(self, lidar_controller, stepper_controller, servo_controller):
         """Start continuous scanning process with optimized servo movement"""
         if not self.shared_data["background_scan_active"].value:
-            return
+            return False  # Return False if scan was stopped
+
+        # Record scan start time on first run
+        if not hasattr(self, 'scan_start_time') or self.scan_start_time is None:
+            self.scan_start_time = time.time()
 
         print(f"[HWCtrl] Starting continuous scan at elevation {self.current_elevation:.1f}°")
         print(f"[HWCtrl] Scan profile: {SCAN_AZIMUTH_SPEED}°/s, {SCAN_ELEVATION_STEP}° steps")
@@ -268,24 +274,23 @@ class ContinuousBackgroundScanner:
         # Perform continuous azimuth sweep
         self._perform_continuous_azimuth_sweep(lidar_controller, stepper_controller)
 
-        # Pre-move servo to next elevation during data processing
+        # Update elevation for next ring
         self.current_elevation -= SCAN_ELEVATION_STEP
-        if self.current_elevation >= SCAN_TILT_MIN:
-            # Start moving servo to next position immediately
-            print(f"[HWCtrl] Pre-positioning servo to next elevation: {self.current_elevation:.1f}°")
-            self.shared_data["target_elevation"].value = self.current_elevation
 
-        self.scan_direction *= -1  # Alternate direction for each ring
-
-        # Check if scan is complete
+        # Check if scan is complete (after processing the last ring at elevation 0)
         if self.current_elevation < SCAN_TILT_MIN:
             print("[HWCtrl] CONTINUOUS BACKGROUND SCAN completed.")
-            total_time = time.time() - self.scan_start_time if hasattr(self, 'scan_start_time') else 0
+            total_time = time.time() - self.scan_start_time
             print(f"[HWCtrl] Total scan time: {total_time:.1f} seconds")
             self._save_scan_data()
             self._reset_scan()
-        elif not hasattr(self, 'scan_start_time'):
-            self.scan_start_time = time.time()
+            return False  # Scan complete
+        else:
+            # Pre-move servo to next elevation during data processing
+            print(f"[HWCtrl] Pre-positioning servo to next elevation: {self.current_elevation:.1f}°")
+            self.shared_data["target_elevation"].value = self.current_elevation
+            self.scan_direction *= -1  # Alternate direction for each ring
+            return True  # Scan continues
 
     def _perform_continuous_azimuth_sweep(self, lidar_controller, stepper_controller):
         """Perform continuous azimuth sweep while collecting data"""
@@ -420,6 +425,7 @@ class ContinuousBackgroundScanner:
         """Save collected scan data to file"""
         if self.background_data_buffer:
             try:
+                # Use the path from shared_data
                 path = self.shared_data["background_path"].value.decode()
                 data_array = np.array(self.background_data_buffer)
                 np.save(path, data_array)
@@ -461,6 +467,7 @@ class ContinuousBackgroundScanner:
         self.shared_data["background_scan_active"].value = False
         self.scan_start_time = None
         print("[HWCtrl] Scan parameters reset for next scan")
+        print("[HWCtrl] Background scan flag set to False")
 
 
 class PWMStepperController:
@@ -565,7 +572,7 @@ class PWMStepperController:
         return self.current_frequency
 
     def move_to_angle(self, target_angle):
-        """Direct movement to target angle with angle limiting"""
+        """Direct movement to target angle with angle limiting and overshoot prevention"""
         # Clamp target angle to valid range
         target_angle = max(MotorParams.PAN_MIN_ANGLE,
                            min(MotorParams.PAN_MAX_ANGLE, target_angle))
@@ -580,7 +587,11 @@ class PWMStepperController:
         current_pos = self.shared_data["stepper_degrees"].value
         print(f"[HWCtrl-Stepper] Current position: {current_pos:.3f}°")
 
-        while abs(target_angle - current_pos) >= MICROSTEP_ANGLE and self.running:
+        # Define a tighter tolerance for small movements
+        tolerance = MICROSTEP_ANGLE * 2  # Allow 2 microsteps tolerance
+
+        while self.running:
+            current_pos = self.shared_data["stepper_degrees"].value
             error = target_angle - current_pos
 
             # Handle wrap-around for shortest path
@@ -589,24 +600,49 @@ class PWMStepperController:
             elif error < -180:
                 error += 360
 
-            # Determine direction
-            direction = 1 if error > 0 else 0
-            self.pi.write(STEPPER_DIR_PIN, direction)
+            # Check if we're close enough
+            if abs(error) < tolerance:
+                print(f"[HWCtrl-Stepper] Target reached. Position: {current_pos:.3f}°, Error: {error:.3f}°")
+                break
 
-            # Calculate target frequency
-            target_freq = self.calculate_target_frequency(error)
+            # For very small movements, use minimum speed to prevent overshoot
+            if abs(error) < 1.0:  # Less than 1 degree
+                # Use minimum speed and direct control
+                direction = 1 if error > 0 else 0
+                self.pi.write(STEPPER_DIR_PIN, direction)
 
-            # Apply smooth frequency transition
-            smooth_freq = self.smooth_frequency_transition(target_freq)
-
-            # Update PWM frequency
-            if smooth_freq > 0:
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(smooth_freq), 500000)
+                # Pulse slowly for precise control
+                steps_needed = int(abs(error) / MICROSTEP_ANGLE)
+                if steps_needed > 0:
+                    # Use very slow speed for precision
+                    self.pi.hardware_PWM(STEPPER_PULSE_PIN, MotorParams.STEPPER_MIN_SPEED, 500000)
+                    # Calculate time needed
+                    time_needed = steps_needed / MotorParams.STEPPER_MIN_SPEED
+                    time.sleep(time_needed)
+                    # Stop immediately
+                    self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
+                    # Allow position to update
+                    time.sleep(0.01)
+                else:
+                    # We're within tolerance
+                    break
             else:
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
+                # Normal movement for larger distances
+                # Determine direction
+                direction = 1 if error > 0 else 0
+                self.pi.write(STEPPER_DIR_PIN, direction)
 
-            # Update current position from step counter
-            current_pos = self.shared_data["stepper_degrees"].value
+                # Calculate target frequency
+                target_freq = self.calculate_target_frequency(error)
+
+                # Apply smooth frequency transition
+                smooth_freq = self.smooth_frequency_transition(target_freq)
+
+                # Update PWM frequency
+                if smooth_freq > 0:
+                    self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(smooth_freq), 500000)
+                else:
+                    self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
 
             time.sleep(0.001)  # 1ms update rate
 
@@ -614,7 +650,7 @@ class PWMStepperController:
         self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
 
         final_pos = self.shared_data["stepper_degrees"].value
-        print(f"[HWCtrl-Stepper] Reached {final_pos:.3f}°, Error: {abs(target_angle - final_pos):.3f}°")
+        print(f"[HWCtrl-Stepper] Movement complete at {final_pos:.3f}°")
 
     def move_to_target(self):
         """Move stepper to target azimuth using PWM control"""
@@ -756,8 +792,12 @@ def combined_controller_process(shared_data):
 
             # Handle continuous background scanning
             if shared_data["background_scan_active"].value:
-                scanner.start_continuous_scan(lidar, stepper, servo)
-                # No additional delay needed - scanning handles its own timing
+                scan_continues = scanner.start_continuous_scan(lidar, stepper, servo)
+                if not scan_continues:
+                    # Scan completed, ensure stepper is ready for normal operation
+                    print("[HWCtrl] Background scan completed, ready for normal movement")
+                    # Small delay before accepting new commands
+                    time.sleep(0.1)
 
             # Handle normal stepper movement only when not scanning
             elif shared_data["go_to_target"].value:
