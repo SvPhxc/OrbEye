@@ -50,7 +50,7 @@ class MotorParams:
     # Servo mounting offset - adjust this to set your zero point
     # If servo points 15 degrees up when at "0", set this to -15
     # This ensures displayed angles are always positive (0-90)
-    SERVO_ZERO_OFFSET = -7  # degrees - adjust for your mounting
+    SERVO_ZERO_OFFSET = -5  # degrees - adjust for your mounting
 
     # Pan angle limits
     PAN_MIN_ANGLE = 0.0  # degrees
