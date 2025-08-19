@@ -593,8 +593,12 @@ class PWMStepperController:
         """
         Moves the stepper motor to a target angle using a pre-calculated
         trapezoidal motion profile. This is an open-loop method that does not
-        use a PID controller.
+        use a PID controller and builds the wave incrementally to support
+        large moves.
         """
+        # Stop any existing hardware PWM before starting a wave
+        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
+
         # Clamp target angle to valid range
         target_angle = max(MotorParams.PAN_MIN_ANGLE, min(MotorParams.PAN_MAX_ANGLE, target_angle))
 
@@ -602,16 +606,18 @@ class PWMStepperController:
 
         # --- 1. Calculate the Move ---
         current_pos_steps = self.step_count
+        # Calculate target in absolute steps from angle 0
         target_pos_steps = int(target_angle / MICROSTEP_ANGLE)
 
         error_steps = target_pos_steps - current_pos_steps
 
         # Handle the 360-degree wrap-around for the shortest path
         steps_per_rotation = int(360.0 / MICROSTEP_ANGLE)
-        if error_steps > (steps_per_rotation / 2):
-            error_steps -= steps_per_rotation
-        elif error_steps < -(steps_per_rotation / 2):
-            error_steps += steps_per_rotation
+        if abs(error_steps) > (steps_per_rotation / 2):
+            if error_steps > 0:
+                error_steps -= steps_per_rotation
+            else:
+                error_steps += steps_per_rotation
 
         total_steps = abs(error_steps)
 
@@ -624,55 +630,63 @@ class PWMStepperController:
         self.pi.write(STEPPER_DIR_PIN, direction)
         print(f"[HWCtrl-Stepper] Steps to move: {total_steps}, Direction: {direction}")
 
-        # --- 2. Build the Motion Profile Wave ---
-        pulses = []
+        # --- 2. Build the Motion Profile Wave Incrementally ---
+        self.pi.wave_clear()  # Clear any previous wave data
 
-        # Determine if the move is long enough for a cruise phase
+        # Determine profile shape
         if total_steps <= MotorParams.ACCEL_STEPS * 2:
-            # Short move: Triangular profile (accelerate to midpoint, then decelerate)
             accel_steps_actual = total_steps // 2
             decel_steps_actual = total_steps - accel_steps_actual
         else:
-            # Long move: Trapezoidal profile (accel, cruise, decel)
             accel_steps_actual = MotorParams.ACCEL_STEPS
             decel_steps_actual = MotorParams.ACCEL_STEPS
+
+        # Create and add pulses for each phase directly
+        pulses_generated = 0
 
         # Acceleration Phase
         for i in range(1, accel_steps_actual + 1):
             speed = MotorParams.STEPPER_MIN_SPEED + (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) * (
                         i / accel_steps_actual)
-            delay_us = int(500000 / speed)  # 50% duty cycle -> 1,000,000 / (speed * 2)
-            pulses.append(pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us))
-            pulses.append(pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us))
+            delay_us = int(500000 / speed)
+            pulse = [pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us),
+                     pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us)]
+            self.pi.wave_add_generic(pulse)
+            pulses_generated += 1
 
-        # Cruise Phase (if any)
+        # Cruise Phase
         cruise_steps = total_steps - (accel_steps_actual + decel_steps_actual)
         if cruise_steps > 0:
             delay_us = int(500000 / MotorParams.STEPPER_MAX_SPEED)
-            for _ in range(cruise_steps):
-                pulses.append(pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us))
-                pulses.append(pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us))
+            pulse = [pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us),
+                     pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us)]
+            # For cruise, we can create a small wave and repeat it
+            self.pi.wave_add_generic(pulse)
+            cruise_wave_id = self.pi.wave_create()
+            # Add the repeating cruise wave to the main chain
+            self.pi.wave_add_serial(cruise_wave_id, pigpio.WAVE_MODE_REPEAT, 0, cruise_steps)
+            self.pi.wave_delete(cruise_wave_id)  # Safe to delete after adding to serial chain
+            pulses_generated += cruise_steps
 
         # Deceleration Phase
-        for i in range(1, decel_steps_actual + 1):
-            speed = MotorParams.STEPPER_MAX_SPEED - (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) * (
+        for i in range(decel_steps_actual, 0, -1):
+            speed = MotorParams.STEPPER_MIN_SPEED + (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) * (
                         i / decel_steps_actual)
             delay_us = int(500000 / speed)
-            pulses.append(pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us))
-            pulses.append(pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us))
+            pulse = [pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us),
+                     pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us)]
+            self.pi.wave_add_generic(pulse)
+            pulses_generated += 1
 
-        # --- 3. Execute the Wave ---
-        self.pi.wave_clear()
-        self.pi.wave_add_generic(pulses)
+        # --- 3. Execute the Assembled Wave ---
         wave_id = self.pi.wave_create()
 
         if wave_id >= 0:
-            print(f"[HWCtrl-Stepper] Sending wave {wave_id} with {len(pulses) // 2} pulses.")
+            print(f"[HWCtrl-Stepper] Sending wave {wave_id} with {pulses_generated} pulses.")
             self.pi.wave_send_once(wave_id)
 
-            # Wait for the wave to finish sending
             while self.pi.wave_tx_busy():
-                time.sleep(0.01)  # Check every 10ms
+                time.sleep(0.01)
 
             self.pi.wave_delete(wave_id)
             print("[HWCtrl-Stepper] Wave complete.")
@@ -680,33 +694,13 @@ class PWMStepperController:
             print(f"[HWCtrl-Stepper] Error creating wave: {wave_id}")
 
         # --- 4. Update Internal Position ---
-        # We assume all steps were completed successfully
         self.step_count += error_steps
         final_pos_deg = (self.step_count * MICROSTEP_ANGLE) % 360.0
-        self.shared_data["stepper_degrees"].value = final_pos_deg
+        # Update the shared data with the final, precise position
+        with self.shared_data["stepper_degrees"].get_lock():
+            self.shared_data["stepper_degrees"].value = final_pos_deg
 
         print(f"[HWCtrl-Stepper] Movement complete. New position: {final_pos_deg:.3f}°")
-
-    def move_to_target(self):
-        """Move stepper to target azimuth using PWM control"""
-        target_pos = self.shared_data["target_azimuth"].value
-        self.move_to_angle(target_pos)
-        self.shared_data["target_reached"].value = True
-
-    def stop(self):
-        """Stop the PWM stepper controller"""
-        self.running = False
-
-        # Stop PWM
-        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
-
-        # Clean up callback
-        if self.step_callback:
-            self.step_callback.cancel()
-
-        # Disable stepper
-        self.pi.write(STEPPER_ENABLE_PIN, 1)  # Disable stepper
-        print("[HWCtrl] PWM Stepper controller stopped")
 
 
 class ServoController:
