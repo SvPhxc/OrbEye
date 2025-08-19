@@ -27,7 +27,7 @@ MICROSTEP_ANGLE = 0.05625  # degrees per step
 class MotorParams:
     # Stepper Parameters - DRV8825 optimized
     STEPPER_MAX_SPEED = 5000  # max steps per second (DRV8825 can handle up to 250kHz)
-    STEPPER_MIN_SPEED = 360  # min steps per second
+    STEPPER_MIN_SPEED = 720  # min steps per second
     STEPPER_ACCEL_DISTANCE = 2.0  # degrees to start/stop acceleration (reduced for faster scanning)
     STEPPER_CRUISE_SPEED = 3000  # optimal cruise speed for DRV8825
 
