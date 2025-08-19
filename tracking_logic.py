@@ -137,13 +137,13 @@ class TargetTracker:
         self.sample_time = 0.002  # Minimal sampling delay
 
         # Adaptive parameters
-        self.adaptive_mode = True
+        self.adaptive_mode = False  # Disable adaptive mode by default
         self.confidence_level = 0.0
         self.high_confidence_threshold = 0.8
 
         # Movement optimization
-        self.movement_timeout = 0.2  # Very short timeout
-        self.position_tolerance = 0.5  # Larger tolerance for faster tracking
+        self.movement_timeout = 0.3  # Very short timeout
+        self.position_tolerance = 0.50 # Larger tolerance for faster tracking
         self.predictive_movement = False  # Disable predictive movement by default
 
         # Tracking state with velocity estimation
@@ -414,8 +414,8 @@ class TargetTracker:
                           f"Cache hits: {self.clutter_filter._cache_hits}")
 
                 # Minimal delay
-                if cycle_time < 0.005:  # If we're too fast, add tiny delay
-                    time.sleep(0.005)
+                if cycle_time < 0.01:  # If we're too fast, add tiny delay
+                    time.sleep(0.01)
 
         except Exception as e:
             print(f"[Tracker] Error: {e}")
