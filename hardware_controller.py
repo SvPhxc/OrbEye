@@ -40,7 +40,7 @@ class MotorParams:
     MAX_FREQ_CHANGE_RATE = 3000  # Hz per millisecond (very fast transitions)
 
     # PID Parameters - tuned for high-speed operation
-    KP = 0.2 # Higher proportional for faster response
+    KP = 0.2  # Higher proportional for faster response
     KI = 0.0  # Slightly higher integral
     KD = 0.0  # Lower derivative for stability at high speed
 
@@ -617,26 +617,33 @@ class PWMStepperController:
 
     def _move_with_pwm(self, total_steps, direction):
         """
-        Execute large moves using hardware PWM with step counting verification.
-        More reliable for moves >90 degrees with maintained accuracy.
+        Execute large moves using hardware PWM with precise step counting.
+        More reliable for moves >90 degrees.
         """
         print(f"[HWCtrl-Stepper] Using PWM mode for {total_steps} steps")
 
-        # Record starting position for accuracy verification
+        # Record starting position
         start_step_count = self.step_count
-        target_step_count = start_step_count + (total_steps if direction else -total_steps)
+        steps_moved = 0
 
         # Calculate acceleration parameters
         accel_steps = min(MotorParams.ACCEL_STEPS, total_steps // 3)
         decel_steps = min(MotorParams.ACCEL_STEPS, total_steps // 3)
         cruise_steps = total_steps - accel_steps - decel_steps
 
-        # Acceleration phase - count actual steps
+        # Acceleration phase - monitor actual steps
         print("[HWCtrl-Stepper] Accelerating...")
-        accel_start = self.step_count
+        accel_complete = 0
         for i in range(1, accel_steps + 1):
             if not self.running:
                 break
+
+            # Check if we've already moved enough steps
+            steps_moved = abs(self.step_count - start_step_count)
+            if steps_moved >= total_steps:
+                print(f"[HWCtrl-Stepper] Target reached during acceleration")
+                break
+
             speed = MotorParams.STEPPER_MIN_SPEED + (
                     (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) *
                     (i / accel_steps)
@@ -644,38 +651,44 @@ class PWMStepperController:
             freq = min(int(speed), MotorParams.STEPPER_MAX_SPEED)
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, freq, 500000)
 
-            # Wait for one step at this frequency
+            # Wait for this acceleration step
             time.sleep(1.0 / freq)
-
-        accel_actual = abs(self.step_count - accel_start)
+            accel_complete += 1
 
         # Cruise phase - monitor actual step count
         if cruise_steps > 0 and self.running:
-            print(f"[HWCtrl-Stepper] Cruising for {cruise_steps} steps...")
-            cruise_start = self.step_count
-            cruise_freq = min(MotorParams.STEPPER_MAX_SPEED, MotorParams.STEPPER_CRUISE_SPEED)
-            self.pi.hardware_PWM(STEPPER_PULSE_PIN, cruise_freq, 500000)
+            steps_moved = abs(self.step_count - start_step_count)
+            remaining_steps = total_steps - steps_moved
 
-            # Monitor actual steps instead of just time
-            steps_needed = cruise_steps
-            timeout = time.time() + (steps_needed / cruise_freq) * 1.5  # 50% safety margin
+            if remaining_steps > decel_steps:
+                print(f"[HWCtrl-Stepper] Cruising for up to {cruise_steps} steps...")
+                cruise_freq = min(MotorParams.STEPPER_MAX_SPEED, MotorParams.STEPPER_CRUISE_SPEED)
+                self.pi.hardware_PWM(STEPPER_PULSE_PIN, cruise_freq, 500000)
 
-            while self.running and time.time() < timeout:
-                current_steps = abs(self.step_count - cruise_start)
-                if current_steps >= steps_needed:
-                    break
-                time.sleep(0.001)  # Fast polling for accuracy
+                # Monitor steps continuously during cruise
+                cruise_start = self.step_count
+                timeout = time.time() + (cruise_steps / cruise_freq) * 1.5
 
-            cruise_actual = abs(self.step_count - cruise_start)
-            if cruise_actual < cruise_steps * 0.95:  # Warning if >5% steps missed
-                print(f"[HWCtrl-Stepper] Warning: Expected {cruise_steps} cruise steps, got {cruise_actual}")
+                while self.running and time.time() < timeout:
+                    steps_moved = abs(self.step_count - start_step_count)
+                    # Leave room for deceleration
+                    if steps_moved >= (total_steps - decel_steps):
+                        print(f"[HWCtrl-Stepper] Starting deceleration at {steps_moved} steps")
+                        break
+                    time.sleep(0.0005)  # 0.5ms polling for better accuracy
 
-        # Deceleration phase
+        # Deceleration phase - monitor to prevent overshoot
         print("[HWCtrl-Stepper] Decelerating...")
-        decel_start = self.step_count
         for i in range(decel_steps, 0, -1):
             if not self.running:
                 break
+
+            # Check current position
+            steps_moved = abs(self.step_count - start_step_count)
+            if steps_moved >= total_steps:
+                print(f"[HWCtrl-Stepper] Target reached, stopping deceleration early")
+                break
+
             speed = MotorParams.STEPPER_MIN_SPEED + (
                     (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) *
                     (i / decel_steps)
@@ -685,22 +698,17 @@ class PWMStepperController:
 
             time.sleep(1.0 / freq)
 
-        # Stop PWM
-        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
+        # Stop PWM immediately
+        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
 
-        # Verify final accuracy
-        actual_steps_moved = abs(self.step_count - start_step_count)
-        accuracy = (actual_steps_moved / total_steps) * 100
+        # Final accuracy check
+        final_steps_moved = abs(self.step_count - start_step_count)
+        accuracy = (final_steps_moved / total_steps) * 100 if total_steps > 0 else 100
 
         print(
-            f"[HWCtrl-Stepper] PWM move complete. Target: {total_steps}, Actual: {actual_steps_moved} ({accuracy:.1f}% accuracy)")
+            f"[HWCtrl-Stepper] PWM move complete. Target: {total_steps}, Actual: {final_steps_moved} ({accuracy:.1f}% accuracy)")
 
-        # If significant error, do a correction move
-        error_steps = abs(target_step_count - self.step_count)
-        if error_steps > 2:  # More than 2 steps off
-            print(f"[HWCtrl-Stepper] Correcting position error of {error_steps} steps")
-            # Use waveform for precise correction
-            self._correction_move(error_steps, target_step_count > self.step_count)
+        # NO CORRECTION - let the position be what it is to avoid overshoot
 
     def _move_with_waveform(self, total_steps, direction):
         """
@@ -780,36 +788,6 @@ class PWMStepperController:
             print(f"[HWCtrl-Stepper] Waveform error: {e}, falling back to PWM")
             self._move_with_pwm(total_steps, direction)
 
-    def _correction_move(self, steps, forward):
-        """
-        Small correction move using precise waveform control.
-        Used to correct any positioning errors after PWM moves.
-        """
-        if steps < 1 or steps > 100:  # Safety limit for correction
-            return
-
-        direction = 1 if forward else 0
-        self.pi.write(STEPPER_DIR_PIN, direction)
-
-        # Simple constant speed correction
-        freq = 1000  # 1kHz for correction moves
-        delay_us = int(500000 / freq)
-
-        pulses = []
-        for _ in range(steps):
-            pulses.append(pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us))
-            pulses.append(pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us))
-
-        self.pi.wave_add_generic(pulses)
-        wave_id = self.pi.wave_create()
-
-        if wave_id >= 0:
-            self.pi.wave_send_once(wave_id)
-            while self.pi.wave_tx_busy():
-                time.sleep(0.001)
-            self.pi.wave_delete(wave_id)
-            print(f"[HWCtrl-Stepper] Correction complete")
-
     def move_to_target(self):
         """Move stepper to target azimuth."""
         target_pos = self.shared_data["target_azimuth"].value
@@ -837,7 +815,6 @@ class PWMStepperController:
         # Disable the stepper driver
         self.pi.write(STEPPER_ENABLE_PIN, 1)
         print("[HWCtrl] Stepper controller stopped.")
-
 
 class ServoController:
     """Controls servo motor for tilt movement"""
