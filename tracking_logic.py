@@ -143,8 +143,8 @@ class TargetTracker:
 
         # Movement optimization
         self.movement_timeout = 0.2  # Very short timeout
-        self.position_tolerance = 3.0  # Larger tolerance for faster tracking
-        self.predictive_movement = True
+        self.position_tolerance = 0.5  # Larger tolerance for faster tracking
+        self.predictive_movement = False  # Disable predictive movement by default
 
         # Tracking state with velocity estimation
         self.current_target_az = None
@@ -292,17 +292,17 @@ class TargetTracker:
         # Adapt parameters based on confidence
         if self.adaptive_mode:
             if self.confidence_level > self.high_confidence_threshold:
-                self.scan_points = 3  # Minimal scanning
-                self.scan_radius_az = 4.0
-                self.scan_radius_el = 4.0
+                self.scan_points = 4  # Minimal scanning
+                self.scan_radius_az = 6.0
+                self.scan_radius_el = 6.0
             elif self.confidence_level < 0.3:
-                self.scan_points = 6  # More thorough scanning
+                self.scan_points = 8  # More thorough scanning
                 self.scan_radius_az = 10.0
                 self.scan_radius_el = 10.0
             else:
-                self.scan_points = 4
-                self.scan_radius_az = 6.0
-                self.scan_radius_el = 6.0
+                self.scan_points = 6
+                self.scan_radius_az = 8.0
+                self.scan_radius_el = 8.0
 
     def smooth_position_robust(self, new_az, new_el):
         """Robust position smoothing with proper angle wraparound handling."""
@@ -415,7 +415,7 @@ class TargetTracker:
 
                 # Minimal delay
                 if cycle_time < 0.005:  # If we're too fast, add tiny delay
-                    time.sleep(0.001)
+                    time.sleep(0.005)
 
         except Exception as e:
             print(f"[Tracker] Error: {e}")
