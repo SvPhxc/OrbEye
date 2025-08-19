@@ -513,7 +513,9 @@ class PWMStepperController:
     Open-loop stepper motor controller using pre-calculated motion profiles
     and pigpio waveforms for precise, hardware-timed execution.
     This version includes a step-counting callback to provide LIVE angle updates.
-    FIXED: Now handles moves >180 degrees without crashing pigpio.
+
+    REVISED: The PWM method now divides large moves into smaller, precise
+    waveform "packages" to prevent overshooting and pigpio crashes.
     """
 
     def __init__(self, pi, shared_data):
@@ -527,6 +529,9 @@ class PWMStepperController:
         self.pi.set_mode(STEPPER_DIR_PIN, pigpio.OUTPUT)
         self.pi.set_mode(STEPPER_ENABLE_PIN, pigpio.OUTPUT)
         self.pi.set_mode(STEPPER_SLEEP_PIN, pigpio.OUTPUT)
+
+        # Ensure pulse pin is low to start
+        self.pi.write(STEPPER_PULSE_PIN, 0)
 
         # Enable stepper driver
         self.pi.write(STEPPER_ENABLE_PIN, 0)  # Active low
@@ -543,46 +548,39 @@ class PWMStepperController:
         Callback function that triggers on every step.
         This provides the LIVE position updates.
         """
-        # This callback is triggered by the hardware pulses from the waveform
-        if level == 1:  # Rising edge
+        if level == 1:  # On rising edge
             direction = self.pi.read(STEPPER_DIR_PIN)
             if direction:
                 self.step_count += 1
             else:
                 self.step_count -= 1
 
-            # Wrap around at 360 degrees (6400 steps)
             steps_per_rotation = int(360.0 / MICROSTEP_ANGLE)
-            self.step_count = self.step_count % steps_per_rotation
+            self.step_count %= steps_per_rotation
 
             degrees = self.step_count * MICROSTEP_ANGLE
 
-            # Update shared position data immediately
             with self.shared_data["stepper_degrees"].get_lock():
                 self.shared_data["stepper_degrees"].value = degrees
 
     def move_to_angle(self, target_angle):
         """
-        Moves the stepper motor using hardware PWM for large moves and waveforms for small moves.
-        This prevents pigpio crashes on moves >180 degrees.
+        Moves the stepper motor to a target angle, calculating the shortest path.
         """
-        # Stop any existing hardware PWM before starting
-        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
+        # Stop any existing movement before starting a new one
         self.pi.wave_tx_stop()
         self.pi.wave_clear()
+        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
 
-        # Clamp target angle
         target_angle = max(MotorParams.PAN_MIN_ANGLE, min(MotorParams.PAN_MAX_ANGLE, target_angle))
-
         print(f"[HWCtrl-Stepper] Moving to {target_angle:.3f}°")
 
-        # Calculate the move
         current_pos_steps = self.step_count
         target_pos_steps = int(target_angle / MICROSTEP_ANGLE)
         error_steps = target_pos_steps - current_pos_steps
-
-        # Find shortest path
         steps_per_rotation = int(360.0 / MICROSTEP_ANGLE)
+
+        # Find the shortest path to the target
         if abs(error_steps) > (steps_per_rotation / 2):
             if error_steps > 0:
                 error_steps -= steps_per_rotation
@@ -595,198 +593,83 @@ class PWMStepperController:
             print("[HWCtrl-Stepper] Already at target position.")
             return
 
-        # Set direction
         direction = 1 if error_steps > 0 else 0
         self.pi.write(STEPPER_DIR_PIN, direction)
         print(f"[HWCtrl-Stepper] Steps to move: {total_steps}, Direction: {'CW' if direction else 'CCW'}")
 
-        # CRITICAL: Use different methods based on move size
-        # Threshold for waveform vs PWM (adjust as needed)
-        WAVEFORM_THRESHOLD = 1600  # About 90 degrees of movement
+        # Use the robust packaged PWM method for all moves
+        self._move_with_packaged_pwm(total_steps)
 
-        if total_steps > WAVEFORM_THRESHOLD:
-            # Use hardware PWM for large moves
-            self._move_with_pwm(total_steps, direction)
-        else:
-            # Use waveform for small, precise moves
-            self._move_with_waveform(total_steps, direction)
-
-        # Log final position
         final_pos_deg = self.shared_data["stepper_degrees"].value
         print(f"[HWCtrl-Stepper] Movement complete. Final position: {final_pos_deg:.3f}°")
 
-    def _move_with_pwm(self, total_steps, direction):
+    def _move_with_packaged_pwm(self, total_steps):
         """
-        Execute large moves using hardware PWM with precise step counting.
-        More reliable for moves >90 degrees.
+        Executes a move by breaking it into smaller, precisely controlled
+        waveform "packages". This prevents overshoot by never sending more
+        pulses than necessary in a single command.
         """
-        print(f"[HWCtrl-Stepper] Using PWM mode for {total_steps} steps")
+        print(f"[HWCtrl-Stepper] Using packaged PWM mode for {total_steps} steps")
 
-        # Record starting position
-        start_step_count = self.step_count
+        # Define the size of each pulse package (smaller is more reactive but less efficient)
+        CHUNK_SIZE = 100  # Send up to 100 steps at a time
+
         steps_moved = 0
+        accel_steps = min(MotorParams.ACCEL_STEPS, total_steps // 2)
+        decel_steps_start = total_steps - accel_steps
 
-        # Calculate acceleration parameters
-        accel_steps = min(MotorParams.ACCEL_STEPS, total_steps // 3)
-        decel_steps = min(MotorParams.ACCEL_STEPS, total_steps // 3)
-        cruise_steps = total_steps - accel_steps - decel_steps
+        while steps_moved < total_steps and self.running:
+            # Determine current speed based on position in the trapezoidal profile
+            if steps_moved < accel_steps:
+                # Acceleration phase
+                speed = MotorParams.STEPPER_MIN_SPEED + \
+                        ((MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) * (steps_moved / accel_steps))
+            elif steps_moved > decel_steps_start:
+                # Deceleration phase
+                decel_progress = (steps_moved - decel_steps_start) / accel_steps
+                speed = MotorParams.STEPPER_MAX_SPEED - \
+                        ((MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) * decel_progress)
+            else:
+                # Cruise phase
+                speed = MotorParams.STEPPER_MAX_SPEED
 
-        # Acceleration phase - monitor actual steps
-        print("[HWCtrl-Stepper] Accelerating...")
-        accel_complete = 0
-        for i in range(1, accel_steps + 1):
-            if not self.running:
-                break
+            speed = int(max(MotorParams.STEPPER_MIN_SPEED, min(speed, MotorParams.STEPPER_MAX_SPEED)))
 
-            # Check if we've already moved enough steps
-            steps_moved = abs(self.step_count - start_step_count)
-            if steps_moved >= total_steps:
-                print(f"[HWCtrl-Stepper] Target reached during acceleration")
-                break
-
-            speed = MotorParams.STEPPER_MIN_SPEED + (
-                    (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) *
-                    (i / accel_steps)
-            )
-            freq = min(int(speed), MotorParams.STEPPER_MAX_SPEED)
-            self.pi.hardware_PWM(STEPPER_PULSE_PIN, freq, 500000)
-
-            # Wait for this acceleration step
-            time.sleep(1.0 / freq)
-            accel_complete += 1
-
-        # Cruise phase - monitor actual step count
-        if cruise_steps > 0 and self.running:
-            steps_moved = abs(self.step_count - start_step_count)
+            # Calculate how many steps to send in this package
             remaining_steps = total_steps - steps_moved
+            steps_in_chunk = min(CHUNK_SIZE, remaining_steps)
 
-            if remaining_steps > decel_steps:
-                print(f"[HWCtrl-Stepper] Cruising for up to {cruise_steps} steps...")
-                cruise_freq = min(MotorParams.STEPPER_MAX_SPEED, MotorParams.STEPPER_CRUISE_SPEED)
-                self.pi.hardware_PWM(STEPPER_PULSE_PIN, cruise_freq, 500000)
-
-                # Monitor steps continuously during cruise
-                cruise_start = self.step_count
-                timeout = time.time() + (cruise_steps / cruise_freq) * 1.5
-
-                while self.running and time.time() < timeout:
-                    steps_moved = abs(self.step_count - start_step_count)
-                    # Leave room for deceleration
-                    if steps_moved >= (total_steps - decel_steps):
-                        print(f"[HWCtrl-Stepper] Starting deceleration at {steps_moved} steps")
-                        break
-                    time.sleep(0.0005)  # 0.5ms polling for better accuracy
-
-        # Deceleration phase - monitor to prevent overshoot
-        print("[HWCtrl-Stepper] Decelerating...")
-        for i in range(decel_steps, 0, -1):
-            if not self.running:
+            if steps_in_chunk <= 0:
                 break
 
-            # Check current position
-            steps_moved = abs(self.step_count - start_step_count)
-            if steps_moved >= total_steps:
-                print(f"[HWCtrl-Stepper] Target reached, stopping deceleration early")
-                break
-
-            speed = MotorParams.STEPPER_MIN_SPEED + (
-                    (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) *
-                    (i / decel_steps)
-            )
-            freq = min(int(speed), MotorParams.STEPPER_MAX_SPEED)
-            self.pi.hardware_PWM(STEPPER_PULSE_PIN, freq, 500000)
-
-            time.sleep(1.0 / freq)
-
-        # Stop PWM immediately
-        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
-
-        # Final accuracy check
-        final_steps_moved = abs(self.step_count - start_step_count)
-        accuracy = (final_steps_moved / total_steps) * 100 if total_steps > 0 else 100
-
-        print(
-            f"[HWCtrl-Stepper] PWM move complete. Target: {total_steps}, Actual: {final_steps_moved} ({accuracy:.1f}% accuracy)")
-
-        # NO CORRECTION - let the position be what it is to avoid overshoot
-
-    def _move_with_waveform(self, total_steps, direction):
-        """
-        Execute small moves using pigpio waveforms for precise control.
-        Best for moves <90 degrees.
-        """
-        print(f"[HWCtrl-Stepper] Using waveform mode for {total_steps} steps")
-
-        # Calculate acceleration/deceleration steps
-        if total_steps <= MotorParams.ACCEL_STEPS * 2:
-            accel_steps_actual = total_steps // 2
-            decel_steps_actual = total_steps - accel_steps_actual
-        else:
-            accel_steps_actual = MotorParams.ACCEL_STEPS
-            decel_steps_actual = MotorParams.ACCEL_STEPS
-
-        # Build the waveform
-        pulses = []
-
-        # Limit check to prevent excessive pulses
-        MAX_PULSES = 3000  # pigpio limit is around 3000-4000 pulses
-        if total_steps * 2 > MAX_PULSES:
-            print(f"[HWCtrl-Stepper] Warning: Move too large for waveform ({total_steps * 2} pulses)")
-            # Fall back to PWM
-            self._move_with_pwm(total_steps, direction)
-            return
-
-        # Acceleration
-        for i in range(1, accel_steps_actual + 1):
-            speed = MotorParams.STEPPER_MIN_SPEED + (
-                    (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) *
-                    (i / accel_steps_actual)
-            )
-            delay_us = int(500000 / speed)
-            pulses.append(pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us))
-            pulses.append(pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us))
-
-        # Cruise
-        cruise_steps = total_steps - (accel_steps_actual + decel_steps_actual)
-        if cruise_steps > 0:
-            delay_us = int(500000 / MotorParams.STEPPER_MAX_SPEED)
-            for _ in range(cruise_steps):
+            # Create a precise waveform for this chunk
+            delay_us = int(500000 / speed)  # us delay for half a cycle (50% duty)
+            pulses = []
+            for _ in range(steps_in_chunk):
                 pulses.append(pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us))
                 pulses.append(pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us))
 
-        # Deceleration
-        for i in range(decel_steps_actual, 0, -1):
-            speed = MotorParams.STEPPER_MIN_SPEED + (
-                    (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) *
-                    (i / decel_steps_actual)
-            )
-            delay_us = int(500000 / speed)
-            pulses.append(pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us))
-            pulses.append(pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us))
-
-        # Add wave to pigpio
-        try:
+            # Add wave to pigpio and send it
             self.pi.wave_add_generic(pulses)
             wave_id = self.pi.wave_create()
 
             if wave_id >= 0:
-                print(f"[HWCtrl-Stepper] Sending wave {wave_id} with {len(pulses) // 2} pulses")
                 self.pi.wave_send_once(wave_id)
 
-                # Wait for completion
+                # Wait for this small wave to finish
                 while self.pi.wave_tx_busy() and self.running:
-                    time.sleep(0.01)
+                    time.sleep(0.001)  # 1ms sleep is fine here, as wave is hardware-timed
 
-                # Clean up
                 self.pi.wave_delete(wave_id)
-                print("[HWCtrl-Stepper] Wave complete")
+                steps_moved += steps_in_chunk
             else:
-                print(f"[HWCtrl-Stepper] Wave creation failed (id={wave_id}), falling back to PWM")
-                self._move_with_pwm(total_steps, direction)
+                print(f"[HWCtrl-Stepper] Wave creation failed (id={wave_id}). Aborting move.")
+                break  # Exit if pigpio fails
 
-        except Exception as e:
-            print(f"[HWCtrl-Stepper] Waveform error: {e}, falling back to PWM")
-            self._move_with_pwm(total_steps, direction)
+        # Ensure PWM is off at the end of the move
+        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
+
+        print(f"[HWCtrl-Stepper] PWM move complete. Sent {steps_moved}/{total_steps} steps.")
 
     def move_to_target(self):
         """Move stepper to target azimuth."""
@@ -800,22 +683,17 @@ class PWMStepperController:
         print("[HWCtrl] Stopping stepper controller...")
 
         # Stop any active waveforms or PWM
-        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
         self.pi.wave_tx_stop()
         self.pi.wave_clear()
+        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
 
-        # Cancel the step counting callback
         if self.step_callback:
             self.step_callback.cancel()
             self.step_callback = None
 
-        # Failsafe to ensure the pulse pin is off
         self.pi.write(STEPPER_PULSE_PIN, 0)
-
-        # Disable the stepper driver
-        self.pi.write(STEPPER_ENABLE_PIN, 1)
+        self.pi.write(STEPPER_ENABLE_PIN, 1)  # Disable driver
         print("[HWCtrl] Stepper controller stopped.")
-        
 class ServoController:
     """Controls servo motor for tilt movement"""
 
