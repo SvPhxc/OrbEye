@@ -29,7 +29,7 @@ class ClutterFilter:
         self.background_tree = None
         self.background_data = None
         self._query_cache = {}
-        self._cache_size = 1500
+        self._cache_size = 70000
 
         try:
             self.background_data = np.load(background_file)
@@ -133,18 +133,18 @@ class TargetTracker:
         # Balanced optimization parameters
         self.scan_radius_az = 8.0  # Reasonable scan radius
         self.scan_radius_el = 8.0
-        self.scan_points = 5  # Balanced number of scan points
-        self.min_strength_threshold = 80
+        self.scan_points = 12  # Balanced number of scan points
+        self.min_strength_threshold = 1000
 
         # Prevent getting stuck on high strength targets
-        self.max_strength_lock = 300  # Don't lock on targets above this
-        self.strength_decay_factor = 0.95  # Decay factor for high strength memory
+        self.max_strength_lock = 16000  # Don't lock on targets above this
+        self.strength_decay_factor = 0.9  # Decay factor for high strength memory
         self.last_high_strength = 0
 
         # Movement parameters
         self.movement_timeout = 0.3  # Reasonable timeout
-        self.position_tolerance = 2.5  # Degrees
-        self.min_movement_delay = 0.002  # Minimum delay for movement
+        self.position_tolerance = 0.0  # Degrees
+        self.min_movement_delay = 0.01  # Minimum delay for movement
 
         # Tracking state
         self.current_target_az = None
