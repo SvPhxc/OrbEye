@@ -41,7 +41,7 @@ class MotorParams:
     # PID Parameters - tuned for high-speed operation
     KP = 3.2 # Higher proportional for faster response
     KI = 0.0  # Slightly higher integral
-    KD = 0.4  # Lower derivative for stability at high speed
+    KD = 0.0  # Lower derivative for stability at high speed
 
     # Servo Parameters
     SERVO_MIN_PULSE = 670  # microseconds (standard servo min)
