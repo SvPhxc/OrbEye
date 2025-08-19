@@ -166,7 +166,7 @@ class LidarController:
         # Initialize serial connection
         try:
             # Decode byte string for serial port
-            port = self.shared_data["lidar_port"].value.decode()
+            port = "/dev/serial0"
             self.ser = serial.Serial(port, 115200, timeout=0.1)
             self.ser.write(bytearray([0x5A, 0x06, 0x03, 0xE8, 0x03, 0x4E]))
             print(f"[HWCtrl-LIDAR] LiDAR initialized on port {port}")
