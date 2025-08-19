@@ -169,7 +169,7 @@ class LidarController:
             port = "/dev/serial0"
             self.ser = serial.Serial(port, 115200, timeout=0.1)
             self.ser.write(bytearray([0x5A, 0x06, 0x03, 0xE8, 0x03, 0x4E]))
-            self.ser.write(bytearray([0x5A 0x05 0x11 0x70]))
+            self.ser.write(bytearray([0x5A, 0x05, 0x11, 0x70]))
             print(f"[HWCtrl-LIDAR] LiDAR initialized on port {port}")
 
             # Start reader thread
