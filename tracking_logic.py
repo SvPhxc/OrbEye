@@ -144,7 +144,7 @@ class TargetTracker:
         # Movement parameters
         self.movement_timeout = 0.4  # Reasonable timeout
         self.position_tolerance = 0.0  # Degrees
-        self.min_movement_delay = 0.06  # Minimum delay for movement
+        self.min_movement_delay = 0.1  # Minimum delay for movement
 
         # Tracking state
         self.current_target_az = None
