@@ -102,6 +102,13 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.orbit_items = []  # holds GL items for the plotted orbit
         self.orbit_as_points = False  # set True for points/cloud; False for a polyline
         self.orbit_scale_cm_per_km = 0.05  # 6000km --> 300 cm
+        self.orbit_colors = [
+            (1.0, 1.0, 0.0, 0.9),  # yellow
+            (0.0, 1.0, 0.0, 0.9),  # green
+            (0.0, 0.5, 1.0, 0.9),  # blue
+            (1.0, 0.0, 0.0, 0.9),  # red
+            (1.0, 0.0, 1.0, 0.9),  # magenta
+        ]
 
         # ===== Left panel: 3D view (top) + 2D heatmap (bottom) =====
         left_panel = QtWidgets.QWidget()
@@ -499,13 +506,16 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         try:
             # --- SCALE: km -> (scaled) cm in your scene
-            pts_cm = pts_km * float(self.orbit_scale_cm_per_km)  # 0.1 cm per km
+            pts_cm = pts_km * float(self.orbit_scale_cm_per_km)
+
+            # Pick next color depending on how many orbits already drawn
+            color = self.orbit_colors[len(self.orbit_items) % len(self.orbit_colors)]
 
             if as_points:
-                item = gl.GLScatterPlotItem(pos=pts_cm, size=2.5, color=(1.0, 1.0, 0.2, 0.95))
+                item = gl.GLScatterPlotItem(pos=pts_cm, size=2.5, color=color)
             else:
-                item = gl.GLLinePlotItem(pos=pts_cm, width=2.0, color=(1.0, 1.0, 0.0, 0.9),
-                                         antialias=True, mode='line_strip')
+                item = gl.GLLinePlotItem(pos=pts_cm, width=5.0, color=color,
+                                        antialias=True, mode='line_strip')
 
             self.view.addItem(item)
             self.orbit_items.append(item)
