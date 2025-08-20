@@ -1773,12 +1773,13 @@ def run_tracker_process(shared_data, background_file="background_scan.npy"):
         # Run the new specialized orbital tracker
        # orbital_tracker = OrbitalTracker(shared_data, standard_tracker)
         run_circular_drone_tracker(shared_data)
-    elif shared_data.get("debug_mode", False):
-        # Run the original general-purpose tracker
-        print("[Main] Running standard TargetTracker.")
-        try:
-            standard_tracker.run()
-        except Exception as e:
-            print(f"[Main] TargetTracker process error: {e}")
 
-    print("[Main] Tracker process ended.")
+    #elif shared_data.get("debug_mode", False):
+        # Run the original general-purpose tracker
+     #   print("[Main] Running standard TargetTracker.")
+      #  try:
+       #     standard_tracker.run()
+        #except Exception as e:
+         #   print(f"[Main] TargetTracker process error: {e}")
+
+   # print("[Main] Tracker process ended.")
