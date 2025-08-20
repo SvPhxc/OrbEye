@@ -20,6 +20,8 @@ from multiprocessing import Manager, Process
 import threading
 import math
 from collections import deque
+from enum import Enum
+
 
 # ==============================================================================
 # CONFIGURATION PARAMETERS - Adjust these for your system
@@ -555,8 +557,6 @@ class TargetTracker:
                 self.shared_data["satellite_points"][3] = strength
                 self.shared_data["satellite_points"][4] = time.time()
 
-            # print(f"[Tracker] Target: ({azimuth:.1f}°, {elevation:.1f}°) "
-            #       f"dist={distance:.0f}cm, str={strength:.0f}, conf={self.tracking_confidence:.2f}")
         except Exception as e:
             print(f"[Tracker] Error updating satellite_points: {e}")
 
@@ -1186,7 +1186,7 @@ class OrbitalTracker:
 
             # Predict
             predicted_3d = self._predict_position(cycle_start_time)
-            pred_az, pred_el, _ = self._cartesian_to_spherical(predicted_3d)
+            pred_az, pred_el, _ = self.cartesian_to_spherical(predicted_3d)
 
             # Confirm
             actual_target = self._scan_for_target(
@@ -1212,8 +1212,6 @@ class OrbitalTracker:
             if elapsed < MIN_CYCLE_TIME:
                 time.sleep(MIN_CYCLE_TIME - elapsed)
 
-from enum import Enum
-
 
 class TrackerState(Enum):
     IDLE = 0
@@ -1221,6 +1219,25 @@ class TrackerState(Enum):
     CONFIRMING_DIRECTION = 2
     CALCULATING_PLANE = 3
     TRACKING = 4
+
+
+def command_motors_to_target(azimuth, elevation, shared_data):
+    """
+    Commands the motors to move to a target azimuth and elevation
+    by updating the shared_data dictionary.
+    """
+    try:
+        # NOTE: This implementation does not handle angle wraparound.
+        # For a more robust system, you might want to borrow the
+        # AngleHandler logic from TargetTracker.
+        shared_data["target_azimuth"].value = azimuth
+        shared_data["target_elevation"].value = elevation
+        shared_data["go_to_target"].value = True
+        # The motor process is expected to set go_to_target back to False
+    except KeyError as e:
+        print(f"[command_motors] Error: Shared data key missing: {e}")
+    except Exception as e:
+        print(f"[command_motors] An unexpected error occurred: {e}")
 
 
 class CircularDroneTracker:
@@ -1248,17 +1265,26 @@ class CircularDroneTracker:
         self.drone_angular_velocity = 18.0  # degrees/second
         self.prediction_angle = self.drone_angular_velocity * prediction_time_sec
 
-        # Read search parameters from shared_data
-        self.initial_heading = shared_data.get("initial_heading", {}).value if "initial_heading" in shared_data else -1
-        self.heading_deviation = shared_data.get("heading_deviation",
-                                                 {}).value if "heading_deviation" in shared_data else 30.0
-        self.initial_inclination = shared_data.get("initial_inclination",
-                                                   {}).value if "initial_inclination" in shared_data else -1
-        self.inclination_deviation = shared_data.get("inclination_deviation",
-                                                     {}).value if "inclination_deviation" in shared_data else 10.0
+        # Read search parameters from shared_data (FIXED for safety)
+        self.initial_heading = -1
+        if "initial_heading" in shared_data:
+            self.initial_heading = shared_data["initial_heading"].value
 
-        # Track drone mode - skip detection, just follow predicted path
-        self.track_drone_mode = shared_data.get("track_drone", {}).value if "track_drone" in shared_data else False
+        self.heading_deviation = 30.0
+        if "heading_deviation" in shared_data:
+            self.heading_deviation = shared_data["heading_deviation"].value
+
+        self.initial_inclination = -1
+        if "initial_inclination" in shared_data:
+            self.initial_inclination = shared_data["initial_inclination"].value
+
+        self.inclination_deviation = 10.0
+        if "inclination_deviation" in shared_data:
+            self.inclination_deviation = shared_data["inclination_deviation"].value
+
+        self.track_drone_mode = False
+        if "track_drone" in shared_data:
+            self.track_drone_mode = shared_data["track_drone"].value
 
         # Tracking data
         self.first_point = None  # (az, el, dist)
@@ -1670,7 +1696,6 @@ class CircularDroneTracker:
         print(f"[Track Drone] Orbital plane established. Starting predictive tracking.")
         return True
 
-    # This function must be defined elsewhere in your project
     def _execute_tracking_drone_mode(self, current_az, current_el):
         """Execute tracking in drone mode - no detection, pure prediction."""
         current_time = time.time()
@@ -1747,10 +1772,22 @@ def run_circular_drone_tracker(shared_data):
 
         tracker.start_search(initial_heading, heading_deviation, initial_inclination)
 
-    # Main loop
+    # Main loop - THIS WAS THE PRIMARY FIX
+    while not shared_data["shutdown"].value:
+        try:
+            tracker.update()
+            # Add a small sleep to prevent the loop from consuming 100% CPU
+            time.sleep(0.01) # 100 Hz loop rate
+        except KeyboardInterrupt:
+            print("[CircularDroneTracker] Loop interrupted.")
+            break
+        except Exception as e:
+            print(f"[CircularDroneTracker] Error in main loop: {e}")
+            import traceback
+            traceback.print_exc()
+            break # Exit on error
 
-
-
+    print("[CircularDroneTracker] Shutting down.")
 
 
 def run_tracker_process(shared_data, background_file="background_scan.npy"):
@@ -1772,21 +1809,19 @@ def run_tracker_process(shared_data, background_file="background_scan.npy"):
 
     # Check which tracker to run
     if shared_data.get("demo"):
-        # Run the new specialized orbital tracker
-       # orbital_tracker = OrbitalTracker(shared_data, standard_tracker)
+        # Run the new specialized circular drone tracker
         try:
             run_circular_drone_tracker(shared_data)
         except Exception as e:
             print(f"[Main] Circular Drone Tracker process error: {e}")
 
-
-
-    #elif shared_data.get("debug_mode", False):
+    # FIXED: Uncommented this block to allow fallback to standard tracker
+    elif shared_data.get("debug_mode", False):
         # Run the original general-purpose tracker
-     #   print("[Main] Running standard TargetTracker.")
-      #  try:
-       #     standard_tracker.run()
-        #except Exception as e:
-         #   print(f"[Main] TargetTracker process error: {e}")
+        print("[Main] Running standard TargetTracker.")
+        try:
+            standard_tracker.run()
+        except Exception as e:
+            print(f"[Main] TargetTracker process error: {e}")
 
-   # print("[Main] Tracker process ended.")
+    print("[Main] Tracker process ended.")
