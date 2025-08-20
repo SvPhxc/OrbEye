@@ -581,7 +581,7 @@ def _start_orbit_patrol(shared_data):
             # res = cf.detect(dist_cm, strength)             # if it ignores az/el
             # res = cf.check({"az":az, "el":el, "d":dist_cm, "s":strength})
             def detector(az, el, dist_cm, strength):
-                res = cf.SOME_METHOD_NAME(az, el, dist_cm, strength)  # <-- CHANGE THIS NAME
+                res = cf.is_valid_target(az, el, dist_cm, strength)  # <-- CHANGE THIS NAME
                 # normalize to bool
                 if isinstance(res, (tuple, list)) and len(res):
                     res = res[0]
