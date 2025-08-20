@@ -110,65 +110,6 @@ MAX_SCAN_TIME = 600
 
 
 # ============================================================================
-# SHARED DATA MANAGEMENT
-# ============================================================================
-
-def create_shared_data(manager):
-    """Create complete shared data structure for inter-process communication"""
-    return {
-        # System control
-        "shutdown": manager.Value('b', False),
-        "system_state": manager.Value('i', SystemState.IDLE.value),
-        "last_state_change": manager.Value('d', time.time()),
-
-        # Position data (current actual positions)
-        "stepper_degrees": manager.Value('d', 0.0),
-        "servo_degrees": manager.Value('d', 45.0),
-
-        # Movement control
-        "target_azimuth": manager.Value('d', 0.0),
-        "target_elevation": manager.Value('d', 45.0),
-        "go_to_target": manager.Value('b', False),
-        "target_reached": manager.Value('b', False),
-        "movement_request_id": manager.Value('i', 0),
-        "movement_complete_id": manager.Value('i', 0),
-        "movement_priority": manager.Value('i', Priority.NORMAL.value),
-
-        # Background scanning
-        "background_scan_active": manager.Value('b', False),
-        "background_scan_paused": manager.Value('b', False),
-        "background_path": manager.Array('c', b'/tmp/scan_data.npy'[:256]),
-        "scan_progress": manager.Value('d', 0.0),  # 0-100%
-
-        # Tracker control flags
-        "acquire_points": manager.Value('b', False),
-        "debug_mode": manager.Value('b', False),
-        "demo": manager.Value('b', False),
-        "heading": manager.Value('d', -1.0),
-        "inclination": manager.Value('d', -1.0),
-
-        # LiDAR data with metadata
-        "lidar_data": manager.Array('d', [0.0, 0.0, 0.0]),  # distance, strength, timestamp
-        "lidar_position": manager.Array('d', [0.0, 0.0]),  # azimuth, elevation when read
-        "lidar_valid": manager.Value('b', False),
-
-        # Tracking results
-        "satellite_points": manager.Array('d', [0.0] * 5),  # az, el, dist, strength, time
-
-        # Synchronization
-        "state_lock": manager.Lock(),
-        "movement_lock": manager.Lock(),
-        "lidar_lock": manager.Lock(),
-
-        # Statistics
-        "total_movements": manager.Value('i', 0),
-        "failed_movements": manager.Value('i', 0),
-        "lidar_reads": manager.Value('i', 0),
-        "system_uptime": manager.Value('d', time.time()),
-    }
-
-
-# ============================================================================
 # LIDAR CONTROLLER
 # ============================================================================
 
@@ -193,28 +134,21 @@ class LidarController:
         for port in ports:
             try:
                 self.ser = serial.Serial(port, 115200, timeout=0.1)
-                # Configure LiDAR
                 self.ser.write(bytearray([0x5A, 0x06, 0x03, 0xE8, 0x03, 0x4E]))
                 time.sleep(0.01)
                 self.ser.write(bytearray([0x5A, 0x05, 0x11, 0x70]))
-
                 print(f"[LiDAR] Initialized on {port}")
                 self.serial_connected = True
-
                 self.lidar_thread = threading.Thread(target=self._lidar_reader_thread)
                 self.lidar_thread.daemon = True
                 self.lidar_thread.start()
                 return
-
             except Exception as e:
                 if self.ser:
-                    try:
-                        self.ser.close()
-                    except:
-                        pass
-                    self.ser = None
+                    try: self.ser.close()
+                    except: pass
+                self.ser = None
 
-        # Fallback to simulation
         print("[LiDAR] No serial port found, using simulation mode")
         self.simulation_mode = True
         self.lidar_thread = threading.Thread(target=self._simulation_thread)
@@ -225,43 +159,35 @@ class LidarController:
         """Generate simulated LiDAR data for testing"""
         while not self.shutdown_event.is_set():
             try:
-                # Simulate a target
                 dist = 150 + np.random.randint(-10, 10)
                 strength = 180 + np.random.randint(-20, 20)
                 self.lidar_queue.put_nowait((dist, strength, time.time()))
-                time.sleep(0.001)  # 1kHz simulation
+                time.sleep(0.001)
             except queue.Full:
                 pass
 
     def _lidar_reader_thread(self):
         """Read actual LiDAR data"""
         consecutive_errors = 0
-
         while not self.shutdown_event.is_set():
             try:
                 if not self.ser or not self.ser.is_open:
                     time.sleep(0.1)
                     continue
-
                 self.ser.read_until(b'\x59\x59')
                 frame = self.ser.read(7)
-
                 if len(frame) == 7:
                     dist = frame[0] + (frame[1] << 8)
                     strength = frame[2] + (frame[3] << 8)
                     timestamp = time.time()
-
                     try:
                         self.lidar_queue.put_nowait((dist, strength, timestamp))
                         consecutive_errors = 0
                     except queue.Full:
-                        # Clear old data
                         try:
                             self.lidar_queue.get_nowait()
                             self.lidar_queue.put_nowait((dist, strength, timestamp))
-                        except:
-                            pass
-
+                        except: pass
             except Exception as e:
                 consecutive_errors += 1
                 if consecutive_errors > 10:
@@ -272,10 +198,8 @@ class LidarController:
     def _attempt_reconnect(self):
         """Try to reconnect to serial port"""
         if self.ser:
-            try:
-                self.ser.close()
-            except:
-                pass
+            try: self.ser.close()
+            except: pass
         time.sleep(1)
         self._initialize_serial()
 
@@ -283,8 +207,6 @@ class LidarController:
         """Update shared LiDAR data with position tagging"""
         latest = None
         count = 0
-
-        # Get most recent data
         while not self.lidar_queue.empty() and count < 10:
             try:
                 latest = self.lidar_queue.get_nowait()
@@ -294,19 +216,23 @@ class LidarController:
 
         if latest:
             dist, strength, timestamp = latest
-
-            # Get current position
             current_az = self.shared_data["stepper_degrees"].value
             current_el = self.shared_data["servo_degrees"].value
 
-            # Update with lock
             with self.shared_data["lidar_lock"]:
-                self.shared_data["lidar_data"][:] = [dist, strength, timestamp]
-                self.shared_data["lidar_position"][:] = [current_az, current_el]
+                # --- THIS IS THE FIX ---
+                # You cannot use slice assignment with a manager.Array.
+                # You must assign each element by its index.
+                self.shared_data["lidar_data"][0] = dist
+                self.shared_data["lidar_data"][1] = strength
+                self.shared_data["lidar_data"][2] = timestamp
+
+                self.shared_data["lidar_position"][0] = current_az
+                self.shared_data["lidar_position"][1] = current_el
+
                 self.shared_data["lidar_valid"].value = True
 
             self.shared_data["lidar_reads"].value += 1
-
             return dist, strength, timestamp
 
         return None, None, None
@@ -317,10 +243,8 @@ class LidarController:
         if self.lidar_thread:
             self.lidar_thread.join(timeout=1.0)
         if self.ser and self.ser.is_open:
-            try:
-                self.ser.close()
-            except:
-                pass
+            try: self.ser.close()
+            except: pass
         print("[LiDAR] Stopped")
 
 
@@ -340,23 +264,18 @@ class StepperController:
         self.step_lock = threading.Lock()
         self.movement_active = False
 
-        # Setup GPIO
         self.pi.set_mode(STEPPER_PULSE_PIN, pigpio.OUTPUT)
         self.pi.set_mode(STEPPER_DIR_PIN, pigpio.OUTPUT)
         self.pi.set_mode(STEPPER_ENABLE_PIN, pigpio.OUTPUT)
         self.pi.set_mode(STEPPER_SLEEP_PIN, pigpio.OUTPUT)
 
-        # Enable driver
         self.pi.write(STEPPER_ENABLE_PIN, 0)
         self.pi.write(STEPPER_SLEEP_PIN, 1)
         time.sleep(0.001)
 
-        # Setup callback
         self.step_callback = self.pi.callback(
-            STEPPER_PULSE_PIN, pigpio.RISING_EDGE,
-            self._step_counter_callback
+            STEPPER_PULSE_PIN, pigpio.RISING_EDGE, self._step_counter_callback
         )
-
         print("[Stepper] Initialized")
 
     def _step_counter_callback(self, gpio, level, tick):
@@ -367,10 +286,8 @@ class StepperController:
                     self.step_count += 1
                 else:
                     self.step_count -= 1
-
                 steps_per_rotation = int(360.0 / MICROSTEP_ANGLE)
                 self.step_count = self.step_count % steps_per_rotation
-
                 degrees = self.step_count * MICROSTEP_ANGLE
                 self.shared_data["stepper_degrees"].value = degrees
 
@@ -378,53 +295,38 @@ class StepperController:
         """Execute movement with priority handling"""
         if self.movement_active:
             if priority.value <= Priority.NORMAL.value:
-                return False  # Can't interrupt
-            # High priority can interrupt
+                return False
 
         self.movement_active = True
-
         try:
-            # Stop any ongoing movement
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
             self.pi.wave_tx_stop()
             self.pi.wave_clear()
 
-            # Calculate movement
-            target_angle = np.clip(target_angle, MotorParams.PAN_MIN_ANGLE,
-                                   MotorParams.PAN_MAX_ANGLE)
-
+            target_angle = np.clip(target_angle, MotorParams.PAN_MIN_ANGLE, MotorParams.PAN_MAX_ANGLE)
             current_pos_steps = self.step_count
             target_pos_steps = int(target_angle / MICROSTEP_ANGLE)
             error_steps = target_pos_steps - current_pos_steps
 
-            # Shortest path
             steps_per_rotation = int(360.0 / MICROSTEP_ANGLE)
             if abs(error_steps) > (steps_per_rotation / 2):
-                if error_steps > 0:
-                    error_steps -= steps_per_rotation
-                else:
-                    error_steps += steps_per_rotation
+                if error_steps > 0: error_steps -= steps_per_rotation
+                else: error_steps += steps_per_rotation
 
             total_steps = abs(error_steps)
+            if total_steps < 1: return True
 
-            if total_steps < 1:
-                return True
-
-            # Set direction
             direction = 1 if error_steps > 0 else 0
             with self.step_lock:
                 self.current_direction = direction
                 self.pi.write(STEPPER_DIR_PIN, direction)
 
-            # Execute movement
             return self._execute_movement(total_steps)
-
         finally:
             self.movement_active = False
 
     def _execute_movement(self, total_steps):
         """Execute movement with waveforms"""
-        # Build acceleration profile
         if total_steps <= MotorParams.ACCEL_STEPS * 2:
             accel_steps = (total_steps + 1) // 2
             decel_steps = total_steps - accel_steps
@@ -433,112 +335,73 @@ class StepperController:
             decel_steps = MotorParams.ACCEL_STEPS
 
         pulses = []
-
-        # Acceleration
         for i in range(1, accel_steps + 1):
-            speed = MotorParams.STEPPER_MIN_SPEED + \
-                    (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) * \
-                    (i / accel_steps)
+            speed = MotorParams.STEPPER_MIN_SPEED + (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) * (i / accel_steps)
             delay_us = int(500000 / speed)
-            pulses.extend([
-                pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us),
-                pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us)
-            ])
+            pulses.extend([pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us), pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us)])
 
-        # Cruise
         cruise_steps = total_steps - (accel_steps + decel_steps)
         if cruise_steps > 0:
             delay_us = int(500000 / MotorParams.STEPPER_MAX_SPEED)
             for _ in range(cruise_steps):
-                pulses.extend([
-                    pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us),
-                    pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us)
-                ])
+                pulses.extend([pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us), pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us)])
 
-        # Deceleration
         for i in range(decel_steps, 0, -1):
-            speed = MotorParams.STEPPER_MIN_SPEED + \
-                    (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) * \
-                    (i / decel_steps)
+            speed = MotorParams.STEPPER_MIN_SPEED + (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) * (i / decel_steps)
             delay_us = int(500000 / speed)
-            pulses.extend([
-                pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us),
-                pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us)
-            ])
+            pulses.extend([pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us), pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us)])
 
-        # Send in chunks
         MAX_PULSES = 4000
         start_idx = 0
-
         while start_idx < len(pulses):
-            if self.shared_data["shutdown"].value:
-                return False
-
+            if self.shared_data["shutdown"].value: return False
             end_idx = min(start_idx + MAX_PULSES, len(pulses))
             chunk = pulses[start_idx:end_idx]
-
             try:
                 self.pi.wave_clear()
                 self.pi.wave_add_generic(chunk)
                 wave_id = self.pi.wave_create()
-
                 if wave_id >= 0:
                     self.pi.wave_send_once(wave_id)
-
                     timeout = time.time() + 10.0
                     while self.pi.wave_tx_busy():
                         if time.time() > timeout:
                             self.pi.wave_tx_stop()
                             return False
                         time.sleep(0.01)
-
                     self.pi.wave_delete(wave_id)
-                else:
-                    return False
-
+                else: return False
             except Exception as e:
                 print(f"[Stepper] Movement error: {e}")
                 return False
-
             start_idx = end_idx
-
         return True
 
     def continuous_movement(self, start_az, end_az, speed_dps):
         """Continuous movement for scanning"""
         self.movement_active = True
-
         try:
-            # Setup
             total_distance = abs(end_az - start_az)
             movement_time = total_distance / speed_dps
             steps_per_second = speed_dps / MICROSTEP_ANGLE
-
-            # Direction
             direction = 1 if end_az > start_az else 0
             with self.step_lock:
                 self.current_direction = direction
                 self.pi.write(STEPPER_DIR_PIN, direction)
 
-            # Start PWM with ramp
             target_freq = min(int(steps_per_second), MotorParams.STEPPER_MAX_SPEED)
-
             for i in range(1, 11):
                 freq = int((target_freq / 10) * i)
                 self.pi.hardware_PWM(STEPPER_PULSE_PIN, freq, 500000)
                 time.sleep(0.002)
 
-            # Run
             start_time = time.time()
             while (time.time() - start_time) < movement_time:
-                if self.shared_data["shutdown"].value:
-                    break
+                if self.shared_data["shutdown"].value: break
                 time.sleep(0.001)
 
-            # Stop
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
             return True
-
         finally:
             self.movement_active = False
 
@@ -548,10 +411,8 @@ class StepperController:
         self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
         self.pi.wave_tx_stop()
         self.pi.wave_clear()
-
         if self.step_callback:
             self.step_callback.cancel()
-
         self.pi.write(STEPPER_ENABLE_PIN, 1)
         print("[Stepper] Stopped")
 
@@ -567,28 +428,18 @@ class ServoController:
         self.pi = pi
         self.shared_data = shared_data
         self.shutdown_event = threading.Event()
-
         self.pi.set_mode(SERVO_PIN, pigpio.OUTPUT)
-
-        # Initial position
         self.move_to_angle(45.0)
         print("[Servo] Initialized")
 
     def move_to_angle(self, angle):
         """Move servo to angle"""
         angle = np.clip(angle, MotorParams.SERVO_MIN_ANGLE, MotorParams.SERVO_MAX_ANGLE)
-
-        # Convert to pulse width
         physical_angle = angle - MotorParams.SERVO_ZERO_OFFSET
-        physical_angle = np.clip(physical_angle, MotorParams.SERVO_MIN_ANGLE,
-                                 MotorParams.SERVO_MAX_ANGLE)
-
+        physical_angle = np.clip(physical_angle, MotorParams.SERVO_MIN_ANGLE, MotorParams.SERVO_MAX_ANGLE)
         pulse_range = MotorParams.SERVO_MAX_PULSE - MotorParams.SERVO_MIN_PULSE
         angle_range = MotorParams.SERVO_MAX_ANGLE - MotorParams.SERVO_MIN_ANGLE
-
-        pulse_width = MotorParams.SERVO_MIN_PULSE + \
-                      (physical_angle / angle_range) * pulse_range
-
+        pulse_width = MotorParams.SERVO_MIN_PULSE + (physical_angle / angle_range) * pulse_range
         self.pi.set_servo_pulsewidth(SERVO_PIN, int(pulse_width))
         self.shared_data["servo_degrees"].value = angle
 
@@ -597,10 +448,8 @@ class ServoController:
         while not self.shutdown_event.is_set():
             target = self.shared_data["target_elevation"].value
             current = self.shared_data["servo_degrees"].value
-
             if abs(target - current) > 0.5:
                 self.move_to_angle(target)
-
             self.shutdown_event.wait(0.001)
 
     def stop(self):
@@ -627,52 +476,33 @@ class BackgroundScanner:
 
     def start_scan(self, lidar, stepper, servo):
         """Execute scan with pause capability"""
-        if not self.shared_data["background_scan_active"].value:
-            return False
+        if not self.shared_data["background_scan_active"].value: return False
+        if self.shared_data["background_scan_paused"].value: return True
 
-        # Check if paused by tracker
-        if self.shared_data["background_scan_paused"].value:
-            return True  # Still active but paused
-
-        # Move servo
         self.shared_data["target_elevation"].value = self.current_elevation
         time.sleep(SERVO_MOVE_TIME)
 
-        # Azimuth sweep
-        if self.scan_direction == 1:
-            start_az, end_az = 0, 360
-        else:
-            start_az, end_az = 360, 0
-
-        # Move to start
+        if self.scan_direction == 1: start_az, end_az = 0, 360
+        else: start_az, end_az = 360, 0
         stepper.move_to_angle(start_az)
         time.sleep(0.05)
 
-        # Continuous movement with data collection
         movement_active = threading.Event()
         movement_active.set()
-
         def movement_thread():
             stepper.continuous_movement(start_az, end_az, SCAN_AZIMUTH_SPEED)
             movement_active.clear()
-
         thread = threading.Thread(target=movement_thread)
         thread.daemon = True
         thread.start()
 
-        # Collect data
         self._collect_data(lidar, movement_active)
-
         thread.join(timeout=15)
 
-        # Update progress
-        progress = ((SCAN_TILT_MAX - self.current_elevation) /
-                    (SCAN_TILT_MAX - SCAN_TILT_MIN)) * 100
+        progress = ((SCAN_TILT_MAX - self.current_elevation) / (SCAN_TILT_MAX - SCAN_TILT_MIN)) * 100
         self.shared_data["scan_progress"].value = progress
 
-        # Next elevation
         self.current_elevation -= SCAN_ELEVATION_STEP
-
         if self.current_elevation < SCAN_TILT_MIN:
             self._save_data()
             self._reset()
@@ -684,11 +514,7 @@ class BackgroundScanner:
     def pause(self):
         """Pause scan and save state"""
         self.paused = True
-        self.scan_state = {
-            'elevation': self.current_elevation,
-            'direction': self.scan_direction,
-            'data_count': len(self.data_buffer)
-        }
+        self.scan_state = {'elevation': self.current_elevation, 'direction': self.scan_direction, 'data_count': len(self.data_buffer)}
         print(f"[Scanner] Paused at elevation {self.current_elevation}°")
 
     def resume(self):
@@ -703,27 +529,24 @@ class BackgroundScanner:
         """Collect data during movement"""
         interval = 1.0 / SCAN_DATA_RATE
         next_time = time.time()
-
         while movement_active.is_set():
             if time.time() >= next_time:
                 dist, strength, _ = lidar.update_lidar_data()
-
                 if dist:
                     az = self.shared_data["stepper_degrees"].value
                     el = self.shared_data["servo_degrees"].value
                     self.data_buffer.append([az, el, dist, strength])
-
                 next_time += interval
-
             time.sleep(0.0005)
 
     def _save_data(self):
         """Save scan data"""
         if self.data_buffer:
             try:
+                # Correctly decode the ctypes string buffer
                 path = self.shared_data["background_path"].value.decode('utf-8').rstrip('\x00')
                 np.save(path, np.array(self.data_buffer))
-                print(f"[Scanner] Saved {len(self.data_buffer)} points")
+                print(f"[Scanner] Saved {len(self.data_buffer)} points to {path}")
             except Exception as e:
                 print(f"[Scanner] Save error: {e}")
 
@@ -752,50 +575,33 @@ class MovementCoordinator:
 
     def handle_tracker_request(self):
         """Process high-priority tracker movement"""
-        if not self.shared_data["go_to_target"].value:
-            return False
+        if not self.shared_data["go_to_target"].value: return False
 
-        # Get request details
         request_id = self.shared_data["movement_request_id"].value
+        if request_id <= self.current_request_id: return False
+
         target_az = self.shared_data["target_azimuth"].value
         target_el = self.shared_data["target_elevation"].value
         priority = Priority(self.shared_data["movement_priority"].value)
+        print(f"[Coordinator] Processing movement request {request_id} to ({target_az:.1f}°, {target_el:.1f}°)")
 
-        # Check if already processed
-        if request_id <= self.current_request_id:
-            return False
-
-        print(f"[Coordinator] Processing movement request {request_id} "
-              f"to ({target_az:.1f}°, {target_el:.1f}°)")
-
-        # Execute movement
         with self.shared_data["state_lock"]:
             self.shared_data["system_state"].value = SystemState.TRACKER_MOVE.value
 
-        # Move servo first
         self.servo.move_to_angle(target_el)
-
-        # Move stepper with priority
         success = self.stepper.move_to_angle(target_az, priority)
-
-        # Wait for servo
         time.sleep(MotorParams.MOVEMENT_SETTLE_TIME)
 
-        # Update status
         self.shared_data["target_reached"].value = success
         self.shared_data["movement_complete_id"].value = request_id
         self.shared_data["go_to_target"].value = False
 
-        if success:
-            self.shared_data["total_movements"].value += 1
-        else:
-            self.shared_data["failed_movements"].value += 1
+        if success: self.shared_data["total_movements"].value += 1
+        else: self.shared_data["failed_movements"].value += 1
 
         self.current_request_id = request_id
-
         with self.shared_data["state_lock"]:
             self.shared_data["system_state"].value = SystemState.IDLE.value
-
         return success
 
 
@@ -821,62 +627,47 @@ def hardware_controller_process(shared_data):
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        # Initialize pigpio
         pi = pigpio.pi()
         if not pi.connected:
-            print("[Controller] Failed to connect to pigpio daemon")
-            print("[Controller] Run: sudo pigpiod")
+            print("[Controller] Failed to connect to pigpio daemon. Run: sudo pigpiod")
             return
 
         print("[Controller] Initializing subsystems...")
-
-        # Initialize components
         stepper = StepperController(pi, shared_data)
         servo = ServoController(pi, shared_data)
         lidar = LidarController(shared_data)
         scanner = BackgroundScanner(shared_data)
         coordinator = MovementCoordinator(shared_data, stepper, servo)
 
-        # Start servo thread
         servo_thread = threading.Thread(target=servo.control_loop)
         servo_thread.daemon = True
         servo_thread.start()
 
         print("[Controller] System ready")
-
-        # Main control loop
         last_state = SystemState.IDLE
 
         while not shared_data["shutdown"].value:
-            # Update LiDAR
             lidar.update_lidar_data()
 
-            # Get current state
             with shared_data["state_lock"]:
                 current_state = SystemState(shared_data["system_state"].value)
 
-            # Log state changes
             if current_state != last_state:
                 print(f"[Controller] State: {last_state.name} -> {current_state.name}")
                 shared_data["last_state_change"].value = time.time()
                 last_state = current_state
 
-            # Handle tracker requests (highest priority)
             if shared_data["go_to_target"].value:
-                # Pause scan if active
                 if current_state == SystemState.SCANNING:
                     scanner.pause()
                     shared_data["background_scan_paused"].value = True
 
-                # Process movement
                 coordinator.handle_tracker_request()
 
-                # Resume scan if it was paused
                 if shared_data["background_scan_paused"].value:
                     scanner.resume()
                     shared_data["background_scan_paused"].value = False
 
-            # Handle scanning
             elif shared_data["background_scan_active"].value:
                 if current_state == SystemState.IDLE:
                     with shared_data["state_lock"]:
@@ -893,27 +684,21 @@ def hardware_controller_process(shared_data):
         print(f"[Controller] Error: {e}")
         import traceback
         traceback.print_exc()
-
-        with shared_data["state_lock"]:
-            shared_data["system_state"].value = SystemState.ERROR.value
+        if "state_lock" in shared_data:
+            with shared_data["state_lock"]:
+                shared_data["system_state"].value = SystemState.ERROR.value
 
     finally:
         print("[Controller] Shutting down...")
+        if "state_lock" in shared_data:
+            with shared_data["state_lock"]:
+                shared_data["system_state"].value = SystemState.SHUTDOWN.value
 
-        with shared_data["state_lock"]:
-            shared_data["system_state"].value = SystemState.SHUTDOWN.value
-
-        # Stop components
-        if stepper:
-            stepper.stop()
-        if servo:
-            servo.stop()
-        if servo_thread and servo_thread.is_alive():
-            servo_thread.join(timeout=2)
-        if lidar:
-            lidar.stop()
-        if pi and pi.connected:
-            pi.stop()
+        if stepper: stepper.stop()
+        if servo: servo.stop()
+        if servo_thread and servo_thread.is_alive(): servo_thread.join(timeout=2)
+        if lidar: lidar.stop()
+        if pi and pi.connected: pi.stop()
 
         print("[Controller] Shutdown complete")
 
@@ -925,9 +710,9 @@ def hardware_controller_process(shared_data):
 def run_hardware_controller(shared_data=None):
     """Run the hardware controller"""
     if shared_data is None:
-        # Create shared data if not provided
         manager = Manager()
-        shared_data = create_shared_data(manager)
+        # This is just for standalone testing, not used when called from main.py
+        shared_data = {}
 
     print("=" * 60)
     print("Hardware Controller - Integrated Version")
@@ -944,3 +729,6 @@ def run_hardware_controller(shared_data=None):
         import traceback
         traceback.print_exc()
 
+
+if __name__ == "__main__":
+    run_hardware_controller()
