@@ -1212,7 +1212,7 @@ class OrbitalTracker:
             if elapsed < MIN_CYCLE_TIME:
                 time.sleep(MIN_CYCLE_TIME - elapsed)
 
-import Enum
+from enum import Enum
 
 
 class TrackerState(Enum):
