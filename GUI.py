@@ -16,33 +16,47 @@ from datahandler import (
 class Toggle(QtWidgets.QCheckBox):
     def __init__(self, parent=None, *, track_radius=13, thumb_radius=11, duration_ms=140):
         super().__init__(parent)
-        self._track_r = track_radius
-        self._thumb_r = thumb_radius
-        self._offset = 1.0 if self.isChecked() else 0.0
+        self._track_r = int(track_radius)
+        self._thumb_r = int(thumb_radius)
+        self._offset_val = 1.0 if self.isChecked() else 0.0
 
+        # Smooth animation
         self._anim = QtCore.QPropertyAnimation(self, b"offset", self)
-        self._anim.setDuration(duration_ms)
+        self._anim.setDuration(int(duration_ms))
+        self._anim.setEasingCurve(QtCore.QEasingCurve.InOutQuad)
 
-        self.toggled.connect(self._start_anim)
-        self.setCursor(QtCore.Qt.PointingHandCursor)
+        # Make sure it actually gets space & accepts clicks
         self.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        self.setMinimumSize(self.sizeHint())
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.toggled.connect(self._start_anim)
 
-    # --- animated property ---
-    def getOffset(self): return self._offset
-    def setOffset(self, v): self._offset = float(v); self.update()
+    # Ensure the whole rect is clickable
+    def hitButton(self, pos: QtCore.QPoint) -> bool:
+        return self.rect().contains(pos)
+
+    # Animated property
+    def getOffset(self) -> float:
+        return self._offset_val
+    def setOffset(self, v: float) -> None:
+        self._offset_val = float(v)
+        self.update()
     offset = QtCore.pyqtProperty(float, fget=getOffset, fset=setOffset)
 
-    def sizeHint(self):
-        # track width ≈ 2*track + margin; height ≈ 2*track
-        return QtCore.QSize(self._track_r * 2 + 20, self._track_r * 2)
+    def sizeHint(self) -> QtCore.QSize:
+        # track width ≈ 2*track + margins; height ≈ 2*track
+        w = self._track_r * 2 + 20
+        h = self._track_r * 2
+        return QtCore.QSize(w, h)
 
-    def _start_anim(self, on):
+    def _start_anim(self, on: bool) -> None:
         self._anim.stop()
-        self._anim.setStartValue(self._offset)
+        self._anim.setStartValue(self._offset_val)
         self._anim.setEndValue(1.0 if on else 0.0)
         self._anim.start()
 
-    def paintEvent(self, e):
+    def paintEvent(self, e) -> None:
         p = QtGui.QPainter(self)
         p.setRenderHint(QtGui.QPainter.Antialiasing, True)
         rect = self.rect().adjusted(0, 0, -1, -1)
@@ -55,15 +69,18 @@ class Toggle(QtWidgets.QCheckBox):
         p.setBrush(track)
         p.drawRoundedRect(rect, self._track_r, self._track_r)
 
-        # Thumb
+        # Thumb position
         margin = rect.height() // 2
         x0 = rect.left() + margin
         x1 = rect.right() - margin
-        cx = x0 + (x1 - x0) * self._offset
+        cx = x0 + (x1 - x0) * self._offset_val
         cy = rect.center().y()
+
+        # Thumb
         p.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 40)))
         p.setBrush(QtGui.QBrush(QtGui.QColor("white")))
         p.drawEllipse(QtCore.QPointF(cx, cy), self._thumb_r, self._thumb_r)
+
 
 
 
@@ -178,9 +195,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
         lbl_graf.setStyleSheet("color: #555;")
         row_h.addWidget(lbl_graf)
 
-        self.switch_grafana = Toggle()
-        self.switch_grafana.setChecked(False)           # start OFF (dummy)
-        # optional: if you want to see its state in console for now
+        self.switch_grafana = Toggle(track_radius=14, thumb_radius=12, duration_ms=160)
+        self.switch_grafana.setChecked(False)
         self.switch_grafana.toggled.connect(lambda on: print(f"[GUI] Grafana toggle: {on}"))
         row_h.addWidget(self.switch_grafana)
 
