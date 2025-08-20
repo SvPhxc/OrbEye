@@ -1,656 +1,779 @@
-# tracking_logic.py
+#!/usr/bin/env python3
+"""
+Precision Tracking Logic with Position Validation
+Validates that LiDAR measurements match expected motor positions
+"""
 
 import time
-import threading
-import numpy as np
-from scipy.spatial import cKDTree
-from collections import deque
 import math
+import numpy as np
+from collections import deque
 from enum import Enum
+import threading
 
 
-class TrackingState(Enum):
+class TrackingMode(Enum):
+    """Tracking modes"""
     IDLE = 0
-    ACQUIRING = 1
-    TRACKING = 2
-    DEBUG_MODE = 3
-    REACTIVE_MODE = 4
+    ORBITAL = 1   # Predictive tracking for orbiting drone
+    REACTIVE = 2  # Simple reactive tracking for hand
+    ACQUIRING = 3 # Initial target acquisition
 
 
-class ClutterFilter:
+class PositionValidator:
     """
-    A robust filter that rejects static background objects by first finding clutter
-    in the same direction (az/el) and then checking if the new point is
-    significantly closer than the known background object.
+    Validates that LiDAR measurements correspond to expected positions
+    Detects and compensates for synchronization errors
     """
 
-    def __init__(self, background_file="background_data.npy", angular_tolerance=2.0, distance_margin_cm=50.0):
+    def __init__(self, tolerance_degrees=0.5):
+        self.tolerance = tolerance_degrees
+        self.validation_history = deque(maxlen=100)
+        self.sync_offset_az = 0.0  # Learned synchronization offset
+        self.sync_offset_el = 0.0
+        self.calibrated = False
+
+    def validate_measurement(self, lidar_az, lidar_el, motor_az, motor_el, timestamp):
         """
-        Initializes the filter with a 2D (azimuth, elevation) background map.
-
-        Args:
-            background_file (str): Path to the background scan data.
-            angular_tolerance (float): The maximum angle (in degrees) to consider a point
-                                       as being in the "same direction" as a background point.
-            distance_margin_cm (float): A new point must be at least this much closer
-                                        than a background object in the same direction to be
-                                        considered a valid target.
+        Validate that LiDAR measurement position matches motor position
+        Returns (is_valid, corrected_az, corrected_el)
         """
-        self.angular_tolerance = angular_tolerance
-        self.distance_margin_cm = distance_margin_cm
-        self.background_tree = None
-        self.background_data = None
+        # Calculate position error
+        az_error = lidar_az - motor_az
+        el_error = lidar_el - motor_el
 
-        try:
-            # Load background data [azimuth, elevation, distance_cm, strength]
-            self.background_data = np.load(background_file)
-            print(f"[ClutterFilter] Loaded {len(self.background_data)} background points.")
+        # Handle azimuth wrap-around
+        if az_error > 180:
+            az_error -= 360
+        elif az_error < -180:
+            az_error += 360
 
-            # --- KEY CHANGE ---
-            # Build k-d tree on directional coordinates ONLY [az, el] for fast angular search.
-            coords = self.background_data[:, [0, 1]]
-            self.background_tree = cKDTree(coords)
-            print("[ClutterFilter] 2D (directional) k-d tree built successfully.")
+        # Store in history for calibration
+        self.validation_history.append({
+            'timestamp': timestamp,
+            'az_error': az_error,
+            'el_error': el_error,
+            'lidar_az': lidar_az,
+            'lidar_el': lidar_el,
+            'motor_az': motor_az,
+            'motor_el': motor_el
+        })
 
-        except FileNotFoundError:
-            print(f"[ClutterFilter] WARNING: Background file '{background_file}' not found. Running without clutter filtering.")
-        except Exception as e:
-            print(f"[ClutterFilter] ERROR loading background data: {e}")
+        # Auto-calibrate after enough samples
+        if not self.calibrated and len(self.validation_history) >= 50:
+            self._calibrate_offsets()
 
-    def is_valid_target(self, azimuth, elevation, distance, strength):
-        """
-        Checks if a measurement is a valid target or background clutter.
+        # Apply learned offsets
+        corrected_az = lidar_az - self.sync_offset_az
+        corrected_el = lidar_el - self.sync_offset_el
 
-        Returns:
-            bool: True if the target is valid, False if it's likely clutter.
-        """
-        if self.background_tree is None:
-            return True  # No background data, so all targets are considered valid.
+        # Check if within tolerance
+        final_az_error = abs(corrected_az - motor_az)
+        final_el_error = abs(corrected_el - motor_el)
 
-        query_point = np.array([azimuth, elevation])
-        try:
-            # Query the 2D tree to find the angularly closest background point.
-            angular_dist, idx = self.background_tree.query(query_point, k=1)
+        if final_az_error > 180:
+            final_az_error = 360 - final_az_error
 
-            # 1. Is there a background object in this direction?
-            if angular_dist < self.angular_tolerance:
-                # 2. Get the distance of that background object.
-                bg_distance = self.background_data[idx, 2]
+        is_valid = (final_az_error <= self.tolerance and final_el_error <= self.tolerance)
 
-                # 3. Is the new measurement significantly IN FRONT of the background?
-                if distance < (bg_distance - self.distance_margin_cm):
-                    return True  # Yes, it's a valid target in front of the background.
-                else:
-                    # No, it's at or behind the background object. It's clutter.
-                    return False
+        if not is_valid and self.calibrated:
+            print(f"[Validator] Position mismatch: Az={final_az_error:.2f}° El={final_el_error:.2f}°")
 
-            # If no background points are nearby in this direction, it's a valid target.
-            return True
+        return is_valid, corrected_az, corrected_el
 
-        except Exception:
-            return True # Fail-safe: if the query fails, accept the measurement.
-
-
-class OrbitalEKF:
-    """Extended Kalman Filter for orbital tracking with strength-aware measurement noise."""
-
-    def __init__(self):
-        """Initialize EKF for 6-state orbital tracking [x, y, z, vx, vy, vz]."""
-        self.state = np.zeros(6)  # [x, y, z, vx, vy, vz]
-        self.P = np.eye(6) * 1000  # Large initial uncertainty
-        self.Q = np.diag([0.1, 0.1, 0.1, 0.01, 0.01, 0.01])  # Process noise
-        self.initialized = False
-        self.last_update_time = time.time()
-
-    def predict(self, dt):
-        """Predict step with orbital dynamics."""
-        if not self.initialized:
+    def _calibrate_offsets(self):
+        """Auto-calibrate synchronization offsets from history"""
+        if len(self.validation_history) < 20:
             return
 
-        # State transition matrix (simplified orbital dynamics)
-        F = np.eye(6)
-        F[0:3, 3:6] = np.eye(3) * dt
+        # Calculate median offsets (robust to outliers)
+        az_errors = [h['az_error'] for h in self.validation_history]
+        el_errors = [h['el_error'] for h in self.validation_history]
 
-        # Simple orbital acceleration model (could be enhanced)
-        r = np.linalg.norm(self.state[0:3])
-        if r > 1.0:  # Avoid division by zero
-            # Gravitational acceleration (simplified)
-            mu = 1000  # Gravitational parameter (tunable)
-            acc_factor = -mu / (r ** 3)
-            F[3, 0] = acc_factor * dt
-            F[4, 1] = acc_factor * dt
-            F[5, 2] = acc_factor * dt
+        self.sync_offset_az = np.median(az_errors)
+        self.sync_offset_el = np.median(el_errors)
+
+        # Calculate consistency
+        az_std = np.std(az_errors)
+        el_std = np.std(el_errors)
+
+        if az_std < 1.0 and el_std < 1.0:  # Good consistency
+            self.calibrated = True
+            print(f"[Validator] Calibrated - Offsets: Az={self.sync_offset_az:.3f}° El={self.sync_offset_el:.3f}°")
+            print(f"[Validator] Sync quality: Az_std={az_std:.3f}° El_std={el_std:.3f}°")
+        else:
+            print(f"[Validator] Poor sync consistency - Az_std={az_std:.3f}° El_std={el_std:.3f}°")
+
+
+class PrecisionClutterFilter:
+    """
+    Enhanced clutter filter with position-aware filtering
+    """
+
+    def __init__(self, background_file="background_scan.npy"):
+        self.background_data = None
+        self.position_grid = {}
+        self.loaded = False
+
+        try:
+            # Load background data with position information
+            data = np.load(background_file)
+            if len(data) > 0:
+                # Build precise position grid
+                for point in data:
+                    if len(point) >= 4:
+                        az, el, dist, strength = point[:4]
+                        # Use 2-degree grid cells for higher precision
+                        grid_key = (round(az/2)*2, round(el/2)*2)
+
+                        if grid_key not in self.position_grid:
+                            self.position_grid[grid_key] = []
+                        self.position_grid[grid_key].append({
+                            'dist': dist,
+                            'strength': strength,
+                            'exact_az': az,
+                            'exact_el': el
+                        })
+
+                # Calculate statistics per grid cell
+                for key in self.position_grid:
+                    points = self.position_grid[key]
+                    distances = [p['dist'] for p in points]
+                    self.position_grid[key] = {
+                        'mean_dist': np.mean(distances),
+                        'min_dist': np.min(distances),
+                        'std_dist': np.std(distances),
+                        'count': len(points)
+                    }
+
+                self.loaded = True
+                print(f"[ClutterFilter] Loaded {len(self.position_grid)} precision grid cells")
+
+        except Exception as e:
+            print(f"[ClutterFilter] No background data: {e}")
+
+    def is_valid_target(self, azimuth, elevation, distance, strength, timestamp=None):
+        """
+        Precise validation considering exact position
+        """
+        # Basic signal quality check
+        if strength < 100:
+            return False
+
+        if not self.loaded:
+            # No background - use basic distance check
+            return 100 < distance < 500
+
+        # Get nearest grid cells (check 2x2 neighborhood)
+        grid_az = round(azimuth/2)*2
+        grid_el = round(elevation/2)*2
+
+        # Check neighboring cells for better statistics
+        min_background = float('inf')
+
+        for daz in [-2, 0, 2]:
+            for del_ in [-2, 0, 2]:
+                key = ((grid_az + daz) % 360, max(0, min(90, grid_el + del_)))
+                if key in self.position_grid:
+                    cell = self.position_grid[key]
+                    # Use minimum distance minus 2 standard deviations
+                    threshold = cell['min_dist'] - 2 * max(10, cell['std_dist'])
+                    min_background = min(min_background, threshold)
+
+        # Target must be significantly closer than background
+        if min_background < float('inf'):
+            return distance < min_background - 30  # 30cm margin
+
+        # No background data for this region
+        return 100 < distance < 500
+
+
+class PrecisionOrbitalTracker:
+    """
+    High-precision orbital tracker with Kalman filtering
+    """
+
+    def __init__(self, orbit_period=20.0, orbit_radius_m=2.0):
+        self.orbit_period = orbit_period
+        self.orbit_radius = orbit_radius_m * 100  # Convert to cm
+        self.angular_velocity = 2 * math.pi / orbit_period  # rad/sec
+
+        # Kalman filter state: [angle, angular_velocity, radius, radial_velocity]
+        self.state = np.array([0.0, self.angular_velocity, self.orbit_radius, 0.0])
+        self.covariance = np.eye(4) * 100
+
+        # Process noise (how much the model can vary)
+        self.Q = np.diag([0.01, 0.001, 10.0, 1.0])  # angle, vel, radius, radial_vel
+
+        # Measurement noise (based on LiDAR precision)
+        self.R = np.diag([0.1, 1.0])  # angle noise, distance noise (cm)
+
+        self.initialized = False
+        self.last_update_time = None
+        self.tracking_quality = 0.0
+        self.measurement_history = deque(maxlen=50)
+
+        print(f"[OrbitalTracker] Precision tracker initialized")
+        print(f"  Period: {orbit_period}s, Radius: {orbit_radius_m}m")
+
+    def initialize_from_measurements(self, measurements):
+        """
+        Initialize tracker from multiple measurements
+        measurements: list of (az, el, dist, strength, timestamp)
+        """
+        if len(measurements) < 3:
+            return False
+
+        # Estimate initial state from measurements
+        angles = []
+        distances = []
+        times = []
+
+        for m in measurements:
+            az, el, dist, strength, ts = m
+            # Convert to orbital angle (assumes horizontal orbit)
+            angle = math.radians(az)
+            angles.append(angle)
+            distances.append(dist)
+            times.append(ts)
+
+        # Estimate angular velocity
+        if len(angles) >= 2:
+            dt = times[-1] - times[0]
+            if dt > 0:
+                dangle = angles[-1] - angles[0]
+                # Handle wrap-around
+                if dangle > math.pi:
+                    dangle -= 2 * math.pi
+                elif dangle < -math.pi:
+                    dangle += 2 * math.pi
+                angular_vel = dangle / dt
+            else:
+                angular_vel = self.angular_velocity
+        else:
+            angular_vel = self.angular_velocity
+
+        # Set initial state
+        self.state[0] = angles[-1]  # Current angle
+        self.state[1] = angular_vel  # Angular velocity
+        self.state[2] = np.mean(distances)  # Average radius
+        self.state[3] = 0.0  # No radial velocity initially
+
+        self.initialized = True
+        self.last_update_time = times[-1]
+
+        print(f"[OrbitalTracker] Initialized: angle={math.degrees(self.state[0]):.1f}°, "
+              f"vel={math.degrees(self.state[1]):.1f}°/s, radius={self.state[2]:.0f}cm")
+
+        return True
+
+    def predict(self, dt):
+        """Kalman filter prediction step"""
+        if not self.initialized:
+            return None
+
+        # State transition matrix
+        F = np.array([
+            [1, dt, 0, 0],   # angle += angular_vel * dt
+            [0, 1, 0, 0],    # angular_vel stays constant
+            [0, 0, 1, dt],   # radius += radial_vel * dt
+            [0, 0, 0, 0.95]  # radial_vel decays slightly
+        ])
 
         # Predict state
         self.state = F @ self.state
 
+        # Wrap angle to [-pi, pi]
+        self.state[0] = (self.state[0] + math.pi) % (2 * math.pi) - math.pi
+
         # Predict covariance
-        self.P = F @ self.P @ F.T + self.Q
+        self.covariance = F @ self.covariance @ F.T + self.Q
 
-    def update(self, measurement, strength):
+        return self.state.copy()
+
+    def update(self, azimuth, elevation, distance, strength, timestamp):
         """
-        Update step with strength-aware measurement noise.
-
-        Args:
-            measurement: [azimuth, elevation, distance] in degrees and cm
-            strength: LiDAR return strength
+        Kalman filter update with new measurement
+        Returns predicted position for next frame
         """
         if not self.initialized:
-            return
+            # Try to initialize
+            self.measurement_history.append((azimuth, elevation, distance, strength, timestamp))
+            if len(self.measurement_history) >= 3:
+                return self.initialize_from_measurements(list(self.measurement_history))
+            return None
 
-        az, el, dist = measurement
+        # Calculate dt and predict
+        dt = timestamp - self.last_update_time if self.last_update_time else 0.01
+        self.predict(dt)
 
-        # Convert measurement to Cartesian
-        az_rad = np.radians(az)
-        el_rad = np.radians(el)
-        dist_m = dist / 100.0
+        # Measurement vector: [angle, distance]
+        z = np.array([math.radians(azimuth), distance])
 
-        z_meas = np.array([
-            dist_m * np.cos(el_rad) * np.cos(az_rad),  # x
-            dist_m * np.cos(el_rad) * np.sin(az_rad),  # y
-            dist_m * np.sin(el_rad)  # z
-        ])
+        # Expected measurement from state
+        h = np.array([self.state[0], self.state[2]])
 
-        # Predicted measurement
-        h_pred = self.state[0:3]
+        # Measurement residual
+        y = z - h
+
+        # Wrap angle residual
+        if y[0] > math.pi:
+            y[0] -= 2 * math.pi
+        elif y[0] < -math.pi:
+            y[0] += 2 * math.pi
 
         # Measurement Jacobian
-        H = np.zeros((3, 6))
-        H[0:3, 0:3] = np.eye(3)
-
-        # **KEY FEATURE**: Strength-aware measurement noise
-        base_var_pos = 1.0
-        base_var_angle = 0.1
-
-        # High strength = direct hit = low noise
-        # Low strength = edge hit = high angular noise, but range is still good
-        strength_factor = max(0.1, min(1.0, strength / 1000.0))  # Normalize strength
-
-        if strength > 500:  # High strength - direct hit
-            pos_variance = base_var_pos * 0.1
-            angular_noise_factor = 1.0
-        else:  # Low strength - edge hit
-            pos_variance = base_var_pos * 1.0
-            angular_noise_factor = 5.0  # Much higher angular uncertainty
-
-        R = np.diag([pos_variance, pos_variance * angular_noise_factor, pos_variance * angular_noise_factor])
-
-        # Innovation
-        y = z_meas - h_pred
+        H = np.array([
+            [1, 0, 0, 0],  # angle measurement
+            [0, 0, 1, 0]   # distance measurement
+        ])
 
         # Innovation covariance
-        S = H @ self.P @ H.T + R
+        S = H @ self.covariance @ H.T + self.R
 
         # Kalman gain
-        K = self.P @ H.T @ np.linalg.inv(S)
+        K = self.covariance @ H.T @ np.linalg.inv(S)
 
-        # Update state and covariance
+        # Update state
         self.state = self.state + K @ y
-        I_KH = np.eye(6) - K @ H
-        self.P = I_KH @ self.P
 
-        self.last_update_time = time.time()
+        # Update covariance
+        self.covariance = (np.eye(4) - K @ H) @ self.covariance
 
-    def get_predicted_position(self, future_time_sec=0.5):
-        """Get predicted position at future time."""
+        # Update tracking quality based on innovation
+        innovation_norm = np.sqrt(y.T @ np.linalg.inv(S) @ y)
+        self.tracking_quality = max(0, min(1, 1.0 - innovation_norm / 10))
+
+        self.last_update_time = timestamp
+
+        # Store measurement
+        self.measurement_history.append((azimuth, elevation, distance, strength, timestamp))
+
+        # Return predicted position for next update
+        return self.get_prediction(0.05)  # 50ms lookahead
+
+    def get_prediction(self, lookahead_seconds):
+        """Get predicted position after lookahead time"""
         if not self.initialized:
             return None
 
-        # Predict forward in time
-        temp_state = self.state.copy()
-        dt = future_time_sec
+        # Make a prediction
+        future_state = self.state.copy()
+        future_state[0] += future_state[1] * lookahead_seconds
+        future_state[2] += future_state[3] * lookahead_seconds
 
-        # Simple ballistic prediction
-        temp_state[0:3] += temp_state[3:6] * dt
+        # Convert to degrees
+        future_az = math.degrees(future_state[0]) % 360
 
-        # Convert back to spherical coordinates
-        x, y, z = temp_state[0:3]
-        r = np.sqrt(x ** 2 + y ** 2 + z ** 2)
+        # Simple elevation model (varies with orbit)
+        orbit_phase = future_state[0] % (2 * math.pi)
+        future_el = 45 + 20 * math.sin(orbit_phase)  # Varies between 25-65 degrees
+        future_el = max(0, min(90, future_el))
 
-        if r < 1.0:
-            return None
+        return future_az, future_el, self.tracking_quality
 
-        el = np.degrees(np.arcsin(z / r))
-        az = np.degrees(np.arctan2(y, x))
+    def get_uncertainty(self):
+        """Get current position uncertainty"""
+        if not self.initialized:
+            return float('inf')
 
-        # Ensure azimuth is in [0, 360)
-        if az < 0:
-            az += 360
+        # Position uncertainty from covariance
+        angle_var = self.covariance[0, 0]
+        dist_var = self.covariance[2, 2]
 
-        return az, el, r * 100  # Return in degrees and cm
+        return math.sqrt(angle_var + dist_var/10000)  # Combined uncertainty metric
 
 
-class Acquirer:
-    """Initial Orbit Determination using multiple measurements."""
+class AdaptiveReactiveTracker:
+    """
+    Adaptive reactive tracker with variable smoothing
+    """
 
     def __init__(self):
-        self.measurements = []
-        self.required_points = 3
+        self.position_filter = None
+        self.velocity_filter = None
+        self.last_update_time = None
+        self.tracking = False
+        self.smoothing_factor = 0.3
+        self.measurement_history = deque(maxlen=20)
 
-    def add_measurement(self, azimuth, elevation, distance, timestamp):
-        """Add a measurement for IOD calculation."""
-        # Convert to Cartesian
-        az_rad = np.radians(azimuth)
-        el_rad = np.radians(elevation)
-        dist_m = distance / 100.0
+        # Adaptive parameters
+        self.min_smoothing = 0.1
+        self.max_smoothing = 0.8
 
-        pos = np.array([
-            dist_m * np.cos(el_rad) * np.cos(az_rad),
-            dist_m * np.cos(el_rad) * np.sin(az_rad),
-            dist_m * np.sin(el_rad)
-        ])
+        print("[ReactiveTracker] Adaptive tracker initialized")
 
-        self.measurements.append((pos, timestamp))
+    def update(self, azimuth, elevation, distance, strength, timestamp):
+        """
+        Update with adaptive smoothing based on target behavior
+        """
+        if not self.tracking:
+            # Initialize filters
+            self.position_filter = np.array([azimuth, elevation])
+            self.velocity_filter = np.array([0.0, 0.0])
+            self.tracking = True
+            self.last_update_time = timestamp
+            print(f"[ReactiveTracker] Started tracking at Az={azimuth:.1f}° El={elevation:.1f}°")
+            return azimuth, elevation
 
-        if len(self.measurements) > self.required_points:
-            self.measurements.pop(0)  # Keep only latest measurements
+        # Calculate time delta
+        dt = timestamp - self.last_update_time if self.last_update_time else 0.01
 
-        return len(self.measurements) >= self.required_points
+        # Calculate instantaneous velocity
+        delta_az = azimuth - self.position_filter[0]
+        delta_el = elevation - self.position_filter[1]
 
-    def compute_initial_state(self):
-        """Compute initial state vector using simplified Herrick-Gibbs method."""
-        if len(self.measurements) < self.required_points:
+        # Handle azimuth wrap-around
+        if delta_az > 180:
+            delta_az -= 360
+        elif delta_az < -180:
+            delta_az += 360
+
+        if dt > 0:
+            instant_vel = np.array([delta_az / dt, delta_el / dt])
+        else:
+            instant_vel = np.array([0.0, 0.0])
+
+        # Update velocity filter
+        vel_smooth = 0.2
+        self.velocity_filter = (1 - vel_smooth) * self.velocity_filter + vel_smooth * instant_vel
+
+        # Calculate adaptive smoothing based on velocity
+        speed = np.linalg.norm(self.velocity_filter)
+
+        if speed < 10:  # Slow target - more smoothing
+            self.smoothing_factor = self.max_smoothing
+        elif speed > 100:  # Fast target - less smoothing
+            self.smoothing_factor = self.min_smoothing
+        else:
+            # Linear interpolation
+            factor = (speed - 10) / 90
+            self.smoothing_factor = self.max_smoothing - factor * (self.max_smoothing - self.min_smoothing)
+
+        # Adjust smoothing based on signal strength
+        if strength > 800:  # Strong signal - trust it more
+            self.smoothing_factor *= 0.7
+        elif strength < 200:  # Weak signal - smooth more
+            self.smoothing_factor = min(self.max_smoothing, self.smoothing_factor * 1.3)
+
+        # Apply adaptive smoothing
+        new_position = np.array([azimuth, elevation])
+        self.position_filter = (1 - self.smoothing_factor) * self.position_filter + self.smoothing_factor * new_position
+
+        # Store in history
+        self.measurement_history.append({
+            'timestamp': timestamp,
+            'position': self.position_filter.copy(),
+            'velocity': self.velocity_filter.copy(),
+            'raw_position': new_position,
+            'strength': strength
+        })
+
+        self.last_update_time = timestamp
+
+        return self.position_filter[0], self.position_filter[1]
+
+    def predict_ahead(self, seconds):
+        """Predict position ahead in time"""
+        if not self.tracking:
             return None
 
-        # Get positions and times
-        positions = [m[0] for m in self.measurements]
-        times = [m[1] for m in self.measurements]
+        predicted = self.position_filter + self.velocity_filter * seconds
 
-        # Simple velocity estimation using finite differences
-        r1, r2, r3 = positions
-        t1, t2, t3 = times
+        # Clamp elevation
+        predicted[1] = max(0, min(90, predicted[1]))
 
-        dt1 = t2 - t1
-        dt2 = t3 - t2
+        # Wrap azimuth
+        predicted[0] = predicted[0] % 360
 
-        if dt1 <= 0 or dt2 <= 0:
-            return None
-
-        # Estimate velocity at middle point
-        v2 = (r3 - r1) / (dt1 + dt2)
-
-        # Return state [position, velocity]
-        state = np.concatenate([r2, v2])
-        return state
-
-
-class HandTrackerState(Enum):
-    IDLE = 0
-    SCANNING = 1
-
-
-import time
-import math
-from enum import Enum
-
-
-# --- Helper objects for the class to be self-contained ---
-
-class HandTrackerState(Enum):
-    """Defines the possible states for the HandTracker."""
-    IDLE = 0
-    SCANNING = 1
-    COASTING = 2
-
-
-
-
-
-# --- Modified HandTracker Class ---
-
-class HandTracker:
-    """
-    High-performance predictive tracker with velocity smoothing, dynamic rate adjustment,
-    and a predictive "coasting" search mode for target reacquisition.
-    """
-
-    def __init__(self, scan_radius=8, scan_points=8, time_per_waypoint=0.06, timeout=1.0, coast_timeout=1.5,
-                 prediction_factor=1.5, velocity_smoothing_factor=0.4):
-        self.scan_radius = scan_radius
-        self.scan_points = scan_points
-        self.time_per_waypoint = time_per_waypoint
-        self.timeout = timeout
-        self.coast_timeout = coast_timeout  # NEW: How long to search before giving up
-        self.prediction_factor = prediction_factor
-        self.velocity_smoothing_factor = velocity_smoothing_factor
-
-        self.state = HandTrackerState.IDLE
-        self.best_point = {'az': 0, 'el': 0, 'strength': 0, 'dist': 0, 'time': 0}
-        self.previous_best_point = None
-        self.scan_path = []
-        self.scan_index = 0
-        self.last_waypoint_time = 0
-
-        # State for smoothed velocity
-        self.smoothed_velocity = {'az': 0.0, 'el': 0.0}
-
-        # --- NEW: State variables for coasting ---
-        self.coast_start_time = 0
-        self.last_coast_update_time = 0
-        self.coasting_target_pos = {'az': 0.0, 'el': 0.0}
+        return predicted[0], predicted[1]
 
     def reset(self):
-        """Resets the tracker to its initial state."""
-        self.state = HandTrackerState.IDLE
-        self.best_point['strength'] = 0
-        self.best_point['time'] = 0
-        self.previous_best_point = None
-        self.smoothed_velocity = {'az': 0.0, 'el': 0.0}
-        self.coast_start_time = 0
-        print("[HandTracker] Reset.")
-
-    def _generate_scan_path(self, center_az, center_el):
-        """Generates a circular scan path around a center point."""
-        self.scan_path = []
-        for i in range(self.scan_points):
-            angle = (i / self.scan_points) * 2 * math.pi
-            az_offset = self.scan_radius * math.cos(angle)
-            el_offset = self.scan_radius * math.sin(angle)
-            self.scan_path.append((center_az + az_offset, center_el + el_offset))
-        norm_az = center_az % 360
-        print(f"[HandTracker] Generated new scan path centered at Az={norm_az:.1f}, El={center_el:.1f}")
-
-    def update(self, current_az, current_el, measurement, shared_data):
-        current_time = time.time()
-
-        if self.state == HandTrackerState.IDLE:
-            if measurement:
-                dist, strength = measurement
-                self.state = HandTrackerState.SCANNING
-                self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
-                                   'time': current_time}
-                self.previous_best_point = self.best_point.copy()
-                self._generate_scan_path(current_az, current_el)
-                self.scan_index = 0
-                self.last_waypoint_time = current_time
-                print(f"[HandTracker] Acquired target. Starting scan at Az={current_az:.1f}, El={current_el:.1f}")
-
-        elif self.state == HandTrackerState.SCANNING:
-            # --- TRANSITION TO COASTING on target loss ---
-            if current_time - self.best_point['time'] > self.timeout:
-                print("[HandTracker] Target lost. Entering COASTING mode.")
-                self.state = HandTrackerState.COASTING
-                self.coast_start_time = current_time
-                self.last_coast_update_time = current_time
-                self.coasting_target_pos = {'az': self.best_point['az'], 'el': self.best_point['el']}
-                return
-
-            if measurement:
-                dist, strength = measurement
-                #check distance against background scan
-
-                if strength > self.best_point['strength']:
-                    self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
-                                        'time': current_time}
-
-            # Dynamic Rate Adjustment
-            time_since_last_waypoint = current_time - self.last_waypoint_time
-            if time_since_last_waypoint >= self.time_per_waypoint:
-                waypoints_to_advance = max(1, int(time_since_last_waypoint / self.time_per_waypoint))
-                self.last_waypoint_time = current_time
-                for _ in range(waypoints_to_advance):
-                    command_az, command_el = self.scan_path[self.scan_index]
-                    command_motors_to_target(command_az, command_el, shared_data)
-                    self.scan_index = (self.scan_index + 1)
-
-                    if self.scan_index >= len(self.scan_path):
-                        self.scan_index = 0
-                        next_center_az, next_center_el = self.best_point['az'], self.best_point['el']
-
-                        if self.previous_best_point and self.previous_best_point['strength'] > 0:
-                            raw_delta_az = self.best_point['az'] - self.previous_best_point['az']
-                            if raw_delta_az > 180:
-                                raw_delta_az -= 360
-                            elif raw_delta_az < -180:
-                                raw_delta_az += 360
-                            raw_delta_el = self.best_point['el'] - self.previous_best_point['el']
-                            s = self.velocity_smoothing_factor
-                            self.smoothed_velocity['az'] = (s * self.smoothed_velocity['az']) + ((1 - s) * raw_delta_az)
-                            self.smoothed_velocity['el'] = (s * self.smoothed_velocity['el']) + ((1 - s) * raw_delta_el)
-                            next_center_az = self.best_point['az'] + (
-                                        self.smoothed_velocity['az'] * self.prediction_factor)
-                            next_center_el = self.best_point['el'] + (
-                                        self.smoothed_velocity['el'] * self.prediction_factor)
-
-                        # --- NEW: Save best point to shared data ---
-                        if "tracking_history" in shared_data:
-                            point_data = [self.best_point['az'], self.best_point['el'], self.best_point['dist'],
-                                          self.best_point['strength'], self.best_point['time']]
-                            shared_data["satellite_points"].value = (point_data)
-                            # When you decide it's time to generate the TLE
-                            if len(shared_data["tracking_history"]) >= 30:  # Example: trigger after 5 points
-                                print("[Tracking Logic] Triggering TLE generation.")
-                                shared_data["generate_tle"].value = True
-
-                        self.previous_best_point = self.best_point.copy()
-                        self._generate_scan_path(next_center_az, next_center_el)
-                        self.best_point['strength'] *= 0.9
-
-        # --- NEW: COASTING STATE LOGIC ---
-        elif self.state == HandTrackerState.COASTING:
-            # Failure: Coasted for too long without finding the target
-            if current_time - self.coast_start_time > self.coast_timeout:
-                print("[HandTracker] Coasting failed to reacquire target. Resetting.")
-                self.reset()
-                return
-
-            # Success: Found a target while coasting
-            if measurement:
-                dist, strength = measurement
-                print("[HandTracker] Reacquired target during coast! Resuming scan.")
-                self.state = HandTrackerState.SCANNING
-                self.best_point = {'az': current_az, 'el': current_el, 'dist': dist, 'strength': strength,
-                                   'time': current_time}
-                # Center new scan on the reacquired point
-                self._generate_scan_path(current_az, current_el)
-                self.scan_index = 0
-                self.last_waypoint_time = current_time
-                return
-
-            # Still coasting: Predict and move along the last known velocity vector
-            dt = current_time - self.last_coast_update_time
-            self.last_coast_update_time = current_time
-
-            # Calculate the predicted change in position
-            predicted_delta_az = 4.2*self.smoothed_velocity['az'] * (dt / (self.scan_points * self.time_per_waypoint))
-            predicted_delta_el = 2*self.smoothed_velocity['el'] * (dt / (self.scan_points * self.time_per_waypoint))
-
-            # Update the coasting target position
-            self.coasting_target_pos['az'] += predicted_delta_az
-            self.coasting_target_pos['el'] += predicted_delta_el
-
-            command_motors_to_target(self.coasting_target_pos['az'], self.coasting_target_pos['el'], shared_data)
-
-class ReactiveTracker:
-    """Non-predictive tracker for immediate, reactive tracking of any target."""
-
-    def __init__(self, smoothing_factor=0.4):
-        self.smoothing_factor = smoothing_factor
-        self.target_az = None
-        self.target_el = None
-        self.measurement_history = deque(maxlen=5)
-        self.last_update_time = time.time()
-
-    def update(self, azimuth, elevation, distance, strength):
-        current_time = time.time()
-        measurement = {'az': azimuth, 'el': elevation, 'dist': distance, 'strength': strength, 'time': current_time}
-        self.measurement_history.append(measurement)
-        adaptive_smoothing = self._calculate_adaptive_smoothing(strength)
-
-        if self.target_az is None:
-            self.target_az = azimuth
-            self.target_el = elevation
-        else:
-            az_diff = azimuth - self.target_az
-            if az_diff > 180:
-                az_diff -= 360
-            elif az_diff < -180:
-                az_diff += 360
-            self.target_az = self.target_az + (az_diff * adaptive_smoothing)
-            self.target_el = (self.target_el * (1 - adaptive_smoothing) + elevation * adaptive_smoothing)
-            self.target_az = self.target_az % 360
-
-        self.last_update_time = current_time
-        return self.target_az, self.target_el
-
-    def _calculate_adaptive_smoothing(self, strength):
-        base_smoothing = self.smoothing_factor
-        if strength > 800:
-            strength_factor = 1.5
-        elif strength > 400:
-            strength_factor = 1.2
-        elif strength > 200:
-            strength_factor = 0.8
-        else:
-            strength_factor = 0.5
-        consistency_factor = self._check_measurement_consistency()
-        adaptive_factor = base_smoothing * strength_factor * consistency_factor
-        return max(0.1, min(1.0, adaptive_factor))
-
-    def _check_measurement_consistency(self):
-        if len(self.measurement_history) < 3: return 1.0
-        recent_az = [m['az'] for m in list(self.measurement_history)[-3:]]
-        recent_el = [m['el'] for m in list(self.measurement_history)[-3:]]
-        az_diffs = []
-        for i in range(1, len(recent_az)):
-            diff = recent_az[i] - recent_az[i - 1]
-            if diff > 180:
-                diff -= 360
-            elif diff < -180:
-                diff += 360
-            az_diffs.append(abs(diff))
-        el_diffs = [abs(recent_el[i] - recent_el[i - 1]) for i in range(1, len(recent_el))]
-        if az_diffs and el_diffs:
-            total_change = np.mean(az_diffs) + np.mean(el_diffs)
-            if total_change < 2.0:
-                return 1.2
-            elif total_change < 5.0:
-                return 1.0
-            elif total_change < 10.0:
-                return 0.8
-            else:
-                return 0.6
-        return 1.0
-
-    def get_current_target(self):
-        if self.target_az is None: return None
-        return self.target_az, self.target_el
+        """Reset tracker"""
+        self.tracking = False
+        self.position_filter = None
+        self.velocity_filter = None
+        self.measurement_history.clear()
+        print("[ReactiveTracker] Reset")
 
 
-def command_motors_to_target(azimuth, elevation, shared_data):
-    with shared_data["target_azimuth"].get_lock():
-        shared_data["target_azimuth"].value = azimuth
-    with shared_data["target_elevation"].get_lock():
-        shared_data["target_elevation"].value = elevation
-    with shared_data["go_to_target"].get_lock():
-        shared_data["go_to_target"].value = True
+class PrecisionTrackingLogic:
+    """
+    Main precision tracking logic with position validation
+    """
+
+    def __init__(self, shared_data):
+        self.shared_data = shared_data
+        self.mode = TrackingMode.IDLE
+        self.running = False
+
+        # Initialize components
+        self.validator = PositionValidator(tolerance_degrees=0.5)
+        self.clutter_filter = PrecisionClutterFilter()
+        self.orbital_tracker = PrecisionOrbitalTracker()
+        self.reactive_tracker = AdaptiveReactiveTracker()
+
+        # Tracking state
+        self.last_valid_measurement = None
+        self.lost_target_time = None
+        self.consecutive_detections = 0
+        self.search_state = {'index': 0, 'pattern': 'spiral'}
+
+        # Performance monitoring
+        self.stats = {
+            'updates': 0,
+            'valid_measurements': 0,
+            'sync_errors': 0,
+            'last_print_time': time.time()
+        }
+
+        print("[TrackingLogic] Precision tracking initialized")
+
+    def _get_synchronized_measurement(self):
+        """Get LiDAR measurement with validated position"""
+        # Get raw data
+        with self.shared_data["lidar_data"].get_lock():
+            dist, strength, timestamp = self.shared_data["lidar_data"][:]
+
+        # Get LiDAR-reported position
+        with self.shared_data["lidar_position"].get_lock():
+            lidar_az, lidar_el = self.shared_data["lidar_position"][:]
+
+        # Get current motor position
+        motor_az = self.shared_data["stepper_degrees"].value
+        motor_el = self.shared_data["servo_degrees"].value
+
+        # Validate synchronization
+        is_valid, corrected_az, corrected_el = self.validator.validate_measurement(
+            lidar_az, lidar_el, motor_az, motor_el, timestamp
+        )
+
+        if not is_valid:
+            self.stats['sync_errors'] += 1
+
+        return corrected_az, corrected_el, dist, strength, timestamp, is_valid
+
+    def _command_motors_precise(self, azimuth, elevation, priority=1):
+        """Send precise movement command with priority"""
+        # Check if motors are ready
+        if self.shared_data["target_reached"].value or not self.shared_data["go_to_target"].value:
+            self.shared_data["target_azimuth"].value = azimuth
+            self.shared_data["target_elevation"].value = elevation
+            self.shared_data["go_to_target"].value = True
+            return True
+        return False
+
+    def _adaptive_search_pattern(self):
+        """
+        Generate adaptive search pattern based on lost target
+        """
+        if not self.last_valid_measurement:
+            return None
+
+        base_az, base_el, last_dist, _, last_time = self.last_valid_measurement
+        time_lost = time.time() - last_time
+
+        # Expand search radius based on time lost
+        search_radius = min(30, 5 + time_lost * 5)  # Max 30 degrees
+
+        # Spiral pattern
+        patterns = []
+        steps = 8
+        for ring in range(1, 4):
+            radius = search_radius * ring / 3
+            for i in range(steps * ring):
+                angle = (2 * math.pi * i) / (steps * ring)
+                daz = radius * math.cos(angle)
+                del_ = radius * math.sin(angle) * 0.5  # Elliptical for elevation
+                patterns.append((daz, del_))
+
+        if self.search_state['index'] >= len(patterns):
+            self.search_state['index'] = 0
+
+        pattern = patterns[self.search_state['index']]
+        self.search_state['index'] += 1
+
+        target_az = (base_az + pattern[0]) % 360
+        target_el = max(0, min(90, base_el + pattern[1]))
+
+        return target_az, target_el
+
+    def run(self):
+        """Main precision tracking loop"""
+        self.running = True
+        self.shared_data["tracking_logic_ready"].value = True
+
+        print("[TrackingLogic] Precision tracking loop started")
+        print("  Mode selection:")
+        print("    debug_mode=True  -> Orbital tracking (drone)")
+        print("    reactive_mode=True -> Reactive tracking (hand)")
+
+        update_interval = 0.001  # 1ms for 1000Hz operation
+        last_update = time.time()
+
+        while self.running and not self.shared_data["shutdown"].value:
+            try:
+                current_time = time.time()
+
+                # Maintain precise update rate
+                if current_time - last_update < update_interval:
+                    time.sleep(0.0001)
+                    continue
+
+                last_update = current_time
+
+                # Get synchronized measurement
+                az, el, dist, strength, timestamp, sync_valid = self._get_synchronized_measurement()
+
+                # Update statistics
+                self.stats['updates'] += 1
+
+                # Determine mode
+                if self.shared_data["debug_mode"].value:
+                    new_mode = TrackingMode.ORBITAL
+                elif self.shared_data["reactive_mode"].value:
+                    new_mode = TrackingMode.REACTIVE
+                else:
+                    new_mode = TrackingMode.IDLE
+
+                # Mode change handling
+                if new_mode != self.mode:
+                    if new_mode == TrackingMode.ORBITAL:
+                        self.orbital_tracker = PrecisionOrbitalTracker()
+                        print("[TrackingLogic] Switched to ORBITAL mode")
+                    elif new_mode == TrackingMode.REACTIVE:
+                        self.reactive_tracker.reset()
+                        print("[TrackingLogic] Switched to REACTIVE mode")
+                    self.mode = new_mode
+
+                # Process based on mode
+                if self.mode != TrackingMode.IDLE:
+                    # Check measurement validity
+                    measurement_valid = (
+                            sync_valid and
+                            dist > 0 and
+                            self.clutter_filter.is_valid_target(az, el, dist, strength, timestamp)
+                    )
+
+                    if measurement_valid:
+                        # Valid target detected
+                        self.stats['valid_measurements'] += 1
+                        self.consecutive_detections += 1
+                        self.last_valid_measurement = (az, el, dist, strength, timestamp)
+                        self.lost_target_time = None
+                        self.search_state['index'] = 0
+
+                        # Process based on tracking mode
+                        if self.mode == TrackingMode.ORBITAL:
+                            # Update orbital tracker
+                            result = self.orbital_tracker.update(az, el, dist, strength, timestamp)
+                            if result:
+                                if isinstance(result, tuple) and len(result) == 3:
+                                    pred_az, pred_el, quality = result
+
+                                    if quality > 0.3:  # Good tracking quality
+                                        # Command motors to predicted position
+                                        if self._command_motors_precise(pred_az, pred_el):
+                                            # Update shared data for visualization
+                                            self.shared_data["predicted_azimuth"].value = pred_az
+                                            self.shared_data["predicted_elevation"].value = pred_el
+                                            self.shared_data["ekf_confidence"].value = quality
+
+                        elif self.mode == TrackingMode.REACTIVE:
+                            # Update reactive tracker
+                            target_az, target_el = self.reactive_tracker.update(
+                                az, el, dist, strength, timestamp
+                            )
+
+                            # Get prediction for smoother tracking
+                            predicted = self.reactive_tracker.predict_ahead(0.02)  # 20ms ahead
+                            if predicted:
+                                pred_az, pred_el = predicted
+                            else:
+                                pred_az, pred_el = target_az, target_el
+
+                            # Command motors
+                            if self._command_motors_precise(pred_az, pred_el):
+                                # Update shared data
+                                self.shared_data["predicted_azimuth"].value = pred_az
+                                self.shared_data["predicted_elevation"].value = pred_el
+
+                    else:
+                        # No valid target
+                        self.consecutive_detections = 0
+
+                        if self.lost_target_time is None:
+                            self.lost_target_time = current_time
+                            print(f"[TrackingLogic] Target lost at {current_time:.3f}")
+
+                        time_lost = current_time - self.lost_target_time
+
+                        if time_lost < 3.0:  # Search for 3 seconds
+                            # Execute search pattern
+                            search_pos = self._adaptive_search_pattern()
+                            if search_pos and time_lost > 0.1:  # Wait 100ms before searching
+                                self._command_motors_precise(search_pos[0], search_pos[1], priority=0)
+                        else:
+                            # Give up
+                            print(f"[TrackingLogic] Search timeout after {time_lost:.1f}s")
+                            if self.mode == TrackingMode.ORBITAL:
+                                self.orbital_tracker.initialized = False
+                            else:
+                                self.reactive_tracker.reset()
+                            self.lost_target_time = None
+
+                # Print statistics periodically
+                if current_time - self.stats['last_print_time'] > 5.0:
+                    update_rate = self.stats['updates'] / 5.0
+                    valid_rate = self.stats['valid_measurements'] / 5.0
+                    sync_errors = self.stats['sync_errors']
+
+                    print(f"[TrackingLogic] Stats: {update_rate:.0f}Hz updates, "
+                          f"{valid_rate:.0f}Hz valid, {sync_errors} sync errors")
+
+                    # Reset counters
+                    self.stats['updates'] = 0
+                    self.stats['valid_measurements'] = 0
+                    self.stats['sync_errors'] = 0
+                    self.stats['last_print_time'] = current_time
+
+                    # Print tracking quality
+                    if self.mode == TrackingMode.ORBITAL and self.orbital_tracker.initialized:
+                        uncertainty = self.orbital_tracker.get_uncertainty()
+                        print(f"[TrackingLogic] Orbital uncertainty: {uncertainty:.3f}")
+
+            except Exception as e:
+                print(f"[TrackingLogic] Error: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(0.01)
+
+        print("[TrackingLogic] Main loop ended")
+
+    def stop(self):
+        """Stop tracking logic"""
+        self.running = False
+
+        # Print final statistics
+        if self.validator.calibrated:
+            print(f"[TrackingLogic] Final sync offsets: "
+                  f"Az={self.validator.sync_offset_az:.3f}° "
+                  f"El={self.validator.sync_offset_el:.3f}°")
+
+        print("[TrackingLogic] Stopped")
 
 
 def run_tracker_process(shared_data):
-    """Main tracking logic process."""
-    print("[TrackingLogic] Starting tracking logic process...")
-
-    # Initialize components
-    clutter_filter = ClutterFilter(shared_data.get("background_path", "background_data.npy").value)
-    orbital_ekf = OrbitalEKF()
-    acquirer = Acquirer()
-    reactive_tracker = ReactiveTracker()
-    hand_tracker = HandTracker()
-
-    state = TrackingState.IDLE
-    last_prediction_time = time.time()
-    prediction_interval = 0.1
-
-    shared_data["tracking_logic_ready"].value = True
-
-    print("[TrackingLogic] Ready and running...")
-    print("  - debug_mode=True: High-performance predictive hand tracking")
-    print("  - reactive_mode=True: Simple reactive tracking")
-    print("  - Normal mode: Advanced orbital tracking")
-
-    while not shared_data["shutdown"].value:
-        try:
-            current_time = time.time()
-            with shared_data["lidar_data"].get_lock():
-                dist, strength, timestamp = shared_data["lidar_data"][:]
-            current_az = shared_data["stepper_degrees"].value
-            current_el = shared_data["servo_degrees"].value
-            measurement_valid = (80.0 <= dist <= 140.0)
-
-            if shared_data["debug_mode"].value:
-                if state != TrackingState.DEBUG_MODE:
-                    print("[TrackingLogic] Switching to DEBUG_MODE (Predictive Hand Tracking)")
-                    state = TrackingState.DEBUG_MODE
-                    hand_tracker.reset()
-                is_valid_target = measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist,
-                                                                                       strength)
-                measurement_data = (dist, strength) if is_valid_target else None
-                hand_tracker.update(current_az, current_el, measurement_data, shared_data)
-                if hand_tracker.state == HandTrackerState.SCANNING:
-                    with shared_data["predicted_azimuth"].get_lock():
-                        shared_data["predicted_azimuth"].value = hand_tracker.best_point['az']
-                    with shared_data["predicted_elevation"].get_lock():
-                        shared_data["predicted_elevation"].value = hand_tracker.best_point['el']
-
-            elif shared_data["reactive_mode"].value:
-                # ... (rest of the logic remains the same)
-                if state != TrackingState.REACTIVE_MODE:
-                    print("[TrackingLogic] Switching to REACTIVE_MODE (Non-predictive tracking)")
-                    state = TrackingState.REACTIVE_MODE
-                    reactive_tracker = ReactiveTracker()
-                if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
-                    target_az, target_el = reactive_tracker.update(current_az, current_el, dist, strength)
-                    command_motors_to_target(target_az, target_el, shared_data)
-                    with shared_data["predicted_azimuth"].get_lock():
-                        shared_data["predicted_azimuth"].value = target_az
-                    with shared_data["predicted_elevation"].get_lock():
-                        shared_data["predicted_elevation"].value = target_el
-            else:
-                # ... (rest of the logic remains the same)
-                if shared_data["acquire_points"].value:
-                    if state != TrackingState.ACQUIRING:
-                        print("[TrackingLogic] Switching to ACQUIRING mode")
-                        state = TrackingState.ACQUIRING
-                        acquirer = Acquirer()
-                        shared_data["acquirer_status"].value = 1
-                    if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
-                        if acquirer.add_measurement(current_az, current_el, dist, current_time):
-                            initial_state = acquirer.compute_initial_state()
-                            if initial_state is not None:
-                                orbital_ekf.state = initial_state
-                                orbital_ekf.initialized = True
-                                shared_data["ekf_initialized"].value = True
-                                shared_data["acquire_points"].value = False
-                                shared_data["acquirer_status"].value = 0
-                elif shared_data["lidar_track_mode_active"].value and orbital_ekf.initialized:
-                    if state != TrackingState.TRACKING:
-                        print("[TrackingLogic] Switching to TRACKING mode (Predictive)")
-                        state = TrackingState.TRACKING
-                    if measurement_valid and clutter_filter.is_valid_target(current_az, current_el, dist, strength):
-                        orbital_ekf.update([current_az, current_el, dist], strength)
-                else:
-                    if state != TrackingState.IDLE: state = TrackingState.IDLE
-
-            if orbital_ekf.initialized and state == TrackingState.TRACKING:
-                if current_time - last_prediction_time >= prediction_interval:
-                    dt = current_time - orbital_ekf.last_update_time
-                    orbital_ekf.predict(min(dt, 1.0))
-                    prediction = orbital_ekf.get_predicted_position(0.5)
-                    if prediction is not None:
-                        pred_az, pred_el, pred_dist = prediction
-                        with shared_data["predicted_azimuth"].get_lock():
-                            shared_data["predicted_azimuth"].value = pred_az
-                        with shared_data["predicted_elevation"].get_lock():
-                            shared_data["predicted_elevation"].value = pred_el
-                        command_motors_to_target(pred_az, pred_el, shared_data)
-                    last_prediction_time = current_time
-
-            time.sleep(0.01)
-
-        except Exception as e:
-            print(f"[TrackingLogic] Error in main loop: {e}")
-            import traceback
-            traceback.print_exc()
-            time.sleep(0.1)
-
-    print("[TrackingLogic] Shutting down...")
+    """Entry point for precision tracking process"""
+    tracker = None
+    try:
+        tracker = PrecisionTrackingLogic(shared_data)
+        tracker.run()
+    except Exception as e:
+        print(f"[TrackingLogic] Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        if tracker:
+            tracker.stop()
+        print("[TrackingLogic] Process terminated")
