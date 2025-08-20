@@ -1774,7 +1774,7 @@ def run_tracker_process(shared_data, background_file="background_scan.npy"):
        # orbital_tracker = OrbitalTracker(shared_data, standard_tracker)
         run_circular_drone_tracker(shared_data)
         try:
-            orbital_tracker.run()
+           # orbital_tracker.run()
         except Exception as e:
             print(f"[Main] OrbitalTracker process error: {e}")
     else:
