@@ -416,7 +416,7 @@ class HandTracker:
                         if "tracking_history" in shared_data:
                             point_data = [self.best_point['az'], self.best_point['el'], self.best_point['dist'],
                                           self.best_point['strength'], self.best_point['time']]
-                            shared_data["sattelite_points"].value = (point_data)
+                            shared_data["satellite_points"].value = (point_data)
                             # When you decide it's time to generate the TLE
                             if len(shared_data["tracking_history"]) >= 30:  # Example: trigger after 5 points
                                 print("[Tracking Logic] Triggering TLE generation.")
