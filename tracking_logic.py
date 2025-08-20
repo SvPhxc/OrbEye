@@ -1235,7 +1235,7 @@ def run_tracker_process(shared_data, background_file="background_scan.npy"):
     print("[Main] Initializing tracker process...")
 
     # Instantiate the standard tracker to act as a hardware interface
-    standard_tracker = TargetTracker(shared_data, background_file)
+  #  standard_tracker = TargetTracker(shared_data, background_file)
 
     # Check which tracker to run
    # if shared_data.get("demo"):
