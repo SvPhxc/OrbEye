@@ -553,74 +553,76 @@ def command_motors_to_target(azimuth, elevation, shared_data):
         shared_data["go_to_target"].value = True
 
 def _start_orbit_patrol(shared_data):
-    
+    # If ClutterFilter is in this same file, just use the class directly (no import).
+    from tracking_logic import ClutterFilter  # remove if this file already defines the class
+
     def worker():
         try:
             shared_data["orbit_patrol_active"].value = True
 
-            # Load background for the clutter filter
-            bg_path = shared_data["background_path"].value.decode("utf-8")
+            # (optional) load background for your filter
+            bg = None
             try:
+                bg_path = shared_data["background_path"].value.decode("utf-8")
                 bg = np.load(bg_path)  # rows: [az, el, dist_cm, strength]
             except Exception as e:
-                print(f"[Patrol] WARNING: could not load background '{bg_path}': {e}")
-                bg = None
+                print(f"[Patrol] Could not load background: {e}")
 
-            # Build the clutter filter and feed background (adjust API if needed)
             cf = ClutterFilter()
-            try:
-                if bg is not None:
-                    cf.fit(bg)
-            except AttributeError:
-                try:
-                    if bg is not None:
-                        cf.load_background(bg)
-                except AttributeError:
-                    pass
+            # If your filter has a training/loading call, uncomment and adapt one of these:
+            # cf.fit(bg)                 # or
+            # cf.load_background(bg)     # or
+            # cf.init_from_array(bg)
 
-            proceed_condition = make_detection_proceed_condition(
-                cf,
+            # ---- THIS is the only bit you must tailor: pick the method your CF uses ----
+            # Examples (pick ONE and replace SOME_METHOD_NAME accordingly):
+            # res = cf.is_foreground(az, el, dist_cm, strength)
+            # res = cf.classify(az, el, dist_cm, strength)
+            # res = cf.detect(dist_cm, strength)             # if it ignores az/el
+            # res = cf.check({"az":az, "el":el, "d":dist_cm, "s":strength})
+            def detector(az, el, dist_cm, strength):
+                res = cf.SOME_METHOD_NAME(az, el, dist_cm, strength)  # <-- CHANGE THIS NAME
+                # normalize to bool
+                if isinstance(res, (tuple, list)) and len(res):
+                    res = res[0]
+                return bool(res)
+
+            proceed_condition = make_detection_proceed_condition_from_callable(
+                detector,
                 shared_data,
                 confirm_hits=3,
                 max_age_s=0.5
             )
 
-            # Pull parameters
+            # parameters
             points = int(shared_data["orbit_patrol_points"].value)
             dwell_s = float(shared_data["orbit_patrol_dwell_s"].value)
             max_wait_s = float(shared_data["orbit_patrol_max_wait_s"].value)
             speed = float(shared_data["drone_orbit_speed_deg_s"].value)
             speed = None if speed <= 0.0 else speed
 
-            q = shared_data["orbit_patrol_query"].value.decode("utf-8").strip()
-            if not q:
-                # fallback to whatever the GUI text box has; if not stored, default:
-                try:
-                    # If you sync sat_name_input somewhere else, reuse that here.
-                    q = "ISS (ZARYA)"
-                except Exception:
-                    q = "ISS (ZARYA)"
+            q = shared_data["orbit_patrol_query"].value.decode("utf-8").strip() or "ISS (ZARYA)"
 
             run_orbit_patrol_from_query(
                 shared_data,
                 query=q,
                 num_points=points,
-                dwell_seconds=dwell_s,             # only used if no detection/speed
+                dwell_seconds=dwell_s,
                 min_el_deg=0.0,
                 max_el_deg=60.0,
                 duration_minutes=90,
                 step_seconds=30,
                 start_near_current=True,
-                proceed_condition=proceed_condition,          # gate advance on detection
-                next_wp_speed_deg_per_s=speed,                # derive timeout from spacing & speed
-                max_wait_s=max_wait_s                         # hard cap
+                proceed_condition=proceed_condition,      # <-- detection-gated advance
+                next_wp_speed_deg_per_s=speed,            # derive wait from spacing & speed
+                max_wait_s=max_wait_s
             )
         finally:
             shared_data["orbit_patrol_active"].value = False
             shared_data["orbit_patrol_cancel"].value = False
 
     global _patrol_thr
-    if _patrol_thr is None or not _patrol_thr.is_alive():
+    if '_patrol_thr' not in globals() or _patrol_thr is None or not _patrol_thr.is_alive():
         _patrol_thr = threading.Thread(target=worker, daemon=True)
         _patrol_thr.start()
 

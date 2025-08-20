@@ -229,6 +229,42 @@ def run_orbit_patrol_from_xyz(shared_data,
 
     print("[OrbitPatrolXYZ] Patrol complete.")
 
+def make_detection_proceed_condition_from_callable(detector, shared_data,
+                                                   confirm_hits=3, max_age_s=0.5):
+    """
+    detector: callable (az, el, dist_cm, strength) -> bool
+    Returns proceed_condition(az, el, deadline_s) that waits until detector is True
+    for 'confirm_hits' fresh LiDAR samples (or until deadline).
+    """
+    def proceed_condition(az, el, deadline_s):
+        ok_streak = 0
+        last_seen_ts = -1.0
+        import time as _t
+        while _t.monotonic() < deadline_s:
+            if (shared_data["shutdown"].value
+                or (shared_data.get("orbit_patrol_cancel") and shared_data["orbit_patrol_cancel"].value)
+                or shared_data["background_scan_active"].value
+                or shared_data["lidar_track_mode_active"].value):
+                return False
+
+            dist_cm = float(shared_data["lidar_data"][0])
+            strength = float(shared_data["lidar_data"][1])
+            ts = float(shared_data["lidar_data"][2])
+
+            if ts > 0 and (_t.time() - ts) <= max_age_s:
+                if bool(detector(az, el, dist_cm, strength)):
+                    if ts != last_seen_ts:
+                        ok_streak += 1
+                        last_seen_ts = ts
+                    if ok_streak >= confirm_hits:
+                        return True
+                else:
+                    ok_streak = 0
+
+            _t.sleep(0.01)
+        return False
+    return proceed_condition
+
 def run_orbit_patrol_from_query(shared_data,
                                 query: str,
                                 num_points: int = 9,
