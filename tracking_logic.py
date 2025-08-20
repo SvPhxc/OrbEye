@@ -50,7 +50,7 @@ CACHE_SIZE = 75000
 DISABLE_CLUTTER_FOR_ACQUISITION = False
 
 # Movement parameters
-MOVEMENT_TIMEOUT = 2.0  # seconds
+MOVEMENT_TIMEOUT = 0.5  # seconds
 POSITION_TOLERANCE = 0.0  # degrees
 POSITION_VERIFY_DELAY = 0.001
 MAX_POSITION_ERROR = 0.0
@@ -58,7 +58,7 @@ MAX_POSITION_ERROR = 0.0
 # Tracking parameters
 SCAN_RADIUS_AZ = 8.0
 SCAN_RADIUS_EL = 8.0
-SCAN_POINTS = 8
+SCAN_POINTS = 6
 MAX_SCAN_RADIUS_AZ = 20.0
 MAX_SCAN_RADIUS_EL = 20.0
 
@@ -85,8 +85,8 @@ HISTORY_SIZE = 4
 TARGET_HISTORY_SIZE = 3
 
 # Performance
-MIN_CYCLE_TIME = 0.02
-MIN_DEBUG_CYCLE_TIME = 0.03
+MIN_CYCLE_TIME = 0.01
+MIN_DEBUG_CYCLE_TIME = 0.01
 STATS_PRINT_INTERVAL = 20
 
 
@@ -310,7 +310,7 @@ class TargetTracker:
                     self.failed_reads += 1
                     return False
 
-            time.sleep(0.002)
+            time.sleep(0.001)
 
         print(f"[Tracker] Movement timeout for request {request_id}")
         self.failed_reads += 1
@@ -406,7 +406,7 @@ class TargetTracker:
                 # Multiple read attempts
                 for attempt in range(ACQUISITION_MAX_ATTEMPTS):
                     if attempt > 0:
-                        time.sleep(0.002)
+                        time.sleep(0.001)
 
                     actual_az, actual_el, distance, strength = self.read_lidar_verified()
 
