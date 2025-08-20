@@ -160,9 +160,9 @@ if __name__ == "__main__":
         "orbit_patrol_start": Value('b', False),
         "orbit_patrol_active": Value('b', False),
         "orbit_patrol_cancel": Value('b', False),
-        "orbit_patrol_points": Value('i', 9),
+        "orbit_patrol_points": Value('i', 30),
         "orbit_patrol_dwell_s": Value('d', 2.0),
-        "orbit_patrol_max_wait_s": Value('d', 10.0),      # hard cap per waypoint
+        "orbit_patrol_max_wait_s": Value('d', 0.5),      # hard cap per waypoint
         "drone_orbit_speed_deg_s": Value('d', 0.0),       # 0.0 => ignore speed-based timeout
         "orbit_patrol_query": Array('c', PATH_BUFFER_SIZE),
     }
