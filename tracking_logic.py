@@ -8,7 +8,10 @@ import math
 from enum import Enum
 
 import threading, numpy as np
-from orbit_patrol_from_xyz import run_orbit_patrol_from_query, make_detection_proceed_condition
+from orbit_patrol_from_xyz import (
+    run_orbit_patrol_from_query,
+    make_detection_proceed_condition_from_callable,
+)
 
 
 _patrol_thr = None
@@ -550,7 +553,7 @@ def command_motors_to_target(azimuth, elevation, shared_data):
         shared_data["go_to_target"].value = True
 
 def _start_orbit_patrol(shared_data):
-    from tracking_logic import ClutterFilter  # your class lives here
+    
     def worker():
         try:
             shared_data["orbit_patrol_active"].value = True
