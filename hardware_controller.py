@@ -294,5 +294,5 @@ PIDController.get_setpoint = get_setpoint
 
 
 def run_hardware_controller(shared_data):
-    controller = HardwareController(shared_data)
+    controller = HardwareController()
     controller.run()
