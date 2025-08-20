@@ -1727,7 +1727,11 @@ def run_circular_drone_tracker(shared_data):
     """
 
     # Create tracker instance
-    tracker = CircularDroneTracker(shared_data, prediction_time_sec=0.5)
+    try:
+        tracker = CircularDroneTracker(shared_data, prediction_time_sec=0.5)
+    except Exception as e:
+        print(f"[CircularDroneTracker] Initialization error: {e}")
+        return
 
     # Check if we should use track_drone mode
     if "track_drone" in shared_data and shared_data["track_drone"].value:
