@@ -1,4 +1,4 @@
-from _future_ import annotations
+
 from datetime import timedelta, timezone, datetime
 import os
 import requests
