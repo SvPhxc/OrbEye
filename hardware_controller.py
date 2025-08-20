@@ -118,7 +118,7 @@ class HardwareController:
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(min(abs(pan_velocity_dps) / MICROSTEP_ANGLE, 250000)), 500000)
         else:
             self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
-        self.pi.set_servo_pulsewidth(SERVO_PIN, int(500 + (self.internal_tilt_pos / 0.09) + (28 / 0.09)))
+        self.pi.set_servo_pulsewidth(SERVO_PIN, int(500 + (self.internal_tilt_pos / 0.09) + (10 / 0.09)))
 
     def run(self):
         try:
