@@ -96,6 +96,7 @@ if __name__ == "__main__":
         "save_background_trigger": Value('b', False),
         # --- CHANGED: Replaced manager.Value with multiprocessing.Array ---
         "background_path": Array('c', PATH_BUFFER_SIZE),
+        
 
         # --- Acquirer (for EKF init) ---
         "acquire_points": Value('b', False),
@@ -155,10 +156,15 @@ if __name__ == "__main__":
         "heatmap_measurement_updated": Value('b', False),
 
 
-        # Orbit patrol
-        "orbit_patrol_once": Value('b', False),
+        # --- Orbit Patrol (XYZ) ---
+        "orbit_patrol_start": Value('b', False),
+        "orbit_patrol_active": Value('b', False),
+        "orbit_patrol_cancel": Value('b', False),
         "orbit_patrol_points": Value('i', 9),
         "orbit_patrol_dwell_s": Value('d', 2.0),
+        "orbit_patrol_max_wait_s": Value('d', 10.0),      # hard cap per waypoint
+        "drone_orbit_speed_deg_s": Value('d', 0.0),       # 0.0 => ignore speed-based timeout
+        "orbit_patrol_query": Array('c', PATH_BUFFER_SIZE),
     }
 
     # Initialize the character arrays with their default values

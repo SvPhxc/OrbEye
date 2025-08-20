@@ -291,9 +291,53 @@ class TrackerWindow(QtWidgets.QMainWindow):
         lcd_layout.addWidget(self.lcd_strength, 3, 1)
         controls_layout.addLayout(lcd_layout)
 
-        self.chk_reactive_mode = QCheckBox("Demo")
-        self.chk_reactive_mode.toggled.connect(self.on_reactive_mode_toggled)
-        controls_layout.addWidget(self.chk_reactive_mode)
+        # ===== Orbit Patrol (XYZ) =====
+        patrol_box = QtWidgets.QGroupBox("Orbit Patrol (XYZ)")
+        patrol_layout = QVBoxLayout()
+
+        row1 = QtWidgets.QHBoxLayout()
+        row1.addWidget(QtWidgets.QLabel("Points"))
+        self.sb_patrol_points = QtWidgets.QSpinBox()
+        self.sb_patrol_points.setRange(2, 72)
+        self.sb_patrol_points.setValue(9)
+        row1.addWidget(self.sb_patrol_points)
+
+        row1.addWidget(QtWidgets.QLabel("Dwell (s)"))
+        self.dsb_patrol_dwell = QtWidgets.QDoubleSpinBox()
+        self.dsb_patrol_dwell.setRange(0.1, 60.0)
+        self.dsb_patrol_dwell.setSingleStep(0.1)
+        self.dsb_patrol_dwell.setValue(2.0)
+        row1.addWidget(self.dsb_patrol_dwell)
+        patrol_layout.addLayout(row1)
+
+        row2 = QtWidgets.QHBoxLayout()
+        row2.addWidget(QtWidgets.QLabel("Speed (deg/s)"))
+        self.dsb_patrol_speed = QtWidgets.QDoubleSpinBox()
+        self.dsb_patrol_speed.setRange(0.0, 90.0)  # 0 = ignore, use max_wait
+        self.dsb_patrol_speed.setSingleStep(0.5)
+        self.dsb_patrol_speed.setValue(0.0)
+        row2.addWidget(self.dsb_patrol_speed)
+
+        row2.addWidget(QtWidgets.QLabel("Max wait (s)"))
+        self.dsb_patrol_maxwait = QtWidgets.QDoubleSpinBox()
+        self.dsb_patrol_maxwait.setRange(0.5, 120.0)
+        self.dsb_patrol_maxwait.setSingleStep(0.5)
+        self.dsb_patrol_maxwait.setValue(10.0)
+        row2.addWidget(self.dsb_patrol_maxwait)
+        patrol_layout.addLayout(row2)
+
+        row3 = QtWidgets.QHBoxLayout()
+        self.btn_patrol_start = QtWidgets.QPushButton("Start Patrol")
+        self.btn_patrol_start.clicked.connect(self.on_orbit_patrol_start)
+        row3.addWidget(self.btn_patrol_start)
+
+        self.btn_patrol_cancel = QtWidgets.QPushButton("Cancel Patrol")
+        self.btn_patrol_cancel.clicked.connect(self.on_orbit_patrol_cancel)
+        row3.addWidget(self.btn_patrol_cancel)
+        patrol_layout.addLayout(row3)
+
+        patrol_box.setLayout(patrol_layout)
+        controls_layout.addWidget(patrol_box)
 
         controls_layout.addStretch()
 
@@ -485,12 +529,30 @@ class TrackerWindow(QtWidgets.QMainWindow):
         print("[TLE] Orbit removed.")
 
     # ===== Controls handlers =====
-    def on_reactive_mode_toggled(self, checked):
-        self.shared_data["orbit_patrol_points"].value = 11
-        self.shared_data["orbit_patrol_dwell_s"].value = 1.5
-        self.shared_data["orbit_patrol_once"].value = True
-        #self.shared_data["demo"].value = checked
-        print("Demo")
+    def on_orbit_patrol_start(self):
+        # Mirror GUI to shared_data
+        try:
+            self.shared_data["orbit_patrol_points"].value = int(self.sb_patrol_points.value())
+            self.shared_data["orbit_patrol_dwell_s"].value = float(self.dsb_patrol_dwell.value())
+            self.shared_data["orbit_patrol_max_wait_s"].value = float(self.dsb_patrol_maxwait.value())
+            self.shared_data["drone_orbit_speed_deg_s"].value = float(self.dsb_patrol_speed.value())
+
+            # Use the same query field as your TLE box
+            query = (self.sat_name_input.text() or "").strip().encode("utf-8")
+            self.shared_data["orbit_patrol_query"].value = query
+
+            # Flip start flag
+            self.shared_data["orbit_patrol_start"].value = True
+            print("[GUI] Orbit Patrol requested.")
+        except Exception as e:
+            print(f"[GUI] Orbit Patrol start error: {e}")
+
+    def on_orbit_patrol_cancel(self):
+        try:
+            self.shared_data["orbit_patrol_cancel"].value = True
+            print("[GUI] Orbit Patrol cancel requested.")
+        except Exception as e:
+            print(f"[GUI] Orbit Patrol cancel error: {e}")
 
     def toggle_background_plot(self):
         """Loads data from file and displays/hides the plot."""

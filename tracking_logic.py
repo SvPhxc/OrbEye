@@ -1,14 +1,14 @@
 # tracking_logic.py
 
 import time
-import threading
 import numpy as np
 from scipy.spatial import cKDTree
 from collections import deque
 import math
 from enum import Enum
 
-from orbit_patrol_from_xyz import run_orbit_patrol_from_query
+import threading, numpy as np
+from orbit_patrol_from_xyz import run_orbit_patrol_from_query, make_detection_proceed_condition
 
 
 class TrackingState(Enum):
@@ -547,6 +547,78 @@ def command_motors_to_target(azimuth, elevation, shared_data):
     with shared_data["go_to_target"].get_lock():
         shared_data["go_to_target"].value = True
 
+def _start_orbit_patrol(shared_data):
+    from tracking_logic import ClutterFilter  # your class lives here
+    def worker():
+        try:
+            shared_data["orbit_patrol_active"].value = True
+
+            # Load background for the clutter filter
+            bg_path = shared_data["background_path"].value.decode("utf-8")
+            try:
+                bg = np.load(bg_path)  # rows: [az, el, dist_cm, strength]
+            except Exception as e:
+                print(f"[Patrol] WARNING: could not load background '{bg_path}': {e}")
+                bg = None
+
+            # Build the clutter filter and feed background (adjust API if needed)
+            cf = ClutterFilter()
+            try:
+                if bg is not None:
+                    cf.fit(bg)
+            except AttributeError:
+                try:
+                    if bg is not None:
+                        cf.load_background(bg)
+                except AttributeError:
+                    pass
+
+            proceed_condition = make_detection_proceed_condition(
+                cf,
+                shared_data,
+                confirm_hits=3,
+                max_age_s=0.5
+            )
+
+            # Pull parameters
+            points = int(shared_data["orbit_patrol_points"].value)
+            dwell_s = float(shared_data["orbit_patrol_dwell_s"].value)
+            max_wait_s = float(shared_data["orbit_patrol_max_wait_s"].value)
+            speed = float(shared_data["drone_orbit_speed_deg_s"].value)
+            speed = None if speed <= 0.0 else speed
+
+            q = shared_data["orbit_patrol_query"].value.decode("utf-8").strip()
+            if not q:
+                # fallback to whatever the GUI text box has; if not stored, default:
+                try:
+                    # If you sync sat_name_input somewhere else, reuse that here.
+                    q = "ISS (ZARYA)"
+                except Exception:
+                    q = "ISS (ZARYA)"
+
+            run_orbit_patrol_from_query(
+                shared_data,
+                query=q,
+                num_points=points,
+                dwell_seconds=dwell_s,             # only used if no detection/speed
+                min_el_deg=0.0,
+                max_el_deg=60.0,
+                duration_minutes=90,
+                step_seconds=30,
+                start_near_current=True,
+                proceed_condition=proceed_condition,          # gate advance on detection
+                next_wp_speed_deg_per_s=speed,                # derive timeout from spacing & speed
+                max_wait_s=max_wait_s                         # hard cap
+            )
+        finally:
+            shared_data["orbit_patrol_active"].value = False
+            shared_data["orbit_patrol_cancel"].value = False
+
+    global _patrol_thr
+    if _patrol_thr is None or not _patrol_thr.is_alive():
+        _patrol_thr = threading.Thread(target=worker, daemon=True)
+        _patrol_thr.start()
+
 
 def run_tracker_process(shared_data):
     """Main tracking logic process."""
@@ -562,6 +634,8 @@ def run_tracker_process(shared_data):
     state = TrackingState.IDLE
     last_prediction_time = time.time()
     prediction_interval = 0.1
+
+    _patrol_thr = None
 
     shared_data["tracking_logic_ready"].value = True
 
@@ -647,19 +721,12 @@ def run_tracker_process(shared_data):
                         command_motors_to_target(pred_az, pred_el, shared_data)
                     last_prediction_time = current_time
 
-            if shared_data.get("orbit_patrol_once", None) and shared_data["orbit_patrol_once"].value:
-                shared_data["orbit_patrol_once"].value = False
-                # Read the query from your GUI text field if you store it; otherwise hardcode for a test:
-                query = "TLE"  # or whatever you typed in the GUI
-                run_orbit_patrol_from_query(shared_data,
-                                            query=query,
-                                            num_points=int(shared_data["orbit_patrol_points"].value),
-                                            dwell_seconds=float(shared_data["orbit_patrol_dwell_s"].value),
-                                            min_el_deg=0.0,
-                                            max_el_deg=60.0,
-                                            duration_minutes=90,
-                                            step_seconds=30,
-                                            start_near_current=True)
+            if shared_data["orbit_patrol_start"].value and not shared_data["orbit_patrol_active"].value:
+                if not shared_data["background_scan_active"].value:
+                    shared_data["orbit_patrol_start"].value = False
+                    _start_orbit_patrol(shared_data)
+                else:
+                    print("[Patrol] Refusing to start during BACKGROUND_SCAN.")
 
             time.sleep(0.01)
 
