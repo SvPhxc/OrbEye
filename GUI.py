@@ -540,12 +540,11 @@ class TrackerWindow(QtWidgets.QMainWindow):
         super().closeEvent(event)
 
 
-def run_gui(shared, movement_queue):
+def run_gui(shared):
     global _shared_data
-    shared["movement_queue"] = movement_queue
     _shared_data = shared
 
     app = QtWidgets.QApplication(sys.argv)
-    window = TrackerWindow(_shared_data, movement_queue)
+    window = TrackerWindow(_shared_data)
     window.show()
     sys.exit(app.exec_())
