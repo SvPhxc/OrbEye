@@ -107,9 +107,24 @@ class TrackerWindow(QtWidgets.QMainWindow):
         main_layout.addLayout(controls_layout, stretch=1)
 
         controls_layout.addWidget(QtWidgets.QLabel("CONTROLLER STATUS"))
+
+        # Row: status text (left) + a dummy switch (right)
+        row = QtWidgets.QWidget()
+        row_h = QtWidgets.QHBoxLayout(row)
+        row_h.setContentsMargins(0, 0, 0, 0)
+        row_h.setSpacing(8)
+
         self.status_label = QtWidgets.QLabel("Status: IDLE")
         self.status_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #808080;")
-        controls_layout.addWidget(self.status_label)
+        row_h.addWidget(self.status_label)
+
+        row_h.addStretch(1)  # push switch to the right
+
+        self.switch_grafana = QtWidgets.QCheckBox("Grafana")  # does nothing (no signal connected)
+        self.switch_grafana.setChecked(False)
+        row_h.addWidget(self.switch_grafana)
+
+        controls_layout.addWidget(row)
         controls_layout.addWidget(self.create_separator())
 
         mode_box = QtWidgets.QGroupBox("Main Controls")
