@@ -2,20 +2,12 @@
 """
 Robust LiDAR Target Tracker with Acquisition and Demo Modes
 Key features:
-<<<<<<< HEAD
 - Accounts for 2-degree LiDAR FOV in all scan patterns
 - Prevents 360-degree wraparound in scans
 - Initial acquisition scan triggered by acquire_points flag
 - Demo mode for tracking orbiting drone
 - Waits for target_reached to ensure accurate positioning
 - Verifies LiDAR data matches scan position
-=======
-- Initial acquisition scan triggered by acquire_points flag (independent of debug mode)
-- Demo mode for tracking orbiting drone (2m away, 20s orbit)
-- Waits for target_reached to ensure accurate positioning
-- Verifies LiDAR data matches scan position
-- Fixed angle wraparound at 0°/360° boundary
->>>>>>> parent of 826e34c (should fix things :))
 - Respects 1000Hz LiDAR polling limit
 - Predictive tracking for smooth following
 """
@@ -33,10 +25,7 @@ from collections import deque
 # ==============================================================================
 
 # LiDAR Parameters
-<<<<<<< HEAD
 LIDAR_FOV = 2.0  # Degrees - Field of view of the LiDAR
-=======
->>>>>>> parent of 826e34c (should fix things :))
 LIDAR_MIN_INTERVAL = 0.001  # 1ms minimum between reads (1000Hz max)
 MIN_STRENGTH_THRESHOLD = 30  # Much lower threshold to find any target
 HIGH_CONFIDENCE_THRESHOLD = 100  # Strong signal threshold
@@ -54,7 +43,6 @@ POSITION_TOLERANCE = 0.0  # Degrees - acceptable position error
 POSITION_VERIFY_DELAY = 0.015  # Slightly longer stabilization
 MAX_POSITION_ERROR = 0.0  # Maximum acceptable position error in degrees
 
-<<<<<<< HEAD
 # Normal Tracking Parameters - Adjusted for FOV
 SCAN_RADIUS_AZ = 8.0  # Degrees - reduced to ensure points are spaced properly
 SCAN_RADIUS_EL = 8.0  # Degrees - normal scan radius elevation
@@ -65,24 +53,11 @@ MAX_SCAN_RADIUS_EL = 20.0  # Maximum expanded search radius
 # Acquisition Parameters - Optimized for 2-degree FOV
 ACQUISITION_AZ_RANGE = 60.0  # Total azimuth range to scan (±30°)
 ACQUISITION_AZ_STEP = 4.0  # Step size for azimuth scanning (2x FOV for good coverage)
-=======
-# Normal Tracking Parameters
-SCAN_RADIUS_AZ = 10.0  # Degrees - normal scan radius azimuth
-SCAN_RADIUS_EL = 10.0  # Degrees - normal scan radius elevation
-SCAN_POINTS = 6  # Number of points in scan circle
-MAX_SCAN_RADIUS_AZ = 30.0  # Maximum expanded search radius
-MAX_SCAN_RADIUS_EL = 25.0  # Maximum expanded search radius
-
-# Acquisition Parameters - Improved for better detection
-ACQUISITION_AZ_RANGE = 60.0  # Total azimuth range to scan (±30°)
-ACQUISITION_AZ_STEP = 10.0  # Step size for azimuth scanning
->>>>>>> parent of 826e34c (should fix things :))
 ACQUISITION_ELEVATIONS = [45, 40, 50, 35, 55, 30, 60, 25, 65, 20, 70]  # More levels
 ACQUISITION_MIN_DISTANCE = 10.0  # Minimum valid distance (cm)
 ACQUISITION_MAX_ATTEMPTS = 3  # Retry reading at each point
 
 # Demo Mode Parameters (Orbiting Drone)
-<<<<<<< HEAD
 DEMO_ORBIT_TIME = 20.0  # Seconds for full orbit (nominal)
 DEMO_RADIUS_MIN = 150.0  # Minimum distance for drone (1.5m in cm)
 DEMO_RADIUS_MAX = 250.0  # Maximum distance for drone (2.5m in cm)
@@ -91,13 +66,6 @@ DEMO_SCAN_RADIUS = 4.0  # Tight radius for predictive tracking (2x FOV)
 DEMO_MIN_POINTS_FOR_PREDICTION = 5  # Need at least 5 points to determine motion
 DEMO_VELOCITY_SMOOTHING = 0.3  # Smoothing factor for velocity updates
 DEMO_PARABOLIC_CHECK_POINTS = 10  # Points to check for parabolic motion
-=======
-DEMO_ORBIT_TIME = 20.0  # Seconds for full orbit
-DEMO_RADIUS_MIN = 150.0  # Minimum distance for drone (1.5m in cm)
-DEMO_RADIUS_MAX = 250.0  # Maximum distance for drone (2.5m in cm)
-DEMO_CENTER_ELEVATION = 45.0  # Default center elevation for orbit
-DEMO_SCAN_RADIUS = 5.0  # Tight radius for predictive tracking
->>>>>>> parent of 826e34c (should fix things :))
 
 # Tracking State Parameters
 MAX_LOST_COUNT = 5  # How many cycles before expanding search
@@ -105,12 +73,8 @@ HISTORY_SIZE = 4  # Position history for smoothing
 TARGET_HISTORY_SIZE = 3  # Target history for smoothing
 
 # Performance Parameters
-<<<<<<< HEAD
 MIN_CYCLE_TIME = 0.02  # Reduced to 20ms for better responsiveness
 MIN_DEBUG_CYCLE_TIME = 0.03  # 30ms for debug mode (more responsive)
-=======
-MIN_CYCLE_TIME = 0.05  # Minimum 50ms per tracking cycle
->>>>>>> parent of 826e34c (should fix things :))
 STATS_PRINT_INTERVAL = 20  # Print statistics every N cycles
 
 
@@ -205,7 +169,6 @@ class AngleHandler:
         y_sum = sum(math.sin(math.radians(a)) for a in angles)
         mean_angle = math.degrees(math.atan2(y_sum, x_sum))
         return AngleHandler.normalize(mean_angle)
-<<<<<<< HEAD
 
     @staticmethod
     def is_near_boundary(angle, threshold=15):
@@ -219,14 +182,6 @@ class AngleHandler:
         # Calculate the actual scan points
         min_angle = center - radius
         max_angle = center + radius
-=======
-
-    @staticmethod
-    def is_near_boundary(angle, threshold=15):
-        """Check if angle is near the 0/360 boundary."""
-        norm_angle = AngleHandler.normalize(angle)
-        return norm_angle < threshold or norm_angle > (360 - threshold)
->>>>>>> parent of 826e34c (should fix things :))
 
         # If the scan range exceeds 360 degrees, clamp it
         if (max_angle - min_angle) > 360:
@@ -235,10 +190,7 @@ class AngleHandler:
 
         return radius
 
-<<<<<<< HEAD
 
-=======
->>>>>>> parent of 826e34c (should fix things :))
 class TargetTracker:
     """
     Robust tracker with acquisition mode, position verification, and demo mode.
@@ -250,10 +202,7 @@ class TargetTracker:
         self.angle_handler = AngleHandler()
 
         # Use configuration parameters
-<<<<<<< HEAD
         self.lidar_fov = LIDAR_FOV
-=======
->>>>>>> parent of 826e34c (should fix things :))
         self.lidar_min_interval = LIDAR_MIN_INTERVAL
         self.last_lidar_read = 0
 
@@ -275,22 +224,15 @@ class TargetTracker:
         self.demo_heading = 0.0
         self.demo_inclination = -1
         self.demo_orbit_time = DEMO_ORBIT_TIME
-<<<<<<< HEAD
         self.demo_angular_velocity = 360.0 / DEMO_ORBIT_TIME  # Initial guess
-=======
-        self.demo_angular_velocity = 360.0 / DEMO_ORBIT_TIME
->>>>>>> parent of 826e34c (should fix things :))
         self.demo_center_el = DEMO_CENTER_ELEVATION
         self.demo_last_update = None
         self.demo_orbit_points = []
         self.demo_orbit_determined = False
-<<<<<<< HEAD
         self.demo_first_acquisition_time = None
         self.demo_motion_type = "unknown"  # "circular", "parabolic", "complex"
         self.demo_velocity_history = deque(maxlen=5)
         self.demo_can_predict = False
-=======
->>>>>>> parent of 826e34c (should fix things :))
 
         # Tracking state
         self.current_target_az = None
@@ -309,18 +251,13 @@ class TargetTracker:
         self.successful_reads = 0
         self.failed_reads = 0
 
-<<<<<<< HEAD
         print("[Tracker] Robust tracker initialized with 2° FOV consideration")
         print(f"[Tracker] LiDAR FOV: {self.lidar_fov}°")
-=======
-        print("[Tracker] Robust tracker initialized")
->>>>>>> parent of 826e34c (should fix things :))
         print(f"[Tracker] Strength thresholds: acquisition={ACQUISITION_STRENGTH_THRESHOLD}, "
               f"min={MIN_STRENGTH_THRESHOLD}, high={HIGH_CONFIDENCE_THRESHOLD}")
         print(f"[Tracker] Normal scan: ±{self.scan_radius_az}° with {self.scan_points} points")
         print(f"[Tracker] Acquisition: ±{ACQUISITION_AZ_RANGE / 2}° range, {ACQUISITION_AZ_STEP}° steps")
 
-<<<<<<< HEAD
     def calculate_scan_points(self, radius_az, radius_el):
         """Calculate optimal number of scan points based on radius and FOV."""
         # Calculate circumference at the given radius
@@ -337,13 +274,6 @@ class TargetTracker:
         if timeout is None:
             timeout = self.movement_timeout
 
-=======
-    def wait_for_target_reached(self, timeout=None):
-        """Wait for the system to reach the target position."""
-        if timeout is None:
-            timeout = self.movement_timeout
-
->>>>>>> parent of 826e34c (should fix things :))
         start_time = time.time()
 
         # First wait for movement to start
@@ -375,11 +305,7 @@ class TargetTracker:
         # Use shortest path for azimuth
         target_az = self.angle_handler.shortest_path(current_az, azimuth)
 
-<<<<<<< HEAD
         # Ensure target_az is in valid range [0, 360)
-=======
-        # Ensure target_az is in valid range
->>>>>>> parent of 826e34c (should fix things :))
         target_az = self.angle_handler.normalize(target_az)
 
         # Set targets
@@ -429,13 +355,8 @@ class TargetTracker:
         return actual_az, actual_el, distance, strength
 
     def acquisition_scan(self):
-<<<<<<< HEAD
         """Perform wide initial scan to find any target - with FOV consideration."""
         print("[Acquisition] Starting acquisition scan with 2° FOV spacing...")
-=======
-        """Perform wide initial scan to find any target - improved for better detection."""
-        print("[Acquisition] Starting improved acquisition scan...")
->>>>>>> parent of 826e34c (should fix things :))
         print(f"[Acquisition] Using threshold: {ACQUISITION_STRENGTH_THRESHOLD}")
 
         all_targets = []  # Collect all potential targets
@@ -444,7 +365,6 @@ class TargetTracker:
         start_az = self.shared_data["stepper_degrees"].value
         print(f"[Acquisition] Starting from azimuth {start_az:.1f}°")
 
-<<<<<<< HEAD
         # Calculate azimuth scan points with FOV consideration
         az_points = [start_az]
         offset = ACQUISITION_AZ_STEP  # Already set to 4° which is 2x FOV
@@ -457,23 +377,11 @@ class TargetTracker:
             if 2 * offset <= 360:
                 az_points.append(start_az + offset)
                 az_points.append(start_az - offset)
-=======
-        # Calculate azimuth scan points without going over 360
-        az_points = [start_az]
-        offset = ACQUISITION_AZ_STEP
-
-        # The total range is 60°, so we scan 30° to the left and 30° to the right.
-        # We use ACQUISITION_AZ_RANGE / 2 as the limit for the offset.
-        while offset <= (ACQUISITION_AZ_RANGE / 2):
-            az_points.append(start_az + offset)  # Point to the right
-            az_points.append(start_az - offset)  # Point to the left
->>>>>>> parent of 826e34c (should fix things :))
             offset += ACQUISITION_AZ_STEP
 
         # Normalize all azimuth points to [0, 360)
         az_points = [self.angle_handler.normalize(az) for az in az_points]
 
-<<<<<<< HEAD
         # Remove duplicates while preserving order
         seen = set()
         az_points = [x for x in az_points if not (x in seen or seen.add(x))]
@@ -481,9 +389,6 @@ class TargetTracker:
         print(f"[Acquisition] Scanning {len(az_points)} azimuth points across {len(ACQUISITION_ELEVATIONS)} elevations")
         print(f"[Acquisition] Points spaced {ACQUISITION_AZ_STEP}° apart (FOV={self.lidar_fov}°)")
 
-=======
-        print(f"[Acquisition] Scanning {len(az_points)} azimuth points across {len(ACQUISITION_ELEVATIONS)} elevations")
->>>>>>> parent of 826e34c (should fix things :))
         scan_count = 0
         for el_idx, elevation in enumerate(ACQUISITION_ELEVATIONS):
             if self.shared_data["shutdown"].value:
@@ -519,11 +424,7 @@ class TargetTracker:
 
                     # Very relaxed criteria for acquisition
                     if distance > ACQUISITION_MIN_DISTANCE:
-<<<<<<< HEAD
                         # During acquisition, optionally skip clutter filter
-=======
-                        # During acquisition, optionally skip clutter filter or use relaxed version
->>>>>>> parent of 826e34c (should fix things :))
                         is_valid = True
                         if not DISABLE_CLUTTER_FOR_ACQUISITION:
                             is_valid = self.clutter_filter.is_valid_target(actual_az, actual_el, distance, strength)
@@ -552,7 +453,6 @@ class TargetTracker:
         return None
 
     def tracking_scan(self, center_az, center_el):
-<<<<<<< HEAD
         """Perform tracking scan with FOV-aware point spacing."""
         scan_results = []
         scan_start = time.time()
@@ -588,32 +488,8 @@ class TargetTracker:
 
         # Scan surrounding points with FOV-aware spacing
         max_scan_time = 0.5 if self.shared_data["debug_mode"].value else 0.8
-=======
-        """Perform tracking scan with position verification."""
-        scan_results = []
-        scan_start = time.time()
-
-        # Adjust scan density based on confidence
-        if self.tracking_confidence > 0.7:
-            points_to_scan = max(3, self.scan_points - 2)
-            radius_az = self.scan_radius_az * 0.7
-            radius_el = self.scan_radius_el * 0.7
-        else:
-            points_to_scan = self.scan_points
-            radius_az = self.scan_radius_az
-            radius_el = self.scan_radius_el
-
-        # Always scan center point first
-        if self.move_to_position_verified(center_az, center_el):
-            az, el, dist, strength = self.read_lidar_at_position()
-            if dist > 0 and self.clutter_filter.is_valid_target(az, el, dist, strength):
-                if strength >= self.min_strength_threshold:
-                    scan_results.append((az, el, dist, strength))
-
-        # Scan surrounding points
->>>>>>> parent of 826e34c (should fix things :))
         for i in range(points_to_scan):
-            if self.shared_data["shutdown"].value or time.time() - scan_start > 0.8:
+            if self.shared_data["shutdown"].value or time.time() - scan_start > max_scan_time:
                 break
 
             angle = (2 * math.pi * i) / points_to_scan
@@ -681,7 +557,6 @@ class TargetTracker:
         if near_boundary:
             smooth_az = self.angle_handler.circular_mean(az_values)
         else:
-<<<<<<< HEAD
             weight = np.exp(np.linspace(-2, 0, len(self.position_history)))
             weight /= weight.sum()
             smooth_az = sum(az * w for (az, _), w in zip(self.position_history, weight))
@@ -689,15 +564,6 @@ class TargetTracker:
 
         el_values = [p[1] for p in self.position_history]
         smooth_el = np.average(el_values, weights=weight)
-=======
-            weights = np.exp(np.linspace(-2, 0, len(self.position_history)))
-            weights /= weights.sum()
-            smooth_az = sum(az * w for (az, _), w in zip(self.position_history, weights))
-            smooth_az = self.angle_handler.normalize(smooth_az)
-
-        el_values = [p[1] for p in self.position_history]
-        smooth_el = np.average(el_values, weights=weights)
->>>>>>> parent of 826e34c (should fix things :))
 
         return smooth_az, smooth_el
 
@@ -739,7 +605,6 @@ class TargetTracker:
             print(f"[Tracker] Error clearing satellite_points: {e}")
 
     def demo_determine_orbit_plane(self):
-<<<<<<< HEAD
         """Determine the orbit plane and motion type from collected points."""
         if len(self.demo_orbit_points) < DEMO_MIN_POINTS_FOR_PREDICTION:
             print(
@@ -822,40 +687,16 @@ class TargetTracker:
         avg_el_change = np.mean(el_changes)
 
         if avg_az_change > 0.1:
-=======
-        """Determine the orbit plane from collected points."""
-        if len(self.demo_orbit_points) < 3:
-            return False
-
-        points = self.demo_orbit_points[-3:]
-
-        el_changes = []
-        az_changes = []
-        for i in range(len(points) - 1):
-            az_diff = self.angle_handler.difference(points[i][0], points[i + 1][0])
-            el_diff = points[i + 1][1] - points[i][1]
-            az_changes.append(az_diff)
-            el_changes.append(el_diff)
-
-        avg_az_change = np.mean(np.abs(az_changes))
-        avg_el_change = np.mean(el_changes)
-
-        if avg_az_change > 0:
->>>>>>> parent of 826e34c (should fix things :))
             self.demo_inclination = avg_el_change / avg_az_change
         else:
             self.demo_inclination = 0.0
 
-<<<<<<< HEAD
         # Determine direction
-=======
->>>>>>> parent of 826e34c (should fix things :))
         if np.mean(az_changes) > 0:
             self.demo_angular_velocity = abs(self.demo_angular_velocity)
         else:
             self.demo_angular_velocity = -abs(self.demo_angular_velocity)
 
-<<<<<<< HEAD
         # Calculate center elevation (accounting for parabolic motion)
         if self.demo_motion_type == "parabolic":
             # Find min and max elevations for parabolic path
@@ -866,16 +707,10 @@ class TargetTracker:
 
         print(f"[Demo] Motion determined: velocity={self.demo_angular_velocity:.1f}°/s, "
               f"inclination={self.demo_inclination:.3f}°/°, "
-=======
-        self.demo_center_el = np.mean([p[1] for p in points])
-
-        print(f"[Demo] Orbit determined: inclination={self.demo_inclination:.2f}°/°, "
->>>>>>> parent of 826e34c (should fix things :))
               f"direction={'CW' if self.demo_angular_velocity > 0 else 'CCW'}, "
               f"center_el={self.demo_center_el:.1f}°")
 
         self.demo_orbit_determined = True
-<<<<<<< HEAD
         self.demo_can_predict = True
         return True
 
@@ -886,18 +721,11 @@ class TargetTracker:
             # Just return last known position with small search area
             return self.demo_heading, self.demo_center_el
 
-=======
-        return True
-
-    def demo_predict_position(self, current_time):
-        """Predict drone position based on orbital motion."""
->>>>>>> parent of 826e34c (should fix things :))
         if self.demo_last_update is None:
             return self.demo_heading, self.demo_center_el
 
         dt = current_time - self.demo_last_update
 
-<<<<<<< HEAD
         # Limit prediction time to avoid runaway predictions
         dt = min(dt, 0.5)  # Don't predict more than 0.5 seconds ahead
 
@@ -936,25 +764,11 @@ class TargetTracker:
             predicted_el = self.demo_center_el
 
         # Clamp elevation to valid range
-=======
-        predicted_heading = self.demo_heading + self.demo_angular_velocity * dt
-        predicted_heading = self.angle_handler.normalize(predicted_heading)
-
-        if self.demo_inclination != -1 and self.demo_inclination != 0:
-            heading_change = self.demo_angular_velocity * dt
-            el_change = heading_change * self.demo_inclination
-            predicted_el = self.demo_center_el + el_change
-            predicted_el += 5 * math.sin(math.radians(predicted_heading))
-        else:
-            predicted_el = self.demo_center_el
-
->>>>>>> parent of 826e34c (should fix things :))
         predicted_el = np.clip(predicted_el, 10, 80)
 
         return predicted_heading, predicted_el
 
     def demo_track_orbit(self):
-<<<<<<< HEAD
         """Track drone in orbital motion with continuous motion analysis."""
         current_time = time.time()
 
@@ -979,19 +793,6 @@ class TargetTracker:
         else:
             self.scan_radius_az = DEMO_SCAN_RADIUS * 2  # 8° radius when learning
             self.scan_radius_el = DEMO_SCAN_RADIUS * 2
-=======
-        """Track drone in orbital motion with prediction."""
-        current_time = time.time()
-
-        predicted_az, predicted_el = self.demo_predict_position(current_time)
-
-        print(f"[Demo] Predicted position: ({predicted_az:.1f}°, {predicted_el:.1f}°)")
-
-        old_radius_az = self.scan_radius_az
-        old_radius_el = self.scan_radius_el
-        self.scan_radius_az = DEMO_SCAN_RADIUS
-        self.scan_radius_el = DEMO_SCAN_RADIUS
->>>>>>> parent of 826e34c (should fix things :))
 
         scan_results = self.tracking_scan(predicted_az, predicted_el)
 
@@ -1005,7 +806,6 @@ class TargetTracker:
                 actual_az, actual_el, distance, strength = best
 
                 dt = current_time - self.demo_last_update if self.demo_last_update else 0.05
-<<<<<<< HEAD
 
                 # Store point with timestamp
                 self.demo_orbit_points.append((actual_az, actual_el, current_time))
@@ -1041,26 +841,6 @@ class TargetTracker:
 
                 status = "learning" if not self.demo_can_predict else self.demo_motion_type
                 print(f"[Demo] Tracking ({status}): heading={actual_az:.1f}°, el={actual_el:.1f}°, "
-=======
-
-                self.demo_heading = actual_az
-                self.demo_last_update = current_time
-
-                if not self.demo_orbit_determined:
-                    self.demo_orbit_points.append((actual_az, actual_el))
-
-                    if len(self.demo_orbit_points) >= 3:
-                        self.demo_determine_orbit_plane()
-
-                self.update_satellite_points(actual_az, actual_el, distance, strength)
-
-                if len(self.demo_orbit_points) > 1 and dt > 0:
-                    prev_az = self.demo_orbit_points[-2][0]
-                    actual_velocity = self.angle_handler.difference(prev_az, actual_az) / dt
-                    self.demo_angular_velocity = 0.7 * self.demo_angular_velocity + 0.3 * actual_velocity
-
-                print(f"[Demo] Tracking: heading={actual_az:.1f}°, el={actual_el:.1f}°, "
->>>>>>> parent of 826e34c (should fix things :))
                       f"dist={distance:.0f}cm, velocity={self.demo_angular_velocity:.1f}°/s")
 
                 return True
@@ -1068,7 +848,6 @@ class TargetTracker:
         return False
 
     def demo_acquisition(self):
-<<<<<<< HEAD
         """Special acquisition for demo mode with FOV-aware scanning."""
         print("[Demo] Starting demo acquisition for orbiting drone...")
         print(f"[Demo] Using {self.lidar_fov}° FOV for scan planning")
@@ -1111,40 +890,6 @@ class TargetTracker:
             num_points = int(360 / (self.lidar_fov * 3))  # 3x FOV for faster scan
             scan_azimuths = np.linspace(0, 360 - 360 / num_points, num_points)
 
-=======
-        """Special acquisition for demo mode - look for orbiting drone."""
-        print("[Demo] Starting demo acquisition for orbiting drone...")
-
-        start_heading = None
-        try:
-            if "heading" in self.shared_data and self.shared_data["heading"].value >= 0:
-                start_heading = self.shared_data["heading"].value
-                print(f"[Demo] Starting with provided heading: {start_heading:.1f}°")
-        except:
-            print("[Demo] No heading value available")
-
-        try:
-            if "inclination" in self.shared_data:
-                provided_inclination = self.shared_data["inclination"].value
-                if provided_inclination != -1:
-                    self.demo_inclination = provided_inclination
-                    print(f"[Demo] Using provided inclination: {provided_inclination:.2f}°")
-        except:
-            print("[Demo] No inclination value available")
-
-        scan_elevations = [45, 35, 55, 25, 65]
-
-        if start_heading is not None:
-            scan_azimuths = [
-                start_heading,
-                start_heading + 10, start_heading - 10,
-                start_heading + 20, start_heading - 20,
-                start_heading + 30, start_heading - 30
-            ]
-        else:
-            scan_azimuths = np.linspace(0, 350, 12)
-
->>>>>>> parent of 826e34c (should fix things :))
         best_target = None
         best_strength = 0
 
@@ -1153,11 +898,6 @@ class TargetTracker:
                 if self.shared_data["shutdown"].value:
                     return None
 
-<<<<<<< HEAD
-=======
-                az = self.angle_handler.normalize(az)
-
->>>>>>> parent of 826e34c (should fix things :))
                 if not self.move_to_position_verified(az, el):
                     continue
 
@@ -1183,29 +923,19 @@ class TargetTracker:
             self.demo_heading = best_target[0]
             self.demo_center_el = best_target[1]
             self.demo_last_update = time.time()
-<<<<<<< HEAD
             # Store with timestamp
             self.demo_orbit_points = [(best_target[0], best_target[1], time.time())]
 
             print(f"[Demo] Acquisition successful: drone at ({best_target[0]:.1f}°, {best_target[1]:.1f}°)")
             print(f"[Demo] Will collect {DEMO_MIN_POINTS_FOR_PREDICTION} points before prediction")
-=======
-            self.demo_orbit_points = [(best_target[0], best_target[1])]
-
-            print(f"[Demo] Acquisition successful: drone at ({best_target[0]:.1f}°, {best_target[1]:.1f}°)")
->>>>>>> parent of 826e34c (should fix things :))
 
             if self.demo_inclination == -1:
                 print("[Demo] Inclination unknown, will determine from motion")
                 self.demo_orbit_determined = False
             else:
-<<<<<<< HEAD
                 # Even with provided inclination, we should verify it
                 print(f"[Demo] Will verify provided inclination of {self.demo_inclination:.2f}°")
                 self.demo_orbit_determined = False
-=======
-                self.demo_orbit_determined = True
->>>>>>> parent of 826e34c (should fix things :))
 
             return best_target
 
@@ -1213,13 +943,8 @@ class TargetTracker:
         return None
 
     def run(self):
-<<<<<<< HEAD
         """Main tracking loop with FOV-aware scanning."""
         print("[Tracker] Starting with 2° FOV consideration in all scan modes")
-=======
-        """Main tracking loop with independent acquisition, debug, and demo modes."""
-        print("[Tracker] Starting with independent acquisition, debug, and demo modes")
->>>>>>> parent of 826e34c (should fix things :))
 
         try:
             while not self.shared_data["shutdown"].value:
@@ -1253,15 +978,12 @@ class TargetTracker:
 
                             if self.lost_target_count >= 3:
                                 print("[Demo] Drone lost, attempting re-acquisition")
-<<<<<<< HEAD
                                 # Reset tracking state for re-acquisition
                                 self.demo_can_predict = False
                                 self.demo_motion_type = "unknown"
                                 self.demo_orbit_points = []
                                 self.demo_velocity_history.clear()
 
-=======
->>>>>>> parent of 826e34c (should fix things :))
                                 target = self.demo_acquisition()
 
                                 if target:
@@ -1286,17 +1008,12 @@ class TargetTracker:
                         self.demo_mode = False
                         self.demo_orbit_points = []
                         self.demo_orbit_determined = False
-<<<<<<< HEAD
                         self.demo_can_predict = False
                         self.demo_motion_type = "unknown"
                         self.demo_velocity_history.clear()
                         self.demo_first_acquisition_time = None
 
                 # Check for acquisition trigger
-=======
-
-                # Check for acquisition trigger (independent of debug mode)
->>>>>>> parent of 826e34c (should fix things :))
                 if self.shared_data["acquire_points"].value:
                     print("[Acquisition] Triggered")
                     self.shared_data["acquire_points"].value = False
@@ -1313,12 +1030,6 @@ class TargetTracker:
                         self.update_satellite_points(target[0], target[1], target[2], target[3])
 
                         print(f"[Acquisition] Success! Target at ({target[0]:.1f}°, {target[1]:.1f}°)")
-<<<<<<< HEAD
-=======
-
-                        # Optionally enable debug mode after acquisition
-                        # self.shared_data["debug_mode"].value = True
->>>>>>> parent of 826e34c (should fix things :))
                     else:
                         print("[Acquisition] Failed - no target found")
                         self.clear_satellite_points()
@@ -1336,34 +1047,19 @@ class TargetTracker:
                     time.sleep(0.1)
                     continue
 
-<<<<<<< HEAD
                 # Debug mode enabled - tracking
                 if self.current_target_az is None:
                     print("[Debug] No target set, starting scan at current position")
                     self.current_target_az = self.shared_data["stepper_degrees"].value
                     self.current_target_el = self.shared_data["servo_degrees"].value
 
-=======
-                # Debug mode enabled - if no target, start with simple scan at current position
-                if self.current_target_az is None:
-                    print("[Debug] No target set, starting scan at current position")
-                    # Initialize at current position
-                    self.current_target_az = self.shared_data["stepper_degrees"].value
-                    self.current_target_el = self.shared_data["servo_degrees"].value
-
-                    # If at origin, start at a reasonable position
->>>>>>> parent of 826e34c (should fix things :))
                     if self.current_target_az == 0 and self.current_target_el == 0:
                         self.current_target_az = 180.0
                         self.current_target_el = 45.0
 
                     print(
                         f"[Debug] Starting tracking at ({self.current_target_az:.1f}°, {self.current_target_el:.1f}°)")
-<<<<<<< HEAD
                     self.tracking_confidence = 0.3
-=======
-                    self.tracking_confidence = 0.3  # Start with low confidence
->>>>>>> parent of 826e34c (should fix things :))
 
                 cycle_start = time.time()
 
@@ -1383,17 +1079,11 @@ class TargetTracker:
                     self.update_satellite_points(smooth_az, smooth_el,
                                                  best_target[2], best_target[3])
 
-<<<<<<< HEAD
                     # Adjust scan radius based on confidence
                     if self.tracking_confidence > 0.5:
                         # Reduce radius but respect FOV minimum
                         self.scan_radius_az = max(self.lidar_fov * 2, self.scan_radius_az * 0.9)
                         self.scan_radius_el = max(self.lidar_fov * 2, self.scan_radius_el * 0.9)
-=======
-                    if self.tracking_confidence > 0.5:
-                        self.scan_radius_az = max(SCAN_RADIUS_AZ, self.scan_radius_az * 0.9)
-                        self.scan_radius_el = max(SCAN_RADIUS_EL, self.scan_radius_el * 0.9)
->>>>>>> parent of 826e34c (should fix things :))
 
                 else:
                     self.lost_target_count += 1
@@ -1406,12 +1096,8 @@ class TargetTracker:
                         self.clear_satellite_points()
 
                     if self.lost_target_count >= self.max_lost_count:
-<<<<<<< HEAD
                         # Expand search but respect FOV and 360° limits
                         self.scan_radius_az = min(self.scan_radius_az * 1.5, MAX_SCAN_RADIUS_AZ, 180)
-=======
-                        self.scan_radius_az = min(self.scan_radius_az * 1.5, MAX_SCAN_RADIUS_AZ)
->>>>>>> parent of 826e34c (should fix things :))
                         self.scan_radius_el = min(self.scan_radius_el * 1.5, MAX_SCAN_RADIUS_EL)
                         self.lost_target_count = 0
                         print(f"[Tracker] Expanding search to ±{self.scan_radius_az:.1f}°")
@@ -1427,19 +1113,12 @@ class TargetTracker:
                 if self.cycle_count % STATS_PRINT_INTERVAL == 0:
                     success_rate = (self.successful_reads / max(1, self.successful_reads + self.failed_reads)) * 100
                     print(f"[Tracker] Stats: {cycle_time * 1000:.0f}ms cycle, "
-<<<<<<< HEAD
                           f"{success_rate:.0f}% position success, confidence={self.tracking_confidence:.2f}")
 
                 # Use faster cycle time for debug mode
                 target_cycle_time = MIN_DEBUG_CYCLE_TIME if self.shared_data["debug_mode"].value else MIN_CYCLE_TIME
                 if cycle_time < target_cycle_time:
                     time.sleep(target_cycle_time - cycle_time)
-=======
-                          f"{success_rate:.0f}% position success")
-
-                if cycle_time < MIN_CYCLE_TIME:
-                    time.sleep(MIN_CYCLE_TIME - cycle_time)
->>>>>>> parent of 826e34c (should fix things :))
 
         except KeyboardInterrupt:
             print("[Tracker] Interrupted")
@@ -1454,7 +1133,6 @@ class TargetTracker:
 
 def run_tracker_process(shared_data, background_file="background_scan.npy"):
     """
-<<<<<<< HEAD
     Run the robust tracker process with FOV-aware scanning.
 
     Key improvements:
@@ -1487,34 +1165,6 @@ def run_tracker_process(shared_data, background_file="background_scan.npy"):
     print("[Tracker] Initializing with 2° FOV consideration and enhanced responsiveness...")
     print("[Tracker] Debug mode: 30ms cycles, Demo mode: 20ms cycles")
     print("[Tracker] Demo mode will analyze motion pattern before prediction")
-=======
-    Run the robust tracker process with independent acquisition, debug, and demo modes.
-
-    Shared data flags expected:
-    - acquire_points: Trigger acquisition scan (NOT required for debug mode)
-    - debug_mode: Enable/disable tracking (works without acquisition)
-    - demo: Enable demo mode for tracking orbiting drone
-    - heading: Initial heading for demo mode (optional, -1 if not provided)
-    - inclination: Orbit inclination (-1 if unknown)
-    - target_reached: Set by motion system when position reached
-    - shutdown: Stop the tracker
-
-    Usage examples:
-
-    1. Direct tracking without acquisition:
-       shared_data["debug_mode"].value = True  # Start tracking immediately
-
-    2. Find target then track:
-       shared_data["acquire_points"].value = True  # Find target
-       # After success...
-       shared_data["debug_mode"].value = True  # Enable tracking
-
-    3. Demo mode for orbiting drone:
-       shared_data["demo"].value = True  # Track orbiting pattern
-    """
-    print("[Tracker] Initializing with independent acquisition, debug, and demo modes...")
-    print("[Tracker] Debug mode does NOT require acquisition - can start tracking immediately")
->>>>>>> parent of 826e34c (should fix things :))
 
     if "demo" not in shared_data:
         print("[Tracker] Warning: 'demo' flag not in shared_data")
