@@ -563,7 +563,7 @@ class TargetTracker:
             smooth_az = self.angle_handler.normalize(smooth_az)
 
         el_values = [p[1] for p in self.position_history]
-        smooth_el = np.average(el_values, weight=weights)
+        smooth_el = np.average(el_values, weights=weights)
 
         return smooth_az, smooth_el
 
