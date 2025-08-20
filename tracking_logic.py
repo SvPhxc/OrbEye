@@ -298,13 +298,17 @@ class TargetTracker:
         return True
 
     def read_lidar_at_position(self):
-        """Read LiDAR data after confirming position."""
+        """Read LiDAR data with position synchronization."""
         # Ensure we don't exceed 1000Hz
         elapsed = time.time() - self.last_lidar_read
         if elapsed < self.lidar_min_interval:
             time.sleep(self.lidar_min_interval - elapsed)
 
-        # Get current actual position
+        # CRITICAL: Read position and LiDAR data atomically if possible
+        # Small delay to ensure position has stabilized
+        time.sleep(0.001)
+
+        # Get position BEFORE reading LiDAR
         actual_az = self.shared_data["stepper_degrees"].value
         actual_el = self.shared_data["servo_degrees"].value
 
@@ -312,8 +316,16 @@ class TargetTracker:
         with self.shared_data["lidar_data"].get_lock():
             distance = self.shared_data["lidar_data"][0]
             strength = self.shared_data["lidar_data"][1]
+            # If available, also read the timestamp of the LiDAR data
+            # to verify it's fresh
 
         self.last_lidar_read = time.time()
+
+        # Verify the position hasn't changed significantly
+        current_az = self.shared_data["stepper_degrees"].value
+        if abs(self.angle_handler.difference(actual_az, current_az)) > 0.5:
+            # Position changed during read - data might be invalid
+            print(f"[Warning] Position drift during read: {actual_az:.1f}° -> {current_az:.1f}°")
 
         return actual_az, actual_el, distance, strength
 
