@@ -5,18 +5,20 @@ from PyQt5.QtWidgets import QVBoxLayout, QPushButton, QCheckBox
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 
+# (Your imports remain the same)
 from datahandler import (
-    get_orbit_xyz_for_query,  # you already use this to get XYZ points
-    get_acquisition_pan_deg,  # NEW: prints the pan (RAAN)
-    get_ascending_node_unit_vector,  # NEW: for drawing a line (optional)
+    get_orbit_xyz_for_query,
+    get_acquisition_pan_deg,
+    get_ascending_node_unit_vector,
     fit_tle_from_satellite_points,
-    # save_tle_to_example,     # keep if you need it
 )
 
 
 class TrackerWindow(QtWidgets.QMainWindow):
-    def _init_(self, shared_data):
-        super()._init_()
+    # CORRECTED CONSTRUCTOR NAME: from _init_ to __init__
+    def __init__(self, shared_data):
+        # CORRECTED SUPER CALL: from _init_ to __init__
+        super().__init__()
         self.setWindowTitle("LockedInMartin")
         # Bigger window to fit heatmap under 3D
         self.resize(1500, 850)
@@ -213,6 +215,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.timer_ui.timeout.connect(self.update_ui)
         self.timer_ui.start(15)
 
+    # ... (rest of your GUI.py file is unchanged) ...
     # ===== Heatmap helpers =====
     def clear_heatmap(self):
         self.hm_bins[...] = 0.0
@@ -398,12 +401,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
             return
 
         try:
-            bg_data_path_obj = self.shared_data.get("background_path", None)
-            if bg_data_path_obj is None:
-                bg_data_path = "background_data.npy"
-            else:
-                bg_data_path = bg_data_path_obj.value
-
+            # Access the string value correctly from the ctypes object
+            bg_data_path = self.shared_data["background_path"].value.decode('utf-8')
             bg_data = np.load(bg_data_path)
 
             points = []
@@ -412,7 +411,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
                 if 10 < dist_cm < 16000:
                     az_rad = np.radians(az)
                     el_rad = np.radians(el)
-                    dist_m = dist_cm / 100.0  # cm -> m
 
                     x = dist_cm * np.cos(el_rad) * np.cos(az_rad)
                     y = dist_cm * np.cos(el_rad) * np.sin(az_rad)
@@ -467,7 +465,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     def on_debug_mode_toggled(self, en):
         self.shared_data["debug_mode"].value = bool(en)
-        self.shared_data["lidar_acceptance_range"][:] = [0.2, 2.0] if en else [3.0, 50.0]
+        # This key was removed from main.py, so it is commented out.
+        # self.shared_data["lidar_acceptance_range"][:] = [0.2, 2.0] if en else [3.0, 50.0]
 
     def on_go_clicked(self):
         try:
@@ -489,19 +488,21 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         # Update Status Label
         try:
-            if self.shared_data["acquirer_status"].value == 1:
-                self.status_label.setText("Status: ACQUIRING...")
-                self.status_label.setStyleSheet("color: #FFA500;")
-            elif self.shared_data["lidar_track_mode_active"].value:
-                self.status_label.setText("Status: TRACKING")
-                self.status_label.setStyleSheet("color: #D22B2B;")
-            elif self.shared_data["background_scan_active"].value:
+            # Match the status logic to the states defined in main.py/hardware_controller
+            system_state = self.shared_data["system_state"].value
+            if system_state == 2:  # SCANNING
                 self.status_label.setText("Status: SCANNING...")
                 self.status_label.setStyleSheet("color: #007FFF;")
+            elif system_state == 3:  # TRACKER_MOVE
+                self.status_label.setText("Status: TRACKING MOVE")
+                self.status_label.setStyleSheet("color: #D22B2B;")
             elif self.shared_data["go_to_target"].value:
                 status_text = "MOVING" if not self.shared_data["target_reached"].value else "HOLDING"
                 self.status_label.setText(f"Status: {status_text}")
                 self.status_label.setStyleSheet("color: #33F;")
+            elif self.shared_data["acquire_points"].value:
+                self.status_label.setText("Status: ACQUIRING...")
+                self.status_label.setStyleSheet("color: #FFA500;")
             else:
                 self.status_label.setText("Status: IDLE")
                 self.status_label.setStyleSheet("color: #808080;")
@@ -513,7 +514,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
             az = self.shared_data['stepper_degrees'].value
             el = self.shared_data['servo_degrees'].value
             dist_cm = self.shared_data['lidar_data'][0]
-            length_m = dist_cm / 100.0 if 10.0 <= dist_cm <= 16000.0 else 15.0
+
             az_rad, el_rad = np.radians(az), np.radians(el)
             x = dist_cm * np.cos(el_rad) * np.cos(az_rad)
             y = dist_cm * np.cos(el_rad) * np.sin(az_rad)
