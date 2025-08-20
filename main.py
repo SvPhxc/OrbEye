@@ -116,7 +116,15 @@ if __name__ == "__main__":
         # --- Active Tracker (High-Frequency Hunt) ---
         "lidar_track_mode_active": Value('b', False),
         "satellite_detected": Value('b', False),
-        "satellite_points": Array('d', [0.0, 0.0, 0.0, 0.0, 0.0]),  # az,el,dist_cm,str,ts
+        "satellite_points": Array('d', [0.0, 0.0, 0.0, 0.0, 0.0]),# az,el,dist_cm,str,ts
+        "system_status": Value('i', 0),  # 0:idle, 1:tracking, 2:lost, 3:error
+        "state_lock": Value('b', False),  # True if the system is locked onto a target
+        "movement_lock": Value('b', False),  # True if the system is moving
+        "movement_request_id": Value('i', 0),  # Unique ID for movement requests
+        "lidar_position": Array('d', [0.0, 0.0]),  # Az,El
+        "movement_complete_id": Value('i', 0),  # ID of the last completed movement request
+        "lidar_valid": Value('b', False),  # True if the last LiDAR measurement is valid
+        "lidar_lock": Value('b', False),  # True if the LiDAR is locked onto a target
         # NOTE: "hand_tracker_history" has been removed in favor of the more flexible "tracking_history" list.
 
         # --- EKF State ---
