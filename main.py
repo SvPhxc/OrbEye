@@ -8,6 +8,7 @@ from multiprocessing import Process, Array, Value, Manager
 import traceback
 from tracking_logic import run_tracker_process
 from tle_generator import run_tle_generator
+from grafana_visualisation import publish_data_to_aws
 
 # Import all process functions
 from hardware_controller import run_hardware_controller
@@ -165,6 +166,9 @@ if __name__ == "__main__":
         "orbit_patrol_max_wait_s": Value('d', 0.5),      # hard cap per waypoint
         "drone_orbit_speed_deg_s": Value('d', 0.0),       # 0.0 => ignore speed-based timeout
         "orbit_patrol_query": Array('c', PATH_BUFFER_SIZE),
+        
+        #----Grafana Visualization---
+        "grafana_enabled": Value('b', True),  # Enable Grafana visualization
     }
 
     # Initialize the character arrays with their default values
@@ -178,6 +182,7 @@ if __name__ == "__main__":
         "GUI": Process(target=run_gui, args=(shared_data,)),
         "TrackingLogic": Process(target=run_tracker_process, args=(shared_data,)),
         "TLEGenerator": Process(target=run_tle_generator, args=(shared_data,)),  # <-- ADD THE NEW PROCESS
+        "GrafanaVisualization": Process(target=publish_data_to_aws, args=(shared_data,)) 
     }
 
 
@@ -215,5 +220,6 @@ if __name__ == "__main__":
         join_or_escalate(processes["HardwareController"], "HardwareController")
         join_or_escalate(processes["TrackingLogic"], "TrackingLogic")
         join_or_escalate(processes["TLEGenerator"], "TLEGenerator")  # <-- ADD TLE PROCESS TO SHUTDOWN
+        join_or_escalate(processes.get("GrafanaVisualization"), "GrafanaVisualization")
         print("[main] All processes have been terminated. Program exited cleanly.")
         sys.exit(0)
