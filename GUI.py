@@ -423,22 +423,15 @@ class TrackerWindow(QtWidgets.QMainWindow):
     # TLE SHOW
     def output_TLE(self):
         try:
-            # tracking_history is a Manager().list() of [az, el, dist_cm, strength, ts]
             hist = list(self.shared_data["tracking_history"])
             if len(hist) < 3:
-                print(f"[TLE] Need at least 3 points; currently have {len(hist)}.")
+                print(f"[TLE] Need ≥3 points; have {len(hist)}.")
                 return
-
-            # If your fitter expects numpy:
             import numpy as np
             arr = np.array(hist, dtype=float)
-
             tle_name, l1, l2 = fit_tle_from_satellite_points(arr, unit="cm", name="MY-FIT")
             print("[TLE] Fitted TLE:")
-            print(tle_name)
-            print(l1)
-            print(l2)
-
+            print(tle_name); print(l1); print(l2)
         except Exception as e:
             print(f"[TLE] Output failed: {e}")
 

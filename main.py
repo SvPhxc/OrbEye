@@ -166,7 +166,8 @@ if __name__ == "__main__":
         "orbit_patrol_max_wait_s": Value('d', 0.5),      # hard cap per waypoint
         "drone_orbit_speed_deg_s": Value('d', 0.0),       # 0.0 => ignore speed-based timeout
         "orbit_patrol_query": Array('c', PATH_BUFFER_SIZE),
-        
+        "record_tle_points": Value('b', True),
+
         #----Grafana Visualization---
         "grafana_enabled": Value('b', True),  # Enable Grafana visualization
     }
@@ -182,7 +183,7 @@ if __name__ == "__main__":
         "GUI": Process(target=run_gui, args=(shared_data,)),
         "TrackingLogic": Process(target=run_tracker_process, args=(shared_data,)),
         "TLEGenerator": Process(target=run_tle_generator, args=(shared_data,)),  # <-- ADD THE NEW PROCESS
-        "GrafanaVisualization": Process(target=publish_data_to_aws, args=(shared_data,)) 
+        "GrafanaVisualization": Process(target=publish_data_to_aws, args=(shared_data,))
     }
 
 
