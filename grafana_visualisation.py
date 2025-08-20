@@ -46,7 +46,7 @@ def publish_simple(topic, payload_data, batch_timestamp):
         payload=json.dumps(payload_data), 
         qos=mqtt.QoS.AT_LEAST_ONCE
     )
-    print(f"Published to {topic}: {json.dumps(payload_data, indent=2)}")
+# print(f"Published to {topic}: {json.dumps(payload_data, indent=2)}")
 
 def publish_original(topic, value, batch_timestamp):
     """Original publish function - fixed logic"""
@@ -67,7 +67,7 @@ def publish_original(topic, value, batch_timestamp):
         }
     
     mqtt_connection.publish(topic=topic, payload=json.dumps(payload), qos=mqtt.QoS.AT_LEAST_ONCE)
-    print(f"Published to {topic}: {json.dumps(payload)}")
+    #print(f"Published to {topic}: {json.dumps(payload)}")
 
 # ==== FAKE DATA GENERATORS (No changes here) ====
 def generate_cpf():
@@ -140,7 +140,7 @@ def publish_data_to_aws(shared_data):
                 break
 
             # A longer pause here to control the overall publishing frequency
-            time.sleep(5) 
+            time.sleep(2) 
             
     except KeyboardInterrupt:
         print("\n\nUser terminated the process.")
