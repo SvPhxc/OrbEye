@@ -149,6 +149,7 @@ def make_detection_proceed_condition(clutter_filter, shared_data,
                         ok_streak += 1
                         last_seen_ts = ts
                     if ok_streak >= confirm_hits:
+                        print("target found, continue")
                         return True
                 else:
                     ok_streak = 0
