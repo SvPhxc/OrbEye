@@ -37,7 +37,7 @@ TILT_KP, TILT_KI, TILT_KD = 5.0, 0.00, 0.0000
 # ==============================================================================
 class PIDController:
     # ... (PID Controller class remains unchanged) ...
-    def _init_(self, Kp, Ki, Kd, setpoint=0, output_limits=(-100, 100), anti_windup_limit=20, wrap_range=None):
+    def __init__(self, Kp, Ki, Kd, setpoint=0, output_limits=(-100, 100), anti_windup_limit=20, wrap_range=None):
         self.Kp, self.Ki, self.Kd, self.setpoint, self.output_limits, self.anti_windup_limit, self.wrap_range = Kp, Ki, Kd, setpoint, output_limits, anti_windup_limit, wrap_range
         self._integral, self._last_error, self._last_output, self._last_time = 0, 0, 0, time.monotonic()
 
