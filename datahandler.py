@@ -9,10 +9,6 @@ import math
 from sgp4.api import Satrec, jday
 from sgp4.conveniences import sat_epoch_datetime
 
-# ---------------------------
-# Public API
-# ---------------------------
-
 def parse_tle_file(file_path: str) -> list[tuple[str, str, str]]:
     """
     Read a .tle file and return a list of (name, line1, line2) triples.
@@ -186,9 +182,13 @@ def _resolve_tle_lines(*, tle_lines, tle_filename) -> tuple[str, str]:
 
 
 
-
-
-
+def get_inclination_deg(*, tle_lines=None, tle_filename=None) -> float:
+    """
+    Return orbital inclination (deg) from a TLE (0..180).
+    """
+    line1, line2 = _resolve_tle_lines(tle_lines=tle_lines, tle_filename=tle_filename)
+    sat = Satrec.twoline2rv(line1, line2)
+    return math.degrees(sat.inclo) % 180.0
 
 
 

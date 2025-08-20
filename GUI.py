@@ -11,6 +11,7 @@ from datahandler import (
     get_acquisition_pan_deg,
     get_ascending_node_unit_vector,
     fit_tle_from_satellite_points,
+    get_inclination_deg,
 )
 
 class Toggle(QtWidgets.QCheckBox):
@@ -387,8 +388,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
         try:
             name, l1, l2 = normalize_tle_input(query, default_path="example.tle")
             pan_deg = get_acquisition_pan_deg(tle_lines=(l1, l2))
+            inc_deg = get_inclination_deg(tle_lines=(l1,l2))
             print(f"[TLE] Acquisition pan for '{name}' (ascending node / RAAN): {pan_deg:.2f}°")
-
+            _shared_data["rann"].Value = pan_deg
+            _shared_data["inclination"].Value = inc_deg
             if also_draw_line:
                 # build endpoint in your scene units (cm). Ascending node is in XY plane (z=0).
                 dir_unit = get_ascending_node_unit_vector(tle_lines=(l1, l2))  # (x,y,0), unitless
@@ -483,6 +486,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
     # ===== Controls handlers =====
     def on_reactive_mode_toggled(self, checked):
         self.shared_data["demo"].value = checked
+        print("Demo")
 
     def toggle_background_plot(self):
         """Loads data from file and displays/hides the plot."""

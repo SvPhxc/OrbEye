@@ -112,6 +112,8 @@ if __name__ == "__main__":
         "acquirer_elevation_step": Value('d', 10.0),
         "tracking_logic_ready": Value('b', False),
         "reactive_mode": Value('b', False),
+        "rann": Value('d', 0),
+        "inclination": Value('d', 0),
 
         # --- Active Tracker (High-Frequency Hunt) ---
         "lidar_track_mode_active": Value('b', False),
