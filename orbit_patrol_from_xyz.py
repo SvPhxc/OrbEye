@@ -55,13 +55,57 @@ def _should_abort(shared_data):
     )
 
 # ---------- proceed condition (ClutterFilter) ----------
+def _bind_cf_detector(clutter_filter):
+    """
+    Inspect ClutterFilter to find a suitable method and return a callable:
+        detector(az, el, dist_cm, strength) -> bool
+    Accepted method names (first one found wins): is_foreground, is_target,
+    classify, detect, predict, evaluate, check, process, feed.
+    The method's return can be bool, numeric (score>0 => True), or a tuple/list
+    where the first bool/numeric will be used.
+    """
+    candidates = [
+        "is_foreground", "is_target", "classify", "detect",
+        "predict", "evaluate", "check", "process", "feed"
+    ]
+    for name in candidates:
+        meth = getattr(clutter_filter, name, None)
+        if callable(meth):
+            print(f"[Patrol] Using ClutterFilter.{name}() for detection.")
+            def detector(az, el, dist_cm, strength, _m=meth):
+                res = _m(az, el, dist_cm, strength)
+                # Normalize result to bool
+                if isinstance(res, (bool, np.bool_)):
+                    return bool(res)
+                if isinstance(res, (tuple, list)) and len(res):
+                    # Prefer first boolean in the sequence
+                    for v in res:
+                        if isinstance(v, (bool, np.bool_)):
+                            return bool(v)
+                    # Otherwise, use first numeric as score
+                    v = res[0]
+                    if isinstance(v, (int, float, np.floating)):
+                        return v > 0
+                    return bool(v)
+                if isinstance(res, (int, float, np.floating)):
+                    return res > 0
+                return bool(res)
+            return detector
+    raise AttributeError(
+        "ClutterFilter has no usable detector method. "
+        "Expected one of: is_foreground, is_target, classify, detect, "
+        "predict, evaluate, check, process, or feed."
+    )
+
 def make_detection_proceed_condition(clutter_filter, shared_data,
                                      confirm_hits=3, max_age_s=0.5):
     """
-    Returns: proceed_condition(az, el, deadline_s) -> bool
-    Calls clutter_filter with (az, el, dist_cm, strength) until it returns True confirm_hits times,
-    or until deadline is reached.
+    Returns proceed_condition(az, el, deadline_s) -> bool
+    Waits until the ClutterFilter reports foreground at the current waypoint
+    (confirming 'confirm_hits' fresh LiDAR samples), or until deadline.
     """
+    detector = _bind_cf_detector(clutter_filter)
+
     def proceed_condition(az, el, deadline_s):
         ok_streak = 0
         last_seen_ts = -1.0
@@ -69,21 +113,14 @@ def make_detection_proceed_condition(clutter_filter, shared_data,
             if _should_abort(shared_data):
                 return False
 
+            # latest LiDAR sample
             dist_cm = float(shared_data["lidar_data"][0])
             strength = float(shared_data["lidar_data"][1])
             ts = float(shared_data["lidar_data"][2])
 
-            # fresh LiDAR only
+            # only consider fresh samples
             if ts > 0 and (time.time() - ts) <= max_age_s:
-                try:
-                    is_fg = clutter_filter.is_foreground(az, el, dist_cm, strength)
-                except AttributeError:
-                    try:
-                        is_fg = clutter_filter.classify(az, el, dist_cm, strength)
-                    except AttributeError:
-                        is_fg = bool(clutter_filter.update(az, el, dist_cm, strength))
-
-                if is_fg:
+                if detector(az, el, dist_cm, strength):
                     if ts != last_seen_ts:
                         ok_streak += 1
                         last_seen_ts = ts
@@ -94,6 +131,7 @@ def make_detection_proceed_condition(clutter_filter, shared_data,
 
             time.sleep(0.01)
         return False
+
     return proceed_condition
 
 # ---------- main patrol ----------
