@@ -27,26 +27,26 @@ from collections import deque
 # LiDAR Parameters
 LIDAR_FOV = 2.0  # Degrees - Field of view of the LiDAR
 LIDAR_MIN_INTERVAL = 0.001  # 1ms minimum between reads (1000Hz max)
-MIN_STRENGTH_THRESHOLD = 30  # Much lower threshold to find any target
-HIGH_CONFIDENCE_THRESHOLD = 100  # Strong signal threshold
-ACQUISITION_STRENGTH_THRESHOLD = 20  # Even lower for acquisition
+MIN_STRENGTH_THRESHOLD = 150  # Much lower threshold to find any target
+HIGH_CONFIDENCE_THRESHOLD = 6000  # Strong signal threshold
+ACQUISITION_STRENGTH_THRESHOLD = 420  # Even lower for acquisition
 
 # Clutter Filter Parameters
 ANGULAR_TOLERANCE = 0.0  # Degrees - for background matching
 DISTANCE_MARGIN_CM = 50.0  # Reduced margin for better detection
 CACHE_SIZE = 75000  # Number of cached clutter filter queries
-DISABLE_CLUTTER_FOR_ACQUISITION = True  # Disable clutter filter during acquisition
+DISABLE_CLUTTER_FOR_ACQUISITION = False  # Disable clutter filter during acquisition
 
 # Movement Parameters
 MOVEMENT_TIMEOUT = 1.0  # Seconds to wait for movement
 POSITION_TOLERANCE = 0.0  # Degrees - acceptable position error
-POSITION_VERIFY_DELAY = 0.015  # Slightly longer stabilization
+POSITION_VERIFY_DELAY = 0.005  # Slightly longer stabilization
 MAX_POSITION_ERROR = 0.0  # Maximum acceptable position error in degrees
 
 # Normal Tracking Parameters - Adjusted for FOV
 SCAN_RADIUS_AZ = 8.0  # Degrees - reduced to ensure points are spaced properly
 SCAN_RADIUS_EL = 8.0  # Degrees - normal scan radius elevation
-SCAN_POINTS = 4  # Reduced to ensure minimum FOV spacing
+SCAN_POINTS = 8  # Reduced to ensure minimum FOV spacing
 MAX_SCAN_RADIUS_AZ = 20.0  # Maximum expanded search radius
 MAX_SCAN_RADIUS_EL = 20.0  # Maximum expanded search radius
 
