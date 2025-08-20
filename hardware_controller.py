@@ -22,7 +22,7 @@ SCAN_TURNAROUND_DEG = 0.5
 
 # --- Define the boundaries and resolution for scanning ---
 SCAN_PAN_MIN, SCAN_PAN_MAX = 0, 360
-SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 90
+SCAN_TILT_MIN, SCAN_TILT_MAX = 0, 60
 SCAN_STEP_DEG = 1.0
 
 # --- PID Tuning Gains ---
