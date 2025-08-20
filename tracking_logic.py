@@ -546,7 +546,7 @@ def command_motors_to_target(azimuth, elevation, shared_data):
         shared_data["go_to_target"].value = True
 
 
-def run_tracking_logic(shared_data):
+def run_tracker_process(shared_data):
     """Main tracking logic process."""
     print("[TrackingLogic] Starting tracking logic process...")
 
