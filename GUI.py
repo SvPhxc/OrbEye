@@ -13,6 +13,59 @@ from datahandler import (
     fit_tle_from_satellite_points,
 )
 
+class Toggle(QtWidgets.QCheckBox):
+    def __init__(self, parent=None, *, track_radius=13, thumb_radius=11, duration_ms=140):
+        super().__init__(parent)
+        self._track_r = track_radius
+        self._thumb_r = thumb_radius
+        self._offset = 1.0 if self.isChecked() else 0.0
+
+        self._anim = QtCore.QPropertyAnimation(self, b"offset", self)
+        self._anim.setDuration(duration_ms)
+
+        self.toggled.connect(self._start_anim)
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+
+    # --- animated property ---
+    def getOffset(self): return self._offset
+    def setOffset(self, v): self._offset = float(v); self.update()
+    offset = QtCore.pyqtProperty(float, fget=getOffset, fset=setOffset)
+
+    def sizeHint(self):
+        # track width ≈ 2*track + margin; height ≈ 2*track
+        return QtCore.QSize(self._track_r * 2 + 20, self._track_r * 2)
+
+    def _start_anim(self, on):
+        self._anim.stop()
+        self._anim.setStartValue(self._offset)
+        self._anim.setEndValue(1.0 if on else 0.0)
+        self._anim.start()
+
+    def paintEvent(self, e):
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        rect = self.rect().adjusted(0, 0, -1, -1)
+
+        # Track
+        on = self.isChecked()
+        track = QtGui.QColor("#4caf50" if on else "#bdbdbd")
+        border = QtGui.QColor("#43a047" if on else "#9e9e9e")
+        p.setPen(border)
+        p.setBrush(track)
+        p.drawRoundedRect(rect, self._track_r, self._track_r)
+
+        # Thumb
+        margin = rect.height() // 2
+        x0 = rect.left() + margin
+        x1 = rect.right() - margin
+        cx = x0 + (x1 - x0) * self._offset
+        cy = rect.center().y()
+        p.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 40)))
+        p.setBrush(QtGui.QBrush(QtGui.QColor("white")))
+        p.drawEllipse(QtCore.QPointF(cx, cy), self._thumb_r, self._thumb_r)
+
+
 
 class TrackerWindow(QtWidgets.QMainWindow):
     # CORRECTED CONSTRUCTOR NAME: from _init_ to __init__
@@ -106,9 +159,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
         controls_layout = QVBoxLayout()
         main_layout.addLayout(controls_layout, stretch=1)
 
+        # Title
         controls_layout.addWidget(QtWidgets.QLabel("CONTROLLER STATUS"))
 
-        # Row: status text (left) + a dummy switch (right)
+        # Row: status text (left) + "Grafana" label + Toggle (right)
         row = QtWidgets.QWidget()
         row_h = QtWidgets.QHBoxLayout(row)
         row_h.setContentsMargins(0, 0, 0, 0)
@@ -118,10 +172,16 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.status_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #808080;")
         row_h.addWidget(self.status_label)
 
-        row_h.addStretch(1)  # push switch to the right
+        row_h.addStretch(1)
 
-        self.switch_grafana = QtWidgets.QCheckBox("Grafana")  # does nothing (no signal connected)
-        self.switch_grafana.setChecked(False)
+        lbl_graf = QtWidgets.QLabel("Grafana")
+        lbl_graf.setStyleSheet("color: #555;")
+        row_h.addWidget(lbl_graf)
+
+        self.switch_grafana = Toggle()
+        self.switch_grafana.setChecked(False)           # start OFF (dummy)
+        # optional: if you want to see its state in console for now
+        self.switch_grafana.toggled.connect(lambda on: print(f"[GUI] Grafana toggle: {on}"))
         row_h.addWidget(self.switch_grafana)
 
         controls_layout.addWidget(row)
