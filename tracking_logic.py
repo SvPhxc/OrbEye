@@ -575,7 +575,7 @@ def run_tracker_process(shared_data):
                 dist, strength, timestamp = shared_data["lidar_data"][:]
             current_az = shared_data["stepper_degrees"].value
             current_el = shared_data["servo_degrees"].value
-            measurement_valid = (10.0 <= dist <= 16000.0)
+            measurement_valid = (80.0 <= dist <= 140.0)
 
             if shared_data["debug_mode"].value:
                 if state != TrackingState.DEBUG_MODE:
