@@ -1235,16 +1235,17 @@ def run_tracker_process(shared_data, background_file="background_scan.npy"):
     print("[Main] Initializing tracker process...")
 
     # Instantiate the standard tracker to act as a hardware interface
-  #  standard_tracker = TargetTracker(shared_data, background_file)
+    standard_tracker = TargetTracker(shared_data, background_file)
 
     # Check which tracker to run
-   # if shared_data.get("demo"):
+    if shared_data.get("demo"):
         # Run the new specialized orbital tracker
        # orbital_tracker = OrbitalTracker(shared_data, standard_tracker)
-      #  try:
-         #   run_circular_drone_tracker(shared_data)
-        #except Exception as e:
-            #print(f"[Main] OrbitalTracker process error: {e}")
+        try:
+            run_circular_drone_tracker(shared_data)
+        except Exception as e:
+            print(f"[Main] Circular Drone Tracker process error: {e}")
+
 
 
     #elif shared_data.get("debug_mode", False):
