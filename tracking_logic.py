@@ -767,7 +767,7 @@ class TargetTracker:
         try:
             while not self.shared_data["shutdown"].value:
                 # Check for demo mode (highest priority)
-                if "demo" in self.shared_data and self.shared_data["tracking"].value:
+                if "demo" in self.shared_data and self.shared_data["demo"].value:
                     if not self.demo_mode:
                         print("[Demo] Demo mode activated - tracking orbiting drone")
                         self.demo_mode = True
@@ -1772,7 +1772,7 @@ def run_circular_drone_tracker(shared_data):
 
         tracker.start_search(initial_heading, heading_deviation, initial_inclination)
 
-    # Main loop - THIS WAS THE PRIMARY FIX
+    # Main loop
     while not shared_data["shutdown"].value:
         try:
             tracker.update()
@@ -1807,21 +1807,28 @@ def run_tracker_process(shared_data, background_file="background_scan.npy"):
     # Instantiate the standard tracker to act as a hardware interface
     standard_tracker = TargetTracker(shared_data, background_file)
 
-    # Check which tracker to run
-    if shared_data.get("demo"):
+    # Check which tracker to run using a more explicit and safe check
+    if "demo" in shared_data and shared_data["demo"].value:
         # Run the new specialized circular drone tracker
+        print("[Main] Demo mode is TRUE. Running CircularDroneTracker.")
         try:
             run_circular_drone_tracker(shared_data)
         except Exception as e:
             print(f"[Main] Circular Drone Tracker process error: {e}")
 
-    # FIXED: Uncommented this block to allow fallback to standard tracker
-    elif shared_data.get("debug_mode", False):
+    elif "debug_mode" in shared_data and shared_data["debug_mode"].value:
         # Run the original general-purpose tracker
-        print("[Main] Running standard TargetTracker.")
+        print("[Main] Demo mode is FALSE. Running standard TargetTracker in debug mode.")
         try:
             standard_tracker.run()
         except Exception as e:
             print(f"[Main] TargetTracker process error: {e}")
+
+    else:
+        print("[Main] No active mode (demo/debug) specified. Tracker process will idle.")
+        # Keep the process alive but idle until a mode is activated or shutdown is called.
+        while not shared_data["shutdown"].value:
+            time.sleep(0.5)
+
 
     print("[Main] Tracker process ended.")
