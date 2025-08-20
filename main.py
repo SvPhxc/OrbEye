@@ -133,6 +133,7 @@ if __name__ == "__main__":
         "scan_complete": Value('b', False),  # True if the background scan is complete
         "scan_error": Value('b', False),  # True if there was an error during the background scan
         "movement_priority": Value('i', 0),  # Priority of the current movement request
+        "total_movements": Value('i', 0),  # Total number of movements made
         # NOTE: "hand_tracker_history" has been removed in favor of the more flexible "tracking_history" list.
 
         # --- EKF State ---
