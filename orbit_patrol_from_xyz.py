@@ -149,7 +149,6 @@ def make_detection_proceed_condition(clutter_filter, shared_data,
                         ok_streak += 1
                         last_seen_ts = ts
                     if ok_streak >= confirm_hits:
-                        print("target found, continue")
                         return True
                 else:
                     ok_streak = 0
@@ -207,7 +206,34 @@ def patrol_waypoints(shared_data,
             while time.monotonic() < deadline and not _should_abort(shared_data):
                 time.sleep(0.01)
         else:
-            proceed_condition(az, el, deadline_s=deadline)
+            detected = bool(proceed_condition(az, el, deadline_s=deadline))
+
+            # If we confirmed a detection at this waypoint, save it
+            if detected and (shared_data.get("record_tle_points") and shared_data["record_tle_points"].value):
+                # Read the freshest LiDAR sample
+                dist_cm  = float(shared_data["lidar_data"][0])
+                strength = float(shared_data["lidar_data"][1])
+                ts       = float(shared_data["lidar_data"][2])
+
+                # 1) Update the single-slot 'satellite_points' (used by GUI heatmap)
+                try:
+                    with shared_data["satellite_points"].get_lock():
+                        shared_data["satellite_points"][:] = [az, el, dist_cm, strength, ts]
+                        print("added satellite point")
+                except Exception:
+                    # Fallback if no lock (Array('d') normally has get_lock)
+                    shared_data["satellite_points"][:] = [az, el, dist_cm, strength, ts]
+
+                # 2) Append to the growing history for TLE fitting
+                try:
+                    shared_data["tracking_history"].append([az, el, dist_cm, strength, ts])
+                    print("added history point")
+                except Exception as e:
+                    print(f"[Patrol] WARNING: couldn't append to tracking_history: {e}")
+
+                # Optional: raise a flag others can react to
+                if shared_data.get("satellite_detected"):
+                    shared_data["satellite_detected"].value = True
 
     # go back to first visible point
     if not _should_abort(shared_data):
