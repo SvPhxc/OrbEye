@@ -81,11 +81,11 @@ class ScanProfiles:
     }
 
     NORMAL = {
-        "azimuth_speed": 60.0,
-        "elevation_step": 3.0,
-        "data_rate": 40,
-        "servo_move_time": 0.8,
-        "servo_settle_time": 0.2,
+        "azimuth_speed": 360.0,
+        "elevation_step": 1.0,
+        "data_rate": 1000,
+        "servo_move_time": 0.05,
+        "servo_settle_time": 0.02
     }
 
     HIGH_QUALITY = {

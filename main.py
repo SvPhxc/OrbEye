@@ -129,6 +129,10 @@ if __name__ == "__main__":
         "lidar_reads": Value('d', 0),  # Number of LiDAR reads since last reset
         "last_state_change": Value('d', 0.0),  # Timestamp of the last state change
         "background_scan_paused": Value('b', False),  # True if the background scan is complete
+        "scan_progress": Value('d', 0.0),  # Percentage of the background scan completed
+        "scan_complete": Value('b', False),  # True if the background scan is complete
+        "scan_error": Value('b', False),  # True if there was an error during the background scan
+
         # NOTE: "hand_tracker_history" has been removed in favor of the more flexible "tracking_history" list.
 
         # --- EKF State ---
