@@ -1,518 +1,435 @@
 import sys
 import numpy as np
-from PyQt5 import QtWidgets, QtCore
-from datetime import timedelta
+from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt5.QtWidgets import QVBoxLayout, QPushButton, QCheckBox
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
-import time
-import os
-from astropy.time import Time
-
 
 from datahandler import (
-    parse_tle_file,
-    generate_orbit_xyz,
-    fetch_tle_by_name,
-    get_sofia_eci,
-    find_overhead_time
+    get_orbit_xyz_for_query,   # you already use this to get XYZ points
+    get_acquisition_pan_deg,   # NEW: prints the pan (RAAN)
+    get_ascending_node_unit_vector,  # NEW: for drawing a line (optional)
+    fit_tle_from_satellite_points,
+    # save_tle_to_example,     # keep if you need it
 )
 
-
 class TrackerWindow(QtWidgets.QMainWindow):
-    def __init__(self, shared_data, movement_queue):
+    def __init__(self, shared_data):
         super().__init__()
-        self.setWindowTitle("LockedIn Martin")
-        self.resize(1300, 600)
-        self.debug_scale = 0.1
-        self.orbit_items = []  # Store all orbit and vector items
+        self.setWindowTitle("LockedInMartin")
+        # Bigger window to fit heatmap under 3D
+        self.resize(1500, 850)
 
-        global _shared_data
-        self.shared_data = _shared_data
-
-
-        # Central widget and layout
+        self.shared_data = shared_data
         self.central_widget = QtWidgets.QWidget()
         self.setCentralWidget(self.central_widget)
         main_layout = QtWidgets.QHBoxLayout(self.central_widget)
 
-        # === Left: 3D View ===
+        self.orbit_items = []          # holds GL items for the plotted orbit
+        self.orbit_as_points = False   # set True for points/cloud; False for a polyline
+        self.orbit_scale_cm_per_km = 0.05 # 6000km --> 300 cm
+
+        # ===== Left panel: 3D view (top) + 2D heatmap (bottom) =====
+        left_panel = QtWidgets.QWidget()
+        left_vbox = QtWidgets.QVBoxLayout(left_panel)
+        left_vbox.setContentsMargins(0, 0, 0, 0)
+        left_vbox.setSpacing(6)
+
+        # 3D View Setup
         self.view = gl.GLViewWidget()
-        self.view.setCameraPosition(distance=20)
-        main_layout.addWidget(self.view, stretch=3)
+        self.view.setCameraPosition(distance=1500)
+        left_vbox.addWidget(self.view, stretch=3)
 
         grid = gl.GLGridItem()
+        grid.scale(10, 10, 1)
         self.view.addItem(grid)
 
         self.background_plot = gl.GLScatterPlotItem(size=5, color=(0.5, 0.5, 1, 0.5))
         self.view.addItem(self.background_plot)
 
-        self.lidar_cloud = gl.GLScatterPlotItem(pos=np.empty((0,3)), size=4, color=(1, 0, 0, 0.8))
-        self.view.addItem(self.lidar_cloud)
-        self._lidar_cloud_pts = []
-        self._last_cloud_pt = None
-
-        # Satellite object
         self.satellite = gl.GLScatterPlotItem(pos=np.array([[0, 0, 0]]), color=(1, 0, 0, 1), size=10)
         self.view.addItem(self.satellite)
 
-        # Laser beam
         self.laser = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], [1, 0, 0]]), color=(0, 1, 0, 1), width=2)
         self.view.addItem(self.laser)
 
-        # SLR Station marker
         md = gl.MeshData.sphere(rows=10, cols=20, radius=0.5)
         self.station = gl.GLMeshItem(meshdata=md, smooth=True, color=(0, 0, 1, 1), shader='shaded')
         self.view.addItem(self.station)
 
-        # Orbit animation params
-        self.radius = 8
-        self.orbit_speed = 0.2
-        self.elevation_deg = 30
-        self.start_time = time.time()
-        self.orbit_enabled = True
+        # === 2D Heatmap (Pan vs Tilt from shared 'satellite_points') ===
+        # Heatmap bins: rows=tilt 0..90, cols=pan 0..359 (no transpose needed)
+        self.hm_bins = np.zeros((91, 360), dtype=np.float32)
+        self.hm_widget = pg.GraphicsLayoutWidget()
+        left_vbox.addWidget(self.hm_widget, stretch=2)
 
-        # Timer
-        self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.update_laser_from_pan_tilt)
-        self.timer.start(30)  # ~33 fps is plenty
+        self.hm_plot = self.hm_widget.addPlot(title="Pan/Tilt Heatmap")
+        self.hm_plot.setLabel('bottom', 'Pan (deg)')
+        self.hm_plot.setLabel('left', 'Tilt (deg)')
+        self.hm_plot.setLimits(xMin=0, xMax=360, yMin=0, yMax=90)
+        self.hm_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.hm_plot.setMouseEnabled(x=False, y=False)
 
-        self.debug_flag_timer = QtCore.QTimer()
-        self.debug_flag_timer.timeout.connect(self.poll_lidar_debug_flag)
-        self.debug_flag_timer.start(10) 
+        self.hm_img = pg.ImageItem()
+        self.hm_plot.addItem(self.hm_img)
 
-        # === Right: Controls ===
-        controls = QtWidgets.QVBoxLayout()
-        main_layout.addLayout(controls, stretch=1)
+        # IMPORTANT: initialize image BEFORE setting rect so width/height are known
+        # Flip vertically so tilt increases upward (row 0 at bottom visually)
+        self.hm_img.setImage(self.hm_bins[::-1, :], autoLevels=False)
+        # Map image pixels directly to degree space
+        try:
+            self.hm_img.setRect(QtCore.QRectF(0, 0, 360, 91))
+        except Exception:
+            # Fallback for older pyqtgraph: use transform if setRect is problematic
+            self.hm_img.resetTransform()
+            sx = 360.0 / self.hm_bins.shape[1]  # 360 / 360
+            sy = 91.0 / self.hm_bins.shape[0]   # 91 / 91
+            self.hm_img.scale(sx, sy)
+            self.hm_img.setPos(0, 0)
 
-        target_controls = QtWidgets.QVBoxLayout()
+        # Colormap (fallback to grayscale if not available)
+        try:
+            cm = pg.colormap.get('inferno')
+            self.hm_img.setLookupTable(cm.getLookupTable(0.0, 1.0, 256))
+        except Exception:
+            pass
+        self.hm_img.setLevels((0.0, 1.0))
+        self._hm_last_ts = -1.0  # to avoid double-counting same sample
 
-        # Target Azimuth input
-        target_controls.addWidget(QtWidgets.QLabel("Target Azimuth (°)"))
-        self.az_input = QtWidgets.QLineEdit()
-        self.az_input.setPlaceholderText("0–360")
-        target_controls.addWidget(self.az_input)
+        # Add left panel to main layout
+        main_layout.addWidget(left_panel, stretch=3)
 
-        # Target Elevation input
-        target_controls.addWidget(QtWidgets.QLabel("Target Elevation (°)"))
-        self.el_input = QtWidgets.QLineEdit()
-        self.el_input.setPlaceholderText("0–90")
-        target_controls.addWidget(self.el_input)
+        # ===== Right: Controls Layout =====
+        controls_layout = QVBoxLayout()
+        main_layout.addLayout(controls_layout, stretch=1)
 
-        # Go Button
-        self.btn_go = QtWidgets.QPushButton("Go")
-        self.btn_go.clicked.connect(self.on_go_clicked)
-        target_controls.addWidget(self.btn_go)
+        controls_layout.addWidget(QtWidgets.QLabel("CONTROLLER STATUS"))
+        self.status_label = QtWidgets.QLabel("Status: IDLE")
+        self.status_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #808080;")
+        controls_layout.addWidget(self.status_label)
+        controls_layout.addWidget(self.create_separator())
 
-        # Add Background Button
-        self.btn_show_background = QtWidgets.QPushButton("Show/Hide Background")
+        mode_box = QtWidgets.QGroupBox("Main Controls")
+        mode_layout = QVBoxLayout()
+        self.btn_scan = QPushButton("Start/Stop Background Scan")
+        self.btn_scan.setCheckable(True)
+        self.btn_scan.clicked.connect(self.on_scan_toggled)
+        mode_layout.addWidget(self.btn_scan)
+
+        # Show/Hide Background button
+        self.btn_show_background = QPushButton("Show/Hide Background Data")
         self.btn_show_background.clicked.connect(self.toggle_background_plot)
-        target_controls.addWidget(self.btn_show_background)
+        mode_layout.addWidget(self.btn_show_background)
 
-        # Add Simple-Track Button
-        self.btn_simple_track = QtWidgets.QPushButton("Simple-Track")
-        self.btn_simple_track.clicked.connect(self.simple_track)
-        target_controls.addWidget(self.btn_simple_track)
+        # Clear Heatmap button
+        self.btn_clear_heat = QPushButton("Clear Heatmap")
+        self.btn_clear_heat.clicked.connect(self.clear_heatmap)
+        mode_layout.addWidget(self.btn_clear_heat)
 
-        # Add Active Lidar-Debug Button
-        self.btn_lidar_debug = QtWidgets.QPushButton("Aktive Lidar Debug")
-        self.btn_lidar_debug.setCheckable(True)
-        self.btn_lidar_debug.clicked.connect(self.lidar_debug)
-        target_controls.addWidget(self.btn_lidar_debug)
+        mode_box.setLayout(mode_layout)
+        controls_layout.addWidget(mode_box)
 
-        # Add Clear Button
-        self.btn_clear_lidar = QtWidgets.QPushButton("Clear Lidar Cloud")
-        self.btn_clear_lidar.clicked.connect(self.clear_lidar_cloud)
-        controls.addWidget(self.btn_clear_lidar)
 
-        self.btn_acquire = QtWidgets.QPushButton("Acquire (3 pts)")
-        self.btn_acquire.clicked.connect(self.accuire_points)
-        controls.addWidget(self.btn_acquire)
+        # TLE BOX
+        tle_in_out = QtWidgets.QGroupBox("TLE IN/OUT")
+        tle_layout = QVBoxLayout()
 
-        self.btn_stop_ekf = QtWidgets.QPushButton("Stop EKF")
-        self.btn_stop_ekf.clicked.connect(self.stopEKF)
-        controls.addWidget(self.btn_stop_ekf)
-
-        self.chk_track_pred = QtWidgets.QCheckBox("Track Prediction")
-        self.chk_track_pred.setChecked(True)
-        self.chk_track_pred.toggled.connect(self.on_track_pred_toggled)
-        controls.addWidget(self.chk_track_pred)
-
-        # Spacer to push widgets to the top
-        target_controls.addStretch()
-
-        # Add this new column to the main layout
-        main_layout.addLayout(target_controls, stretch=1)
-
-        # Satellite name input
         self.sat_name_input = QtWidgets.QLineEdit()
         self.sat_name_input.setPlaceholderText("ISS (ZARYA)")
-        controls.addWidget(self.sat_name_input)
+        tle_layout.addWidget(self.sat_name_input)
 
-        # Fetch + Plot button
-        self.btn_fetch_plot = QtWidgets.QPushButton("Fetch & Plot Satellite")
+        self.btn_fetch_plot = QtWidgets.QPushButton("Fetch/Plot Satellite")
         self.btn_fetch_plot.clicked.connect(self.fetch_and_plot_satellite)
-        controls.addWidget(self.btn_fetch_plot)
+        tle_layout.addWidget(self.btn_fetch_plot)
 
-        # Remove orbit button
         self.btn_remove_orbit = QtWidgets.QPushButton("Remove Orbit")
         self.btn_remove_orbit.clicked.connect(self.remove_orbit)
-        controls.addWidget(self.btn_remove_orbit)
+        tle_layout.addWidget(self.btn_remove_orbit)
 
-        # Add Sphere Button
-        self.btn_add_sphere = QtWidgets.QPushButton("Add Sphere at Drone")
-        self.btn_add_sphere.clicked.connect(self.add_sphere)
-        controls.addWidget(self.btn_add_sphere)
+        self.btn_output = QtWidgets.QPushButton("Process and Output")
+        self.btn_output.clicked.connect(self.output_TLE)
+        tle_layout.addWidget(self.btn_output)
 
-        # Toggle Background-Scan Button
-        self.btn_background = QtWidgets.QPushButton("Background Scan")
-        self.btn_background.clicked.connect(self.background_scan)
-        controls.addWidget(self.btn_background)
+        tle_in_out.setLayout(tle_layout)
+        controls_layout.addWidget(tle_in_out)
 
-        # Elevation angle slider
-        controls.addWidget(QtWidgets.QLabel("Elevation Angle (°)"))
-        self.slider_elevation = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self.slider_elevation.setMinimum(0)
-        self.slider_elevation.setMaximum(90)
-        self.slider_elevation.setValue(self.elevation_deg)
-        self.slider_elevation.valueChanged.connect(self.set_elevation_angle)
-        controls.addWidget(self.slider_elevation)
+        manual_box = QtWidgets.QGroupBox("Manual Control")
+        manual_layout = QVBoxLayout()
+        manual_layout.addWidget(QtWidgets.QLabel("Target Azimuth (°)"))
+        self.az_input = QtWidgets.QLineEdit("90")
+        manual_layout.addWidget(self.az_input)
+        manual_layout.addWidget(QtWidgets.QLabel("Target Elevation (°)"))
+        self.el_input = QtWidgets.QLineEdit("45")
+        manual_layout.addWidget(self.el_input)
+        self.btn_go = QPushButton("Go To Position")
+        self.btn_go.clicked.connect(self.on_go_clicked)
+        manual_layout.addWidget(self.btn_go)
 
+        manual_box.setLayout(manual_layout)
+        controls_layout.addWidget(manual_box)
 
-        # LCD for elevation angle
-        self.lcd_elevation = QtWidgets.QLCDNumber()
-        self.lcd_elevation.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
-        self.lcd_elevation.setDigitCount(4)
-        self.lcd_elevation.display(self.elevation_deg)
-        controls.addWidget(self.lcd_elevation)
+        ekf_box = QtWidgets.QGroupBox("EKF Control")
+        ekf_layout = QVBoxLayout()
+        self.btn_acquire = QPushButton("Acquire Target (3 pts)")
+        self.btn_acquire.clicked.connect(self.on_acquire_clicked)
+        ekf_layout.addWidget(self.btn_acquire)
+        self.btn_stop_ekf = QPushButton("Stop Tracking & Generate Plot")
+        self.btn_stop_ekf.clicked.connect(self.stop_and_plot_ekf)
+        ekf_layout.addWidget(self.btn_stop_ekf)
+        self.chk_debug_mode = QCheckBox("Debug Mode (Hand Tracking)")
+        self.chk_debug_mode.toggled.connect(self.on_debug_mode_toggled)
+        ekf_layout.addWidget(self.chk_debug_mode)
+        ekf_box.setLayout(ekf_layout)
+        controls_layout.addWidget(ekf_box)
 
-        # LiDAR range
-        controls.addWidget(QtWidgets.QLabel("LiDAR Range (cm)"))
-        self.lcd_range = QtWidgets.QLCDNumber()
-        self.lcd_range.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
-        self.lcd_range.setDigitCount(5)
-        controls.addWidget(self.lcd_range)
+        lcd_layout = QtWidgets.QGridLayout()
+        lcd_layout.addWidget(QtWidgets.QLabel("Pan Angle"), 0, 0)
+        lcd_layout.addWidget(QtWidgets.QLabel("Tilt Angle"), 0, 1)
+        self.lcd_pan = self.create_lcd()
+        lcd_layout.addWidget(self.lcd_pan, 1, 0)
+        self.lcd_tilt = self.create_lcd()
+        lcd_layout.addWidget(self.lcd_tilt, 1, 1)
+        lcd_layout.addWidget(QtWidgets.QLabel("LiDAR Range (cm)"), 2, 0)
+        lcd_layout.addWidget(QtWidgets.QLabel("LiDAR Strength"), 2, 1)
+        self.lcd_range = self.create_lcd()
+        lcd_layout.addWidget(self.lcd_range, 3, 0)
+        self.lcd_strength = self.create_lcd()
+        lcd_layout.addWidget(self.lcd_strength, 3, 1)
+        controls_layout.addLayout(lcd_layout)
 
-        # LiDAR strength
-        controls.addWidget(QtWidgets.QLabel("LiDAR Strength"))
-        self.lcd_strength = QtWidgets.QLCDNumber()
-        self.lcd_strength.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
-        self.lcd_strength.setDigitCount(5)
-        controls.addWidget(self.lcd_strength)
+        self.chk_reactive_mode = QCheckBox("Enable Reactive Mode (No Prediction)")
+        self.chk_reactive_mode.toggled.connect(self.on_reactive_mode_toggled)
+        controls_layout.addWidget(self.chk_reactive_mode)
 
-        # Pan angle display
-        controls.addWidget(QtWidgets.QLabel("Pan Angle (°)"))
-        self.lcd_pan = QtWidgets.QLCDNumber()
-        self.lcd_pan.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
-        self.lcd_pan.setDigitCount(6)
-        controls.addWidget(self.lcd_pan)
+        controls_layout.addStretch()
 
-        # Tilt angle display
-        controls.addWidget(QtWidgets.QLabel("Tilt Angle (°)"))
-        self.lcd_tilt = QtWidgets.QLCDNumber()
-        self.lcd_tilt.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
-        self.lcd_tilt.setDigitCount(6)
-        controls.addWidget(self.lcd_tilt)
-
-        # Shutdown button
-        self.btn_shutdown = QtWidgets.QPushButton("Shutdown")
+        self.btn_shutdown = QPushButton("Shutdown")
+        self.btn_shutdown.setStyleSheet("background-color: #C41E3A; color: white; font-weight: bold;")
         self.btn_shutdown.clicked.connect(self.Pshutdown)
-        controls.addWidget(self.btn_shutdown)
+        controls_layout.addWidget(self.btn_shutdown)
 
-        self.lidar_timer = QtCore.QTimer()
-        self.lidar_timer.timeout.connect(self.update_lidar_display)
-        self.lidar_timer.start(10)  
+        # Timers
+        self.timer_ui = QtCore.QTimer(self)
+        self.timer_ui.timeout.connect(self.update_ui)
+        self.timer_ui.start(15)
 
-        self.angle_timer = QtCore.QTimer()
-        self.angle_timer.timeout.connect(self.update_angle_display)
-        self.angle_timer.start(100)  # Update every 100 ms
+    # ===== Heatmap helpers =====
+    def clear_heatmap(self):
+        self.hm_bins[...] = 0.0
+        # Refresh display to show empty map
+        self.hm_img.setImage(self.hm_bins[::-1, :], autoLevels=True)
+        self._hm_last_ts = -1.0
 
-        # === Pan/Tilt Controls ===
-        controls.addWidget(QtWidgets.QLabel("Pan/Tilt Controls"))
-        dpad_layout = QtWidgets.QGridLayout()
-
-        # Create buttons
-        btn_up = QtWidgets.QPushButton("↑")
-        btn_down = QtWidgets.QPushButton("↓")
-        btn_left = QtWidgets.QPushButton("←")
-        btn_right = QtWidgets.QPushButton("→")
-
-        # Add buttons to grid (row, col)
-        dpad_layout.addWidget(btn_up, 0, 1)
-        dpad_layout.addWidget(btn_left, 1, 0)
-        dpad_layout.addWidget(btn_right, 1, 2)
-        dpad_layout.addWidget(btn_down, 2, 1)
-
-        # Optional: Center empty widgets to keep spacing
-        dpad_layout.addItem(QtWidgets.QSpacerItem(0, 0), 0, 0)
-        dpad_layout.addItem(QtWidgets.QSpacerItem(0, 0), 0, 2)
-        dpad_layout.addItem(QtWidgets.QSpacerItem(0, 0), 2, 0)
-        dpad_layout.addItem(QtWidgets.QSpacerItem(0, 0), 2, 2)
-
-
-        # Add to main control panel
-        controls.addLayout(dpad_layout)
-
-        btn_up.clicked.connect(self.set_tilt_up)
-        btn_down.clicked.connect(self.set_tilt_down)
-        btn_left.clicked.connect(self.set_pan_left)
-        btn_right.clicked.connect(self.set_pan_right)
-
-        controls.addStretch()
-
-        
-    
-
-    def fetch_and_plot_satellite(self):
-        name = self.sat_name_input.text().strip()
-        if not name:
-            print("No satellite name entered.")
+    def update_pan_tilt_heatmap(self):
+        """
+        Read [az, el, dist_cm, strength, ts] from shared_data['satellite_points']
+        and accumulate into a 2D heatmap: X=pan°, Y=tilt°.
+        """
+        sp = self.shared_data.get("satellite_points")
+        if sp is None:
             return
 
         try:
-            # --- Always define tle_lines (handle "test" locally)
-            if name.lower() == "test":
-                # Example ISS TLE (static; just for testing)
-                tle_lines = (
-                    "1 99999U 25001A   25227.61860759 .00000000 00000-0 10000+4 0 9997",
-                    "2 99999   9.8928 359.9997 0000000 179.9999 180.0475 48.20608643000003",
-                )
-                tle_filename = "example.tle"
-            else:
-                tle_lines = fetch_tle_by_name(name)   # your existing fetch
-                tle_filename = "temp.tle"
+            az_deg = float(sp[0])
+            el_deg = float(sp[1])
+            dist_cm = float(sp[2])
+            strength = float(sp[3])
+            ts = float(sp[4])
+        except Exception:
+            return
 
-            # --- Write a 3-line TLE file for your parser
-            with open(tle_filename, "w") as f:
-                f.write(f"{name}\n{tle_lines[0]}\n{tle_lines[1]}\n")
+        # Skip duplicate sample (same timestamp)
+        if ts <= self._hm_last_ts:
+            return
 
-            elements = parse_tle_file(tle_filename)[0]
+        # Validity checks
+        if not (0.0 <= az_deg < 360.0):
+            self._hm_last_ts = ts
+            return
+        if not (0.0 <= el_deg <= 90.0):
+            self._hm_last_ts = ts
+            return
+        if not (10.0 < dist_cm < 16000.0):  # ignore garbage distances
+            self._hm_last_ts = ts
+            return
 
-            # --- Propagate and convert to ENU (km) for Sofia
-            self.orbit_xyz = generate_orbit_xyz(
-                tle_lines=tle_lines,
-                duration_minutes=90,
-                step_seconds=10,        # smoother line
-            )
+        # Bin by integer degrees (change to finer bins if needed)
+        pan_bin = int(round(az_deg)) % 360
+        tilt_bin = int(round(el_deg))
 
-            # --- Draw
-            self.remove_orbit()
-            self.plot_orbit_line()
-            self.plot_keplerian_reference(
-                inclination_deg=elements['inclination_deg'],
-                raan_deg=elements['raan_deg'],
-                arg_perigee_deg=elements['arg_perigee_deg'],
-                length=2000.0
-            )
-            print(f"Plotted orbit and frame for '{name}'")
+        # Weight by strength lightly (or set to 1.0)
+        w = max(1.0, strength / 100.0)
+        self.hm_bins[tilt_bin, pan_bin] += w
 
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            print(f"Error: {e}")
+        # Optional gentle time decay so old hits fade (uncomment to enable)
+        # self.hm_bins *= 0.9995
 
-    def clear_lidar_cloud(self):
-        self._lidar_cloud_pts.clear()
-        self.lidar_cloud.setData(pos=np.empty((0,3)))
+        # Normalize and update image; flip vertically so tilt increases upward
+        mx = float(self.hm_bins.max())
+        if mx <= 0.0:
+            mx = 1.0
+        img = (self.hm_bins / mx)[::-1, :]  # shape: (91, 360); x=pan, y=tilt
+        self.hm_img.setImage(img, autoLevels=False)
+        self.hm_img.setLevels((0.0, 1.0))
 
-    def simple_track(self):
-        self.shared_data["adaptive_tracking_active"].value = True
-        self.shared_data["lidar_track_mode_active"].value = True
+        self._hm_last_ts = ts
 
-    def lidar_debug(self):
-        if self.btn_lidar_debug.isChecked():
-            self.shared_data["active_lidar_debug"].value = True
-        else: self.shared_data["active_lidar_debug"].value = False
+    #TLE SHOW
+    def output_TLE(self):
+        sp = self.shared_data["satellite_points"]
+        print(sp[:])
+        tle_name, l1, l2 = fit_tle_from_satellite_points(sp[:], unit="cm", name="MY-FIT")
+        #print(l1)
+        #print(l2)
+    
+    def print_acquisition_pan(self, also_draw_line=True, line_length_cm=600.0):
+        """
+        Reads the TLE query from the text box, computes acquisition pan (≈ RAAN),
+        prints it, and optionally draws a line from origin in that direction.
+        """
+        from datahandler import normalize_tle_input  # only needed to resolve "TLE"/filename/name
+        query = (self.sat_name_input.text() or "").strip()
 
-    def poll_lidar_debug_flag(self):
-        """Show/hide + update the red sphere based on shared_data['active_lidar_debug']."""
-        flag_obj = self.shared_data.get("active_lidar_debug", False)
-        flag = bool(getattr(flag_obj, "value", flag_obj))
-
-        if flag:
-            if not hasattr(self, "lidar_bg_dot"):
-                md = gl.MeshData.sphere(rows=6, cols=12, radius=0.5)  # small red ball
-                self.lidar_bg_dot = gl.GLMeshItem(meshdata=md, smooth=True, color=(1, 0, 0, 1), shader='shaded')
-                self.view.addItem(self.lidar_bg_dot)
-            self.lidar_bg_dot.show()
-            self.update_lidar_bg_dot()
-        else:
-            if hasattr(self, "lidar_bg_dot"):
-                self.lidar_bg_dot.hide()
-
-    def update_lidar_bg_dot(self):
-        """Place the red sphere at the current LiDAR hit and accumulate static points."""
         try:
-            # LiDAR distance (cm)
-            lidar = self.shared_data.get("lidar_data")
-            if lidar is None:
-                return
-            dist_cm = float(lidar[0])
-            if not (10.0 < dist_cm < 1600.0):
-                self.lidar_bg_dot.hide()
-                return
+            name, l1, l2 = normalize_tle_input(query, default_path="example.tle")
+            pan_deg = get_acquisition_pan_deg(tle_lines=(l1, l2))
+            print(f"[TLE] Acquisition pan for '{name}' (ascending node / RAAN): {pan_deg:.2f}°")
 
-            # Current pan/tilt (deg)
-            az_deg = float(self.shared_data['stepper_degrees'].value)   # 0..360
-            el_deg = float(self.shared_data['servo_degrees'].value)     # 0..90
+            if also_draw_line:
+                # build endpoint in your scene units (cm). Ascending node is in XY plane (z=0).
+                dir_unit = get_ascending_node_unit_vector(tle_lines=(l1, l2))  # (x,y,0), unitless
+                end_cm = dir_unit * float(line_length_cm)
 
-            # Convert to 3D coordinates (meters)
-            az_rad = np.radians(az_deg % 360.0)
-            el_rad = np.radians(np.clip(el_deg, 0.0, 90.0))
-            dist_m = dist_cm / 10.0
-            x = dist_m * np.cos(el_rad) * np.cos(az_rad)
-            y = dist_m * np.cos(el_rad) * np.sin(az_rad)  # match background plot & laser math
-            z = dist_m * np.sin(el_rad)
-            p = np.array([x, y, z], dtype=float)
-
-            # Move the red cursor sphere
-            self.lidar_bg_dot.resetTransform()
-            self.lidar_bg_dot.translate(*p)
-            self.lidar_bg_dot.show()
-
-            # --- Accumulate static points ---
-            # Ensure storage exists
-            if not hasattr(self, "_lidar_cloud_pts"):
-                self._lidar_cloud_pts = []
-                self._last_cloud_pt = None
-                self.lidar_cloud = gl.GLScatterPlotItem(
-                    pos=np.empty((0, 3)), size=4, color=(1, 0, 0, 0.8)
+                line = gl.GLLinePlotItem(
+                    pos=np.vstack([np.zeros(3, dtype=float), end_cm]),
+                    width=2.0,
+                    color=(0.2, 1.0, 1.0, 0.95),
+                    antialias=True,
+                    mode='line_strip'
                 )
-                self.view.addItem(self.lidar_cloud)
-
-            # Append point if moved enough from last saved point
-            add_point = False
-            if self._last_cloud_pt is None:
-                add_point = True
-            else:
-                if np.linalg.norm(p - self._last_cloud_pt) > 0.05:  # > 5 cm
-                    add_point = True
-
-            if add_point:
-                self._lidar_cloud_pts.append(p)
-                # Keep memory bounded
-                if len(self._lidar_cloud_pts) > 50000:
-                    self._lidar_cloud_pts = self._lidar_cloud_pts[-50000:]
-                self.lidar_cloud.setData(pos=np.vstack(self._lidar_cloud_pts))
-                self._last_cloud_pt = p
-
-            print(f"LiDAR debug point added at {p}")
+                self.view.addItem(line)
+                self.orbit_items.append(line)
 
         except Exception as e:
-            print(f"[GUI] _update_lidar_bg_dot error: {e}")
+            print(f"[TLE] Acquisition pan failed for '{query}': {e}")
 
-    def accuire_points(self):
-        self.shared_data["acquire_points"].value = True
+    def fetch_and_plot_satellite(self):
+        """
+        Reads the text field (sat name / 'TLE' / .tle path), gets Nx3 km coords
+        from datahandler, and plots them in the 3D view.
+        """
+        query = (self.sat_name_input.text() or "").strip()
 
-    def stopEKF(self):
-        self.shared_data["ekf_running"].value = False
+        try:
+            # Ask datahandler to resolve and propagate
+            name, pts_km = get_orbit_xyz_for_query(query, duration_minutes=90, step_seconds=60)
 
-    def on_track_pred_toggled(self, enabled):
-        # optional: mirror this into shared_data if you want to disable tracking without stopping EKF
-        self.shared_data["ekf_running"].value = bool(enabled)
+            # Plot as line or points based on self.orbit_as_points
+            self._plot_orbit_xyz(pts_km, as_points=self.orbit_as_points, label=name)
+            self.print_acquisition_pan(also_draw_line=True)
+
+        except Exception as e:
+            print(f"[TLE] Fetch/plot error for '{query}': {e}")
+
+    def _plot_orbit_xyz(self, pts_km: np.ndarray, as_points: bool = False, label: str = "ORBIT"):
+        """
+        pts_km: Nx3 in kilometers (TEME/ECI).
+        We scale to centimeters used by the LiDAR background.
+        """
+        if not isinstance(pts_km, np.ndarray) or pts_km.ndim != 2 or pts_km.shape[1] != 3:
+            print("[TLE] Invalid orbit array; expected Nx3.")
+            return
+
+        try:
+            # --- SCALE: km -> (scaled) cm in your scene
+            pts_cm = pts_km * float(self.orbit_scale_cm_per_km)  # 0.1 cm per km
+
+            if as_points:
+                item = gl.GLScatterPlotItem(pos=pts_cm, size=2.5, color=(1.0, 1.0, 0.2, 0.95))
+            else:
+                item = gl.GLLinePlotItem(pos=pts_cm, width=2.0, color=(1.0, 1.0, 0.0, 0.9),
+                                        antialias=True, mode='line_strip')
+
+            self.view.addItem(item)
+            self.orbit_items.append(item)
+
+            # Optional start marker
+            try:
+                first = pts_cm[0]
+                start_marker = gl.GLScatterPlotItem(pos=first.reshape(1, 3), size=6.0, color=(1.0, 0.4, 0.2, 1.0))
+                self.view.addItem(start_marker)
+                self.orbit_items.append(start_marker)
+            except Exception:
+                pass
+
+            # auto-zoom based on scaled cm radius
+            r_cm = float(np.linalg.norm(pts_cm, axis=1).max())
+            if r_cm > 0:
+                self.view.setCameraPosition(distance=max(100.0, 2.2 * r_cm))
+
+            print(f"[TLE] Plotted '{label}' scaled: 1 km → {self.orbit_scale_cm_per_km} cm. "
+                f"Max radius ~ {r_cm:.1f} cm.")
+        except Exception as e:
+            print(f"[TLE] Plot error: {e}")
 
     def remove_orbit(self):
+        if not hasattr(self, "orbit_items"):
+            self.orbit_items = []
+        if not self.orbit_items:
+            print("[TLE] No orbit to remove.")
+            return
         for item in self.orbit_items:
-            self.view.removeItem(item)
+            try:
+                self.view.removeItem(item)
+            except Exception:
+                pass
         self.orbit_items.clear()
+        print("[TLE] Orbit removed.")
 
-    def plot_keplerian_reference(self, inclination_deg, raan_deg, arg_perigee_deg, length=5.0):
-        inc = np.radians(inclination_deg)
-        raan = np.radians(raan_deg)
-        argp = np.radians(arg_perigee_deg)
-
-        # Z-axis
-        z_axis = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], [0, 0, length]]),
-                                   color=(0, 0, 1, 1), width=2)
-        self.view.addItem(z_axis)
-        self.orbit_items.append(z_axis)
-
-        # X and Y
-        x_axis = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], [length, 0, 0]]),
-                                   color=(1, 0, 0, 1), width=2)
-        y_axis = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], [0, length, 0]]),
-                                   color=(0, 1, 0, 1), width=2)
-        self.view.addItem(x_axis)
-        self.view.addItem(y_axis)
-        self.orbit_items.extend([x_axis, y_axis])
-
-        # RAAN vector
-        raan_vec = np.array([np.cos(raan), np.sin(raan), 0]) * length
-        raan_line = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], raan_vec]),
-                                      color=(1, 1, 0, 1), width=2)
-        self.view.addItem(raan_line)
-        self.orbit_items.append(raan_line)
-
-        # Perigee vector in orbital plane
-        perigee_dir = np.array([np.cos(argp), np.sin(argp), 0])
-        R_raan = np.array([
-            [np.cos(raan), -np.sin(raan), 0],
-            [np.sin(raan),  np.cos(raan), 0],
-            [0, 0, 1]
-        ])
-        R_inc = np.array([
-            [1, 0, 0],
-            [0, np.cos(inc), -np.sin(inc)],
-            [0, np.sin(inc),  np.cos(inc)]
-        ])
-        perigee_world = R_raan @ (R_inc @ perigee_dir) * length
-        perigee_line = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], perigee_world]),
-                                         color=(1, 0, 1, 1), width=2)
-        self.view.addItem(perigee_line)
-        self.orbit_items.append(perigee_line)
-
-    def set_elevation_angle(self, value):
-        self.elevation_deg = value
-        self.lcd_elevation.display(value)
-    
-    def on_go_clicked(self):
-        try:
-            az = float(self.az_input.text())
-            el = float(self.el_input.text())
-
-            self.shared_data["target_azimuth"].value = az
-            self.shared_data["target_elevation"].value = el
-            self.shared_data["go_to_target"].value = True  # trigger!
-
-        except ValueError:
-            print("Invalid input: please enter numeric values")
-
+    # ===== Controls handlers =====
+    def on_reactive_mode_toggled(self, checked):
+        self.shared_data["reactive_mode"].value = checked
 
     def toggle_background_plot(self):
+        """Loads data from file and displays/hides the plot."""
         if self.background_plot.visible():
             self.background_plot.hide()
             print("[GUI] Background visualization hidden.")
             return
+
         try:
-            bg_data_path = self.shared_data.get("background_path", "background_data.npy").value
+            bg_data_path_obj = self.shared_data.get("background_path", None)
+            if bg_data_path_obj is None:
+                bg_data_path = "background_data.npy"
+            else:
+                bg_data_path = bg_data_path_obj.value
+
             bg_data = np.load(bg_data_path)
+
             points = []
+            # Expected rows: [azimuth, elevation, distance_cm, strength]
             for az, el, dist_cm, strength in bg_data:
                 if 10 < dist_cm < 16000:
-                    az_rad, el_rad = np.radians(az), np.radians(el)
-                    dist_m = dist_cm / 10.0
-                    x = dist_m * np.cos(el_rad) * np.cos(az_rad)
-                    y = dist_m * np.cos(el_rad) * np.sin(az_rad)
-                    z = dist_m * np.sin(el_rad)
+                    az_rad = np.radians(az)
+                    el_rad = np.radians(el)
+                    dist_m = dist_cm / 100.0  # cm -> m
+
+                    x = dist_cm * np.cos(el_rad) * np.cos(az_rad)
+                    y = dist_cm * np.cos(el_rad) * np.sin(az_rad)
+                    z = dist_cm * np.sin(el_rad)
                     points.append([x, y, z])
+
             if points:
                 print(f"[GUI] Plotting {len(points)} background points.")
                 self.background_plot.setData(pos=np.array(points))
                 self.background_plot.show()
             else:
                 print("[GUI] No valid points found in background data file.")
+
         except FileNotFoundError:
             print(f"[GUI] Error: '{bg_data_path}' not found. Please run a background scan first.")
         except Exception as e:
             print(f"[GUI] An error occurred while loading or processing background data: {e}")
-            
-    def update_lidar_display(self):
-        lidar_data = self.shared_data.get("lidar_data")
-        if lidar_data is not None:
-            distance = lidar_data[0]
-            strength = lidar_data[1]
-            self.lcd_range.display(distance)
-            self.lcd_strength.display(strength)
-            #print(f"[GUI] LiDAR: {distance} cm | Strength: {strength}")
 
     def set_tilt_up(self):
         self.shared_data['tilt_up'].value = True
@@ -526,104 +443,107 @@ class TrackerWindow(QtWidgets.QMainWindow):
     def set_pan_right(self):
         self.shared_data['pan_right'].value = True
 
-    def plot_orbit_line(self):
-        valid_points = self.orbit_xyz[~np.isnan(self.orbit_xyz).any(axis=1)]
-        scaled_points = valid_points * self.debug_scale
-        orbit_line = gl.GLLinePlotItem(pos=scaled_points, color=(1, 1, 0, 1), width=2, antialias=True, mode='line_strip')
-        self.view.addItem(orbit_line)
-        self.orbit_items.append(orbit_line)
+    def create_lcd(self):
+        lcd = QtWidgets.QLCDNumber()
+        lcd.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
+        lcd.setDigitCount(6)
+        return lcd
 
-    def background_scan(self):
-        print("[GUI] Triggering background scan")
-        self.shared_data["background_scan_active"].value = True
-    
-    def update_angle_display(self):
-        self.lcd_pan.display(self.shared_data['stepper_degrees'].value)
-        self.lcd_tilt.display(self.shared_data['servo_degrees'].value)
+    def create_separator(self):
+        line = QtWidgets.QFrame()
+        line.setFrameShape(QtWidgets.QFrame.HLine)
+        line.setFrameShadow(QtWidgets.QFrame.Sunken)
+        return line
 
-    def update_laser_from_pan_tilt(self):
-        """
-        Point the laser along the current pan/tilt. 
-        Length uses live LiDAR distance when plausible, else a default.
-        """
+    def on_acquire_clicked(self):
+        self.shared_data["acquire_points"].value = True
+
+    def on_scan_toggled(self, checked):
+        self.shared_data["background_scan_active"].value = checked
+
+    def stop_and_plot_ekf(self):
+        self.shared_data["generate_plot_on_stop"].value = True
+        self.shared_data["lidar_track_mode_active"].value = False
+
+    def on_debug_mode_toggled(self, en):
+        self.shared_data["debug_mode"].value = bool(en)
+        self.shared_data["lidar_acceptance_range"][:] = [0.2, 2.0] if en else [3.0, 50.0]
+
+    def on_go_clicked(self):
         try:
-            # Read current mount angles (degrees) and LiDAR in cm
-            az = float(self.shared_data['stepper_degrees'].value)  # 0..360
-            el = float(self.shared_data['servo_degrees'].value)    # 0..90
+            self.shared_data["target_azimuth"].value = float(self.az_input.text())
+            self.shared_data["target_elevation"].value = float(self.el_input.text())
+            self.shared_data["go_to_target"].value = True
+        except ValueError:
+            print("[GUI] Invalid go-to coordinates.")
 
-            lidar = self.shared_data.get('lidar_data')
-            if lidar is not None:
-                dist_cm = float(lidar[0])
+    def update_ui(self):
+        # Update LCDs
+        try:
+            self.lcd_pan.display(f"{self.shared_data['stepper_degrees'].value:.2f}")
+            self.lcd_tilt.display(f"{self.shared_data['servo_degrees'].value:.2f}")
+            self.lcd_range.display(self.shared_data['lidar_data'][0])
+            self.lcd_strength.display(self.shared_data['lidar_data'][1])
+        except Exception:
+            pass
+
+        # Update Status Label
+        try:
+            if self.shared_data["acquirer_status"].value == 1:
+                self.status_label.setText("Status: ACQUIRING...")
+                self.status_label.setStyleSheet("color: #FFA500;")
+            elif self.shared_data["lidar_track_mode_active"].value:
+                self.status_label.setText("Status: TRACKING")
+                self.status_label.setStyleSheet("color: #D22B2B;")
+            elif self.shared_data["background_scan_active"].value:
+                self.status_label.setText("Status: SCANNING...")
+                self.status_label.setStyleSheet("color: #007FFF;")
+            elif self.shared_data["go_to_target"].value:
+                status_text = "MOVING" if not self.shared_data["target_reached"].value else "HOLDING"
+                self.status_label.setText(f"Status: {status_text}")
+                self.status_label.setStyleSheet("color: #33F;")
             else:
-                dist_cm = 0.0
+                self.status_label.setText("Status: IDLE")
+                self.status_label.setStyleSheet("color: #808080;")
+        except Exception:
+            pass
 
-            # Decide laser length in meters
-            if 50.0 <= dist_cm <= 2000.0:     # sane-ish reading window (0.5–20 m)
-                length_m = dist_cm / 100.0
-            else:
-                length_m = 10.0               # fallback if no LiDAR yet
-
-            # Scale to your scene units
-            length = max(5.0 * self.debug_scale, length_m * self.debug_scale) * 10
-
-
-            # Convert angles to a unit direction vector
-            az_rad = np.radians(az % 360.0)
-            el_rad = np.radians(np.clip(el, 0.0, 90.0))
-            x = np.cos(el_rad) * np.cos(az_rad)
-            y = np.cos(el_rad) * np.sin(az_rad)
-            z = np.sin(el_rad)
-
-            tip = np.array([x * length, y * length, z * length], dtype=float)
-
-            # Update the line and (optionally) place the 'satellite' at the tip
+        # Update 3D view (laser & satellite tip)
+        try:
+            az = self.shared_data['stepper_degrees'].value
+            el = self.shared_data['servo_degrees'].value
+            dist_cm = self.shared_data['lidar_data'][0]
+            length_m = dist_cm / 100.0 if 10.0 <= dist_cm <= 16000.0 else 15.0
+            az_rad, el_rad = np.radians(az), np.radians(el)
+            x = dist_cm * np.cos(el_rad) * np.cos(az_rad)
+            y = dist_cm * np.cos(el_rad) * np.sin(az_rad)
+            z = dist_cm * np.sin(el_rad)
+            tip = np.array([x, y, z])
             self.laser.setData(pos=np.vstack((np.zeros(3), tip)))
-            self.satellite.setData(pos=tip.reshape(1, 3))  # keeps add_sphere() working
+            self.satellite.setData(pos=tip.reshape(1, 3))
+        except Exception:
+            pass
 
-        except Exception as e:
-            print(f"[GUI] update_laser_from_pan_tilt error: {e}")
-
-    def add_sphere(self):
-        md = gl.MeshData.sphere(rows=5, cols=10, radius=1)
-        sphere = gl.GLMeshItem(meshdata=md, smooth=True, color=(0, 1, 0, 1), shader='shaded')
-        x, y, z = self.satellite.pos[0]
-        sphere.translate(x, y, z)
-        self.view.addItem(sphere)
-        print("Sphere added at", (x, y, z))
+        # Update 2D heatmap from shared_data['satellite_points']
+        self.update_pan_tilt_heatmap()
 
     def Pshutdown(self):
-        print("Shutting down GUI...")
-        try:
-            az = float(0)
-            el = float(0)
-
-            self.shared_data["target_azimuth"].value = az
-            self.shared_data["target_elevation"].value = el
-            self.shared_data["go_to_target"].value = True  # trigger!
-            time.sleep(3.6)
-        except ValueError:
-            print("Invalid input: please enter numeric values")
-        self.shared_data["go_to_zero"].value = True
-        QtWidgets.QApplication.quit()
+        print("[GUI] Shutdown requested.")
         self.shared_data["shutdown"].value = True
+        self.timer_ui.stop()
+        # Give main a moment to process the shutdown flag before quitting the app
+        QtCore.QTimer.singleShot(250, QtWidgets.QApplication.instance().quit)
 
-if __name__ == "__main__":
-    '''app = QtWidgets.QApplication(sys.argv)
-    window = TrackerWindow()
-    window.show()
-    sys.exit(app.exec_())'''
+    def closeEvent(self, event):
+        self.Pshutdown()
+        super().closeEvent(event)
 
 
-
-_shared_data = None  # global
-
-def run_gui(shared, movement_queue):
-    global _shared_data
-    shared["movement_queue"] = movement_queue
-    _shared_data = shared
-
-    app = QtWidgets.QApplication(sys.argv)
-    window = TrackerWindow(_shared_data, movement_queue)
+def run_gui(shared_data):
+    if not QtWidgets.QApplication.instance():
+        app = QtWidgets.QApplication(sys.argv)
+    else:
+        app = QtWidgets.QApplication.instance()
+    window = TrackerWindow(shared_data)
     window.show()
     sys.exit(app.exec_())
-
