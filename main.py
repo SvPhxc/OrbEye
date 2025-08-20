@@ -153,6 +153,7 @@ if __name__ == "__main__":
         "inclination": Value('d', 0.0),  # Current inclination in degrees
         "heading_deviation": Value('d', 0.0),  # Deviation from the expected heading
         "inclination_deviation": Value('d', 1.0),  # De
+        "track_drone": Value('b', False),  # True if the system is tracking a drone
 
         # --- Heatmap Tracker (for Debug Mode) ---
         "heatmap_measurement": Array('d', [0.0, 0.0, 0.0]),
