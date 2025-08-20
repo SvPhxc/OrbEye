@@ -170,7 +170,7 @@ if __name__ == "__main__":
     processes = {
         #"HardwareController": Process(target=run_hardware_controller, args=(shared_data,)),
         "GUI": Process(target=run_gui, args=(shared_data,)),
-        "TrackingLogic": Process(target=run_tracker_process, args=(shared_data,)),
+        #"TrackingLogic": Process(target=run_tracker_process, args=(shared_data,)),
         #"TLEGenerator": Process(target=run_tle_generator, args=(shared_data,)),  # <-- ADD THE NEW PROCESS
     }
 
