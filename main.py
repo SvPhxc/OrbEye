@@ -8,6 +8,7 @@ from multiprocessing import Process, Array, Value, Manager
 import traceback
 from tracking_logic import run_tracker_process
 from tle_generator import run_tle_generator
+from circular_tracker import run_circular_tracker
 
 # Import all process functions
 from hardware_controller import run_hardware_controller
@@ -166,6 +167,7 @@ if __name__ == "__main__":
         "drone_orbit_speed_deg_s": Value('d', 0.0),       # 0.0 => ignore speed-based timeout
         "orbit_patrol_query": Array('c', PATH_BUFFER_SIZE),
         "record_tle_points": Value('b', True),
+        "circular_tracker_active" Value('b', False),
     }
 
     # Initialize the character arrays with their default values
@@ -178,7 +180,8 @@ if __name__ == "__main__":
         "HardwareController": Process(target=run_hardware_controller, args=(shared_data,)),
         "GUI": Process(target=run_gui, args=(shared_data,)),
         "TrackingLogic": Process(target=run_tracker_process, args=(shared_data,)),
-        "TLEGenerator": Process(target=run_tle_generator, args=(shared_data,)),  # <-- ADD THE NEW PROCESS
+        "TLEGenerator": Process(target=run_tle_generator, args=(shared_data,)),
+        "tracker_process": = Process(target=run_circular_tracker, args=(shared_data,))# <-- ADD THE NEW PROCESS
     }
 
 
@@ -193,6 +196,8 @@ if __name__ == "__main__":
 
     try:
         print("[main] Starting all processes...")
+
+
         for name, p in processes.items():
             p.daemon = False  # Ensure processes are not auto-killed
             p.start()
