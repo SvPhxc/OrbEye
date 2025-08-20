@@ -299,7 +299,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         row1.addWidget(QtWidgets.QLabel("Points"))
         self.sb_patrol_points = QtWidgets.QSpinBox()
         self.sb_patrol_points.setRange(2, 72)
-        self.sb_patrol_points.setValue(9)
+        self.sb_patrol_points.setValue(30)
         row1.addWidget(self.sb_patrol_points)
 
         row1.addWidget(QtWidgets.QLabel("Dwell (s)"))
@@ -322,7 +322,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.dsb_patrol_maxwait = QtWidgets.QDoubleSpinBox()
         self.dsb_patrol_maxwait.setRange(0.5, 120.0)
         self.dsb_patrol_maxwait.setSingleStep(0.5)
-        self.dsb_patrol_maxwait.setValue(10.0)
+        self.dsb_patrol_maxwait.setValue(3.0)
         row2.addWidget(self.dsb_patrol_maxwait)
         patrol_layout.addLayout(row2)
 
