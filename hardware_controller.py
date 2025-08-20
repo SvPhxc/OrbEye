@@ -424,8 +424,6 @@ class ContinuousBackgroundScanner:
         )
         print("[HWCtrl] Stepper hardware has been reset and is ready.")
 
-    def _collect_data_during_movement(self, lidar_controller, start_az, end_az):
-        # In class ContinuousBackgroundScanner:
 
         def _collect_data_during_movement(self, lidar_controller, start_az, end_az):
             """
