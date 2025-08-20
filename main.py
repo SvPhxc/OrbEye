@@ -134,6 +134,8 @@ if __name__ == "__main__":
         "scan_error": Value('b', False),  # True if there was an error during the background scan
         "movement_priority": Value('i', 0),  # Priority of the current movement request
         "total_movements": Value('i', 0),  # Total number of movements made
+        "wait_for_drone": Value('b', False),  # True if waiting for drone to stabilize
+
         # NOTE: "hand_tracker_history" has been removed in favor of the more flexible "tracking_history" list.
 
         # --- EKF State ---
@@ -147,6 +149,10 @@ if __name__ == "__main__":
         "estimated_elevation": Value('d', 0.0),
         "generate_plot_on_stop": Value('b', False),  # For GUI button
         "demo": Value('b', False),  # For GUI button to enable demo mode
+        "heading": Value('d', 0.0),  # Current heading in degrees
+        "inclination": Value('d', 30.0),  # Current inclination in degrees
+        "heading_deviation": Value('d', 0.0),  # Deviation from the expected heading
+        "inclination_deviation": Value('d', 1.0),  # De
 
         # --- Heatmap Tracker (for Debug Mode) ---
         "heatmap_measurement": Array('d', [0.0, 0.0, 0.0]),

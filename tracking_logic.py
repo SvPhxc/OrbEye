@@ -77,11 +77,11 @@ STATS_PRINT_INTERVAL = 20  # Print statistics every N cycles
 # NEW: Orbital Tracker Parameters
 # ==============================================================================
 ORBITAL_TARGET_DISTANCE_CM = 200.0  # Expected distance to target
-ORBITAL_DISTANCE_TOLERANCE_CM = 50.0 # Tolerance for distance
+ORBITAL_DISTANCE_TOLERANCE_CM = 50.0  # Tolerance for distance
 ORBITAL_LINEAR_SPEED_MPS = 0.6283  # m/s
-ORBITAL_ACQUIRE_WAIT_INTERVAL = 0.05 # Seconds, time between points
-ORBITAL_POINTS_TO_DEFINE = 5       # Number of points to collect before fitting
-ORBITAL_PREDICT_CONFIRM_RADIUS = 2.0 # Degrees, radius for confirmation scan
+ORBITAL_ACQUIRE_WAIT_INTERVAL = 0.05  # Seconds, time between points
+ORBITAL_POINTS_TO_DEFINE = 5  # Number of points to collect before fitting
+ORBITAL_PREDICT_CONFIRM_RADIUS = 2.0  # Degrees, radius for confirmation scan
 
 
 class ClutterFilter:
@@ -767,7 +767,7 @@ class TargetTracker:
         try:
             while not self.shared_data["shutdown"].value:
                 # Check for demo mode (highest priority)
-                if "demo" in self.shared_data and self.shared_data["demo"].value:
+                if "demo" in self.shared_data and self.shared_data["tracking"].value:
                     if not self.demo_mode:
                         print("[Demo] Demo mode activated - tracking orbiting drone")
                         self.demo_mode = True
@@ -1079,13 +1079,14 @@ class OrbitalTracker:
             if self.shared_data["shutdown"].value: return False
 
             last_point = self.orbit_points[-1]
-            time.sleep(ORBITAL_ACQUIRE_WAIT_INTERVAL) # Wait for drone to move
+            time.sleep(ORBITAL_ACQUIRE_WAIT_INTERVAL)  # Wait for drone to move
 
             # Calculate arc scan radius
             dist_moved = ORBITAL_LINEAR_SPEED_MPS * (time.time() - last_point[4])
             angular_radius = math.degrees(dist_moved / (ORBITAL_TARGET_DISTANCE_CM / 100.0))
 
-            print(f"[Orbital] Step {len(self.orbit_points) + 1}: Arc scanning at {angular_radius:.1f}° from last point.")
+            print(
+                f"[Orbital] Step {len(self.orbit_points) + 1}: Arc scanning at {angular_radius:.1f}° from last point.")
 
             next_point = self._scan_for_target(last_point[0], last_point[1], angular_radius, angular_radius, 8)
 
@@ -1110,7 +1111,7 @@ class OrbitalTracker:
             az, el, dist = p[0], p[1], p[2]
             az_rad = math.radians(az)
             el_rad = math.radians(el)
-            r = dist / 100.0 # to meters
+            r = dist / 100.0  # to meters
 
             x = r * math.cos(el_rad) * math.cos(az_rad)
             y = r * math.cos(el_rad) * math.sin(az_rad)
@@ -1125,7 +1126,7 @@ class OrbitalTracker:
         # 1. Find the best-fit plane (PCA/SVD)
         center = points_3d.mean(axis=0)
         u, s, vh = np.linalg.svd(points_3d - center)
-        normal = vh[2, :] # Normal vector is the last singular vector
+        normal = vh[2, :]  # Normal vector is the last singular vector
 
         # 2. Project points onto the plane and find 2D circle
         # For simplicity, we'll use the average distance as the radius
@@ -1145,8 +1146,8 @@ class OrbitalTracker:
             "radius": radius,
             "normal": normal,
             "direction": direction,
-            "ref_point": points_3d[-1], # Last known point
-            "ref_time": self.orbit_points[-1][4] # Time of last known point
+            "ref_point": points_3d[-1],  # Last known point
+            "ref_time": self.orbit_points[-1][4]  # Time of last known point
         }
         self.orbit_defined = True
         print(f"[Orbital] Orbit Defined: Center={np.round(center, 2)}, "
@@ -1172,8 +1173,8 @@ class OrbitalTracker:
     def _cartesian_to_spherical(self, point_3d):
         """Convert (x, y, z) to (az, el, dist)."""
         x, y, z = point_3d
-        dist = np.linalg.norm(point_3d) * 100.0 # to cm
-        el = math.degrees(math.asin(z / (dist/100.0)))
+        dist = np.linalg.norm(point_3d) * 100.0  # to cm
+        el = math.degrees(math.asin(z / (dist / 100.0)))
         az = math.degrees(math.atan2(y, x))
         return self.angle_handler.normalize(az), el, dist
 
@@ -1230,7 +1231,7 @@ def run_tracker_process(shared_data, background_file="background_scan.npy"):
     standard_tracker = TargetTracker(shared_data, background_file)
 
     # Check which tracker to run
-    if shared_data.get("orbital_track_active", False):
+    if shared_data.get("demo"):
         # Run the new specialized orbital tracker
         orbital_tracker = OrbitalTracker(shared_data, standard_tracker)
         try:
