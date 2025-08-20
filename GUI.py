@@ -470,6 +470,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     def on_go_clicked(self):
         try:
+            slef.shared_data["movement_request_id"].value += 1
             self.shared_data["target_azimuth"].value = float(self.az_input.text())
             self.shared_data["target_elevation"].value = float(self.el_input.text())
             self.shared_data["go_to_target"].value = True
