@@ -194,7 +194,7 @@ class HardwareController:
                         if self.background_data_buffer:
                             print(f"[HWCtrl] Auto-saving {len(self.background_data_buffer)} background scan points...")
                             try:
-                                np.save(self.shared_data["background_path"].value,
+                                np.save("background_scan.npy",
                                         np.array(self.background_data_buffer))
                                 print(f"[HWCtrl] Data saved to {self.shared_data['background_path'].value}")
                                 self.background_data_buffer = []  # Clear buffer after saving
