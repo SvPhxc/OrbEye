@@ -124,7 +124,7 @@ def publish_data_to_aws(shared_data):
                     "tracker/lidar/intensity": round(shared_data["lidar_data"][1],2),
                     "tracker/tracker/pan_angle": round(shared_data["stepper_degrees"].value,2),
                     "tracker/tracker/tilt_angle": round(shared_data["servo_degrees"].value,2),
-                    "tracker/orbit/tle": shared_data["tle"].value,
+                    #"tracker/orbit/tle": shared_data["tle"].value,
                     "tracker/position/x":round(random.uniform(0, 360), 2),
                     "tracker/position/y":round(random.uniform(0, 360), 2),
                     "tracker/position/z": round(random.uniform(0, 360), 2)
