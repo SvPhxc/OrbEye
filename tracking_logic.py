@@ -557,13 +557,13 @@ class TargetTracker:
         if near_boundary:
             smooth_az = self.angle_handler.circular_mean(az_values)
         else:
-            weight = np.exp(np.linspace(-2, 0, len(self.position_history)))
-            weight /= weight.sum()
-            smooth_az = sum(az * w for (az, _), w in zip(self.position_history, weight))
+            weights = np.exp(np.linspace(-2, 0, len(self.position_history)))
+            weights /= weights.sum()
+            smooth_az = sum(az * w for (az, _), w in zip(self.position_history, weights))
             smooth_az = self.angle_handler.normalize(smooth_az)
 
         el_values = [p[1] for p in self.position_history]
-        smooth_el = np.average(el_values, weights=weight)
+        smooth_el = np.average(el_values, weight=weights)
 
         return smooth_az, smooth_el
 
