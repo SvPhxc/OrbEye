@@ -486,7 +486,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     # ===== Controls handlers =====
     def on_reactive_mode_toggled(self, checked):
-        self.shared_data["demo"].value = checked
+        self.shared_data["orbit_patrol_points"].value = 11
+        self.shared_data["orbit_patrol_dwell_s"].value = 1.5
+        self.shared_data["orbit_patrol_once"].value = True
+        #self.shared_data["demo"].value = checked
         print("Demo")
 
     def toggle_background_plot(self):

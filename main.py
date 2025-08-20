@@ -153,6 +153,12 @@ if __name__ == "__main__":
         # --- Heatmap Tracker (for Debug Mode) ---
         "heatmap_measurement": Array('d', [0.0, 0.0, 0.0]),
         "heatmap_measurement_updated": Value('b', False),
+
+
+        # Orbit patrol
+        "orbit_patrol_once": Value('b', False),
+        "orbit_patrol_points": Value('i', 9),
+        "orbit_patrol_dwell_s": Value('d', 2.0),
     }
 
     # Initialize the character arrays with their default values
