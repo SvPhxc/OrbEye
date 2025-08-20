@@ -434,8 +434,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
             pan_deg = get_acquisition_pan_deg(tle_lines=(l1, l2))
             inc_deg = get_inclination_deg(tle_lines=(l1,l2))
             
-            _shared_data["rann"].Value = pan_deg
-            _shared_data["inclination"].Value = inc_deg
+            self.shared_data["rann"].value = float(pan_deg)
+            self.shared_data["inclination"].value = float(inc_deg)
             print(f"[TLE] Acquisition pan for '{name}' (ascending node / RAAN): {pan_deg:.2f}°, (inclination): {inc_deg:.2f}°")
             if also_draw_line:
                 # build endpoint in your scene units (cm). Ascending node is in XY plane (z=0).
