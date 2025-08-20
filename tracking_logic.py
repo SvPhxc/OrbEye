@@ -834,13 +834,13 @@ def run_tracker_process(shared_data):
     try:
         while not shared_data["shutdown"].value:
             # Check for tracking start command
-            if shared_data["lidar_track_mode_active"].value and not tracker.running:
+            if shared_data["demo"].value and not tracker.running:
                 # Get RAAN from shared data if available
                 raan = shared_data.get("initial_heading", {}).value if "initial_heading" in shared_data else 0.0
                 tracker.start_tracking(raan_azimuth=raan)
 
             # Check for tracking stop command
-            elif not shared_data["lidar_track_mode_active"].value and tracker.running:
+            elif not shared_data["demo"].value and tracker.running:
                 tracker.stop_tracking()
 
             # Update system status
@@ -856,7 +856,7 @@ def run_tracker_process(shared_data):
             else:
                 shared_data["tracking_logic_ready"].value = False
 
-            time.sleep(0.01)  # 100 Hz main loop
+            time.sleep(0.001)  # 100 Hz main loop
 
     except Exception as e:
         print(f"[Tracker] Fatal error in tracker process: {e}")
