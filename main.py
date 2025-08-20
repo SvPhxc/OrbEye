@@ -135,7 +135,7 @@ if __name__ == "__main__":
         "movement_priority": Value('i', 0),  # Priority of the current movement request
         "total_movements": Value('i', 0),  # Total number of movements made
         "use_circular_tracker": Value('b', True),
-        "wait_for_drone": Value('b', False),  # True if waiting for drone to stabilize
+        "wait_for_drone": Value('b', True),  # True if waiting for drone to stabilize
 
         # NOTE: "hand_tracker_history" has been removed in favor of the more flexible "tracking_history" list.
 
@@ -153,7 +153,7 @@ if __name__ == "__main__":
         "initial_heading": Value('d', 0.0),  # Current heading in degrees
         "intial_inclination": Value('d', 0.0),  # Current inclination in degrees
         "heading_deviation": Value('d', 0.0),  # Deviation from the expected heading
-        "inclination_deviation": Value('d', 1.0),  # De
+        "inclination_deviation": Value('d', 0.0),  # De
         "track_drone": Value('b', False),  # True if the system is tracking a drone
 
         # --- Heatmap Tracker (for Debug Mode) ---
