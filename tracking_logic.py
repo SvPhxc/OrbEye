@@ -25,26 +25,26 @@ from collections import deque
 
 # LiDAR Parameters
 LIDAR_MIN_INTERVAL = 0.001  # 1ms minimum between reads (1000Hz max)
-MIN_STRENGTH_THRESHOLD = 100  # Much lower threshold to find any target
-HIGH_CONFIDENCE_THRESHOLD = 2500  # Strong signal threshold
-ACQUISITION_STRENGTH_THRESHOLD = 20  # Even lower for acquisition
+MIN_STRENGTH_THRESHOLD = 2020  # Much lower threshold to find any target
+HIGH_CONFIDENCE_THRESHOLD = 6000  # Strong signal threshold
+ACQUISITION_STRENGTH_THRESHOLD = 1000  # Even lower for acquisition
 
 # Clutter Filter Parameters
 ANGULAR_TOLERANCE = 1.0  # Degrees - for background matching
 DISTANCE_MARGIN_CM = 50.0  # Reduced margin for better detection
 CACHE_SIZE = 75000  # Number of cached clutter filter queries
-DISABLE_CLUTTER_FOR_ACQUISITION = True  # Disable clutter filter during acquisition
+DISABLE_CLUTTER_FOR_ACQUISITION = False  # Disable clutter filter during acquisition
 
 # Movement Parameters
 MOVEMENT_TIMEOUT = 1.0  # Seconds to wait for movement
-POSITION_TOLERANCE = 0.0  # Degrees - acceptable position error
+POSITION_TOLERANCE = 0.5  # Degrees - acceptable position error
 POSITION_VERIFY_DELAY = 0.025  # Slightly longer stabilization
-MAX_POSITION_ERROR = 0.0  # Maximum acceptable position error in degrees
+MAX_POSITION_ERROR = 0.5  # Maximum acceptable position error in degrees
 
 # Normal Tracking Parameters
 SCAN_RADIUS_AZ = 10.0  # Degrees - normal scan radius azimuth
 SCAN_RADIUS_EL = 10.0  # Degrees - normal scan radius elevation
-SCAN_POINTS = 6  # Number of points in scan circle
+SCAN_POINTS = 12  # Number of points in scan circle
 MAX_SCAN_RADIUS_AZ = 30.0  # Maximum expanded search radius
 MAX_SCAN_RADIUS_EL = 25.0  # Maximum expanded search radius
 
@@ -64,7 +64,8 @@ DEMO_SCAN_RADIUS = 5.0  # Tight radius for predictive tracking
 
 # Tracking State Parameters
 MAX_LOST_COUNT = 5  # How many cycles before expanding search
-TARGET_HISTORY_SIZE = 3  # Target history for consistency checking
+HISTORY_SIZE = 4  # Position history for smoothing
+TARGET_HISTORY_SIZE = 3  # Target history for smoothing
 
 # Performance Parameters
 MIN_CYCLE_TIME = 0.05  # Minimum 50ms per tracking cycle
@@ -214,8 +215,9 @@ class TargetTracker:
         self.tracking_confidence = 0.0
         self.consecutive_good_tracks = 0
 
-        # History tracking for consistency checks
+        # History tracking
         self.target_history = deque(maxlen=TARGET_HISTORY_SIZE)
+        self.position_history = deque(maxlen=HISTORY_SIZE)
         self.lost_target_count = 0
         self.max_lost_count = MAX_LOST_COUNT
 
@@ -327,20 +329,26 @@ class TargetTracker:
         print(f"[Acquisition] Starting from azimuth {start_az:.1f}°")
 
         # Calculate azimuth scan points without going over 360
-        az_points = [start_az]
-        offset = ACQUISITION_AZ_STEP
+        az_points = []
+        current_offset = 0
+        direction = 1  # Start going right
 
-        # The total range is 60°, so we scan 30° to the left and 30° to the right.
-        # We use ACQUISITION_AZ_RANGE / 2 as the limit for the offset.
-        while offset <= (ACQUISITION_AZ_RANGE / 2):
-            az_points.append(start_az + offset)  # Point to the right
-            az_points.append(start_az - offset)  # Point to the left
-            offset += ACQUISITION_AZ_STEP
+        # Build a sequence that doesn't exceed 360° total rotation
+        while current_offset <= ACQUISITION_AZ_RANGE:
+            if current_offset == 0:
+                az_points.append(start_az)
+            else:
+                # Add both positive and negative offsets
+                az_points.append(start_az + current_offset * direction)
+                direction *= -1  # Switch direction
+                if direction == 1:  # After adding negative, increment offset
+                    current_offset += ACQUISITION_AZ_STEP
 
         # Normalize all azimuth points to [0, 360)
         az_points = [self.angle_handler.normalize(az) for az in az_points]
 
         print(f"[Acquisition] Scanning {len(az_points)} azimuth points across {len(ACQUISITION_ELEVATIONS)} elevations")
+
         scan_count = 0
         for el_idx, elevation in enumerate(ACQUISITION_ELEVATIONS):
             if self.shared_data["shutdown"].value:
@@ -479,6 +487,29 @@ class TargetTracker:
             best = scan_results[0]
 
         return best
+
+    def smooth_position(self, new_az, new_el):
+        """Smooth position with proper angle wraparound handling."""
+        self.position_history.append((new_az, new_el))
+
+        if len(self.position_history) < 2:
+            return new_az, new_el
+
+        az_values = [p[0] for p in self.position_history]
+        near_boundary = any(self.angle_handler.is_near_boundary(az) for az in az_values)
+
+        if near_boundary:
+            smooth_az = self.angle_handler.circular_mean(az_values)
+        else:
+            weights = np.exp(np.linspace(-2, 0, len(self.position_history)))
+            weights /= weights.sum()
+            smooth_az = sum(az * w for (az, _), w in zip(self.position_history, weights))
+            smooth_az = self.angle_handler.normalize(smooth_az)
+
+        el_values = [p[1] for p in self.position_history]
+        smooth_el = np.average(el_values, weights=weights)
+
+        return smooth_az, smooth_el
 
     def update_tracking_confidence(self, found_target, target_strength=0):
         """Update confidence based on tracking success."""
@@ -781,6 +812,7 @@ class TargetTracker:
                         self.current_target_el = target[1]
                         self.target_history.clear()
                         self.target_history.append((target[0], target[1]))
+                        self.position_history.clear()
                         self.tracking_confidence = 0.5
                         self.update_satellite_points(target[0], target[1], target[2], target[3])
 
@@ -830,18 +862,13 @@ class TargetTracker:
                     self.lost_target_count = 0
                     self.update_tracking_confidence(True, best_target[3])
 
-                    # Get raw position directly. All smoothing and prediction is removed.
-                    raw_az, raw_el = best_target[0], best_target[1]
+                    self.target_history.append((best_target[0], best_target[1]))
+                    smooth_az, smooth_el = self.smooth_position(best_target[0], best_target[1])
 
-                    # Store in history for consistency check in find_best_target
-                    self.target_history.append((raw_az, raw_el))
+                    self.current_target_az = smooth_az
+                    self.current_target_el = smooth_el
 
-                    # Update the next scan center to the latest raw position
-                    self.current_target_az = raw_az
-                    self.current_target_el = raw_el
-
-                    # Update satellite points with the raw, unsmoothed position
-                    self.update_satellite_points(raw_az, raw_el,
+                    self.update_satellite_points(smooth_az, smooth_el,
                                                  best_target[2], best_target[3])
 
                     if self.tracking_confidence > 0.5:
