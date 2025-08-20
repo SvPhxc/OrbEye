@@ -7,12 +7,21 @@ import time
 from multiprocessing import Process, Array, Value, Manager
 import traceback
 from tracking_logic import run_tracker_process
+<<<<<<< HEAD
 from tle_generator import run_tle_generator
 
 # Import all process functions
 from hardware_controller import run_hardware_controller
 from GUI import run_gui
 
+=======
+from tle_generator import run_tle_generator  # <-- IMPORT THE NEW PROCESS
+
+# Import all process functions
+from hardware_controller import run_hardware_controller
+from GUI import run_gui
+
+>>>>>>> parent of 826e34c (should fix things :))
 
 # --- Placeholder imports for other modules to make the system runnable ---
 
@@ -48,6 +57,7 @@ if __name__ == "__main__":
     print("[main] Initializing shared memory space...")
 
     # Using Manager for complex/dynamic data types that need to be shared
+<<<<<<< HEAD
     # Kept for manager.list() which is not covered by "DO NOT USE MANAGER.VALUE"
     manager = Manager()
 
@@ -55,6 +65,10 @@ if __name__ == "__main__":
     TLE_BUFFER_SIZE = 1024
     PATH_BUFFER_SIZE = 256
 
+=======
+    manager = Manager()
+
+>>>>>>> parent of 826e34c (should fix things :))
     shared_data = {
         # --- System Control ---
         "shutdown": Value('b', False),
@@ -69,12 +83,16 @@ if __name__ == "__main__":
         # --- TLE Data Flow & Control ---
         "generate_tle": Value('b', False),  # Set to True to trigger TLE generation
         "tracking_history": manager.list(),  # Stores tracker points (az, el, dist, str, ts)
+<<<<<<< HEAD
 
         # --- CHANGED: Replaced manager.Value('c',...) with multiprocessing.Array ---
         # NOTE: To use these, access the .value property, which will be a bytes object.
         # You must decode it for use as a string, e.g., my_str = shared_data["key"].value.decode()
         # To write to it, assign a bytes object, e.g., shared_data["key"].value = b"new string"
         "generated_tle": Array('c', TLE_BUFFER_SIZE),
+=======
+        "generated_tle": manager.Value('c', "No TLE generated yet."),  # Stores the output TLE
+>>>>>>> parent of 826e34c (should fix things :))
         # +++ END OF TLE ADDITIONS +++
 
         # --- Hardware & Movement ---
@@ -88,14 +106,22 @@ if __name__ == "__main__":
         # --- LiDAR Data ---
         "lidar_data": Array('d', [0.0, 0.0, 0.0]),  # dist_cm, strength, timestamp
         "lidar_acceptance_range": Array('d', [10.0, 16000.0]),  # min_m, max_m
+<<<<<<< HEAD
         # --- CHANGED: Replaced manager.Value with multiprocessing.Array ---
         "lidar_port": Array('c', PATH_BUFFER_SIZE),
+=======
+        "lidar_port": manager.Value('c', "/dev/serial0"),
+>>>>>>> parent of 826e34c (should fix things :))
 
         # --- Background Scan ---
         "background_scan_active": Value('b', False),
         "save_background_trigger": Value('b', False),
+<<<<<<< HEAD
         # --- CHANGED: Replaced manager.Value with multiprocessing.Array ---
         "background_path": Array('c', PATH_BUFFER_SIZE),
+=======
+        "background_path": manager.Value('c', "background_scan.npy"),
+>>>>>>> parent of 826e34c (should fix things :))
 
         # --- Acquirer (for EKF init) ---
         "acquire_points": Value('b', False),
@@ -129,17 +155,24 @@ if __name__ == "__main__":
         "estimated_azimuth": Value('d', 0.0),
         "estimated_elevation": Value('d', 0.0),
         "generate_plot_on_stop": Value('b', False),  # For GUI button
+<<<<<<< HEAD
         "demo": Value('b', False),  # For GUI button to enable demo mode
+=======
+        "demo": Value('b',False),  # For GUI button to enable demo mode
+>>>>>>> parent of 826e34c (should fix things :))
 
         # --- Heatmap Tracker (for Debug Mode) ---
         "heatmap_measurement": Array('d', [0.0, 0.0, 0.0]),
         "heatmap_measurement_updated": Value('b', False),
     }
+<<<<<<< HEAD
 
     # Initialize the character arrays with their default values
     shared_data["generated_tle"].value = b"No TLE generated yet."
     shared_data["lidar_port"].value = b"/dev/serial0"
     shared_data["background_path"].value = b"background_scan.npy"
+=======
+>>>>>>> parent of 826e34c (should fix things :))
 
     print("[main] Initializing processes...")
     processes = {
