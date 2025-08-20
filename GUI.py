@@ -540,11 +540,11 @@ class TrackerWindow(QtWidgets.QMainWindow):
         super().closeEvent(event)
 
 
-def run_gui(shared_data):
-    if not QtWidgets.QApplication.instance():
-        app = QtWidgets.QApplication(sys.argv)
-    else:
-        app = QtWidgets.QApplication.instance()
-    window = TrackerWindow(shared_data)
+def run_gui(shared):
+    global _shared_data
+    _shared_data = shared
+
+    app = QtWidgets.QApplication(sys.argv)
+    window = TrackerWindow(_shared_data)
     window.show()
     sys.exit(app.exec_())
