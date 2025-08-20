@@ -125,6 +125,8 @@ if __name__ == "__main__":
         "movement_complete_id": Value('i', 0),  # ID of the last completed movement request
         "lidar_valid": Value('b', False),  # True if the last LiDAR measurement is valid
         "lidar_lock": Value('b', False),  # True if the LiDAR is locked onto a target
+        "system_state": Value('i', 0),  # 0: idle, 1: tracking, 2: lost, 3: error
+        "lidar_reads" Value('d', 0),  # Number of LiDAR reads since last reset
         # NOTE: "hand_tracker_history" has been removed in favor of the more flexible "tracking_history" list.
 
         # --- EKF State ---
