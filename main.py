@@ -81,7 +81,7 @@ def create_shared_data_manager():
         # --- Background Scanning ---
         "background_scan_active": manager.Value('b', False),
         "background_scan_paused": manager.Value('b', False),
-        "background_path": manager.Array('c', b'background_scan.npy'[:256]), # Use manager.Array for C-string
+        "background_path": manager.Value('c', b'background_scan.npy'[:256]),
         "scan_progress": manager.Value('d', 0.0),
 
         # --- Tracker Control & Output ---
@@ -107,7 +107,7 @@ def create_shared_data_manager():
         "failed_movements": manager.Value('i', 0),
         "lidar_reads": manager.Value('i', 0),
     }
-    return shared_data
+    return manager, shared_data
 
 
 def join_or_escalate(proc, name, timeout=5):
@@ -139,7 +139,7 @@ def join_or_escalate(proc, name, timeout=5):
 
 if __name__ == "__main__":
     print("[main] Initializing shared memory space...")
-    shared_data = create_shared_data_manager()
+    manager, shared_data = create_shared_data_manager()
 
     print("[main] Initializing processes...")
     processes = {
@@ -183,4 +183,5 @@ if __name__ == "__main__":
         join_or_escalate(processes["TLEGenerator"], "TLEGenerator")
         join_or_escalate(processes["HardwareController"], "HardwareController")
         print("[main] All processes have been terminated. Program exited cleanly.")
+        manager.shutdown()  # Cleanly shutdown the manager
         sys.exit(0)
