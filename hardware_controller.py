@@ -67,7 +67,7 @@ class PIDController:
 # ==============================================================================
 
 class HardwareController:
-    def _init_(self, shared_data):
+    def __init__(self, shared_data):
         # ... (init remains mostly the same) ...
         self.shared_data = shared_data
         self.pi, self.ser = None, None
@@ -294,5 +294,5 @@ PIDController.get_setpoint = get_setpoint
 
 
 def run_hardware_controller(shared_data):
-    controller = HardwareController()
+    controller = HardwareController(shared_data)
     controller.run()
