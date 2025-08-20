@@ -304,8 +304,8 @@ class HandTracker:
     and a predictive "coasting" search mode for target reacquisition.
     """
 
-    def __init__(self, scan_radius=12, scan_points=8, time_per_waypoint=0.06, timeout=1.0, coast_timeout=1.5,
-                 prediction_factor=1, velocity_smoothing_factor=0.2):
+    def __init__(self, scan_radius=8, scan_points=8, time_per_waypoint=0.06, timeout=1.0, coast_timeout=1.5,
+                 prediction_factor=1.5, velocity_smoothing_factor=0.4):
         self.scan_radius = scan_radius
         self.scan_points = scan_points
         self.time_per_waypoint = time_per_waypoint
