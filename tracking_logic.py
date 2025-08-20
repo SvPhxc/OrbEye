@@ -11,6 +11,8 @@ import threading, numpy as np
 from orbit_patrol_from_xyz import run_orbit_patrol_from_query, make_detection_proceed_condition
 
 
+_patrol_thr = None
+
 class TrackingState(Enum):
     IDLE = 0
     ACQUIRING = 1
@@ -635,7 +637,7 @@ def run_tracker_process(shared_data):
     last_prediction_time = time.time()
     prediction_interval = 0.1
 
-    _patrol_thr = None
+    
 
     shared_data["tracking_logic_ready"].value = True
 
