@@ -1,20 +1,14 @@
 #!/usr/bin/env python3
 """
 Main application entry point for the Integrated Target Tracker system.
-This script initializes the shared memory space and launches all the
-concurrent processes required for the system to operate:
-- Hardware Controller
-- Tracking Logic
-- GUI
-- TLE Generator
+This script initializes a shared memory space and launches all concurrent processes.
 """
 
 import sys
 import os
 import signal
 import time
-from multiprocessing import Process, Manager, Value, Array, Lock
-from enum import Enum
+from multiprocessing import Process, Manager
 from ctypes import c_char
 
 # --- Import process functions from other modules ---
@@ -24,96 +18,13 @@ from tracking_logic import run_tracker_process
 from tle_generator import run_tle_generator
 
 
-# --- FIX: Define a named, picklable class for the ctypes array ---
-# This class is defined at the top level so other processes can import/find it.
+# --- Define a picklable class for ctypes char arrays to enable sharing ---
 class CCharArray(c_char * 256):
     pass
 
 
 class CCharArrayLarge(c_char * 1024):
     pass
-
-
-# --- System-wide Enums ---
-class SystemState(Enum):
-    IDLE = 0
-    MOVING = 1
-    SCANNING = 2
-    TRACKER_MOVE = 3
-    ERROR = 4
-    SHUTDOWN = 5
-    PAUSED = 6
-
-
-class Priority(Enum):
-    NORMAL = 0
-    HIGH = 1
-    CRITICAL = 2
-
-
-def create_shared_data_manager():
-    """
-    Creates and returns a manager instance and the fully structured
-    shared data dictionary for the entire application.
-    """
-    manager = Manager()
-
-    shared_data = {
-        # --- System Control & State ---
-        "shutdown": manager.Value('b', False),
-        "system_state": manager.Value('i', SystemState.IDLE.value),
-        "last_state_change": manager.Value('d', time.time()),
-        "debug_mode": manager.Value('b', False),
-        "demo": manager.Value('b', False),
-
-        # --- Position & Movement ---
-        "stepper_degrees": manager.Value('d', 0.0),
-        "servo_degrees": manager.Value('d', 45.0),
-        "target_azimuth": manager.Value('d', 0.0),
-        "target_elevation": manager.Value('d', 45.0),
-        "go_to_target": manager.Value('b', False),
-        "target_reached": manager.Value('b', False),
-        "movement_request_id": manager.Value('i', 0),
-        "movement_complete_id": manager.Value('i', 0),
-        "movement_priority": manager.Value('i', Priority.NORMAL.value),
-
-        # --- LiDAR Data ---
-        "lidar_data": manager.Array('d', [0.0, 0.0, 0.0]),
-        "lidar_position": manager.Array('d', [0.0, 0.0]),
-        "lidar_valid": manager.Value('b', False),
-
-        # --- Background Scanning ---
-        "background_scan_active": manager.Value('b', False),
-        "background_scan_paused": manager.Value('b', False),
-        # FIX: Use the named, picklable class here.
-        "background_path": manager.Value(CCharArray, b'background_scan.npy'),
-        "scan_progress": manager.Value('d', 0.0),
-
-        # --- Tracker Control & Output ---
-        "acquire_points": manager.Value('b', False),
-        "satellite_points": manager.Array('d', [0.0] * 5),
-
-        # --- TLE Generation ---
-        "observer_lat": manager.Value('d', 34.0522),
-        "observer_lon": manager.Value('d', -118.2437),
-        "observer_alt": manager.Value('d', 71.0),
-        "generate_tle": manager.Value('b', False),
-        "tracking_history": manager.list(),
-        # FIX: Use the named, picklable class for the larger TLE string as well.
-        "generated_tle": manager.Value(CCharArrayLarge, b"No TLE generated yet."),
-
-        # --- Synchronization Locks ---
-        "state_lock": manager.Lock(),
-        "movement_lock": manager.Lock(),
-        "lidar_lock": manager.Lock(),
-
-        # --- System Statistics ---
-        "system_uptime": manager.Value('d', time.time()),
-        "total_movements": manager.Value('i', 0),
-        "failed_movements": manager.Value('i', 0),
-        "lidar_reads": manager.Value('i', 0),
-    }
-    return manager, shared_data
 
 
 def join_or_escalate(proc, name, timeout=5):
@@ -124,7 +35,7 @@ def join_or_escalate(proc, name, timeout=5):
     print(f"[main] Waiting for '{name}' to terminate...")
     proc.join(timeout=timeout)
     if proc.is_alive():
-        print(f"[main] '{name}' is still alive. Sending SIGTERM...")
+        print(f"[main] Process '{name}' is still alive. Sending SIGTERM...")
         try:
             if sys.platform != "win32":
                 os.kill(proc.pid, signal.SIGTERM)
@@ -134,20 +45,73 @@ def join_or_escalate(proc, name, timeout=5):
         except Exception as e:
             print(f"[main] SIGTERM for '{name}' failed: {e}")
     if proc.is_alive():
-        print(f"[main] '{name}' could not be terminated. Forcing with terminate()...")
-        proc.terminate()
-        proc.join(timeout=2)
+        print(f"[main] Process '{name}' will not die. Forcing terminate()...")
+        try:
+            proc.terminate()
+            proc.join(timeout=2)
+        except Exception as e:
+            print(f"[main] terminate() for '{name}' failed: {e}")
 
 
 if __name__ == "__main__":
     print("[main] Initializing shared memory space...")
-    manager, shared_data = create_shared_data_manager()
+    manager = Manager()
+
+    # This dictionary defines the complete shared state for all processes.
+    # It has been cleaned to remove old EKF keys and add required keys for
+    # the new hardware_controller and tracking_logic.
+    shared_data = {
+        # --- System Control & State ---
+        "shutdown": manager.Value('b', False),
+        "debug_mode": manager.Value('b', False),
+        "demo": manager.Value('b', False),
+        "system_state": manager.Value('i', 0),  # 0:IDLE, 1:MOVING, 2:SCANNING, etc.
+
+        # --- TLE Generation ---
+        "observer_lat": manager.Value('d', 34.0522),  # Default: Los Angeles, CA
+        "observer_lon": manager.Value('d', -118.2437),
+        "observer_alt": manager.Value('d', 71.0),
+        "generate_tle": manager.Value('b', False),
+        "tracking_history": manager.list(),  # For storing points for TLE generation
+        "generated_tle": manager.Value(CCharArrayLarge, b"No TLE generated yet."),
+
+        # --- Hardware & Movement Control ---
+        "stepper_degrees": manager.Value('d', 0.0),
+        "servo_degrees": manager.Value('d', 45.0),
+        "target_azimuth": manager.Value('d', 90.0),
+        "target_elevation": manager.Value('d', 45.0),
+        "go_to_target": manager.Value('b', False),
+        "target_reached": manager.Value('b', False),
+        "movement_request_id": manager.Value('i', 0),
+        "movement_complete_id": manager.Value('i', 0),
+        "movement_priority": manager.Value('i', 0),  # 0:NORMAL, 1:HIGH, 2:CRITICAL
+
+        # --- LiDAR Data ---
+        "lidar_data": manager.Array('d', [0.0, 0.0, 0.0]),  # dist_cm, strength, timestamp
+        "lidar_position": manager.Array('d', [0.0, 0.0]),  # az, el when read
+        "lidar_valid": manager.Value('b', False),
+
+        # --- Background Scanning ---
+        "background_scan_active": manager.Value('b', False),
+        "background_scan_paused": manager.Value('b', False),
+        "background_path": manager.Value(CCharArray, b'background_scan.npy'),
+        "scan_progress": manager.Value('d', 0.0),
+
+        # --- Tracking Logic Control & Output ---
+        "acquire_points": manager.Value('b', False),  # Trigger for acquisition scan
+        "satellite_points": manager.Array('d', [0.0] * 5),  # az, el, dist, str, time
+
+        # --- Synchronization Locks ---
+        "state_lock": manager.Lock(),
+        "movement_lock": manager.Lock(),
+        "lidar_lock": manager.Lock(),
+    }
 
     print("[main] Initializing processes...")
     processes = {
         "HardwareController": Process(target=run_hardware_controller, args=(shared_data,)),
-        "TrackingLogic": Process(target=run_tracker_process, args=(shared_data,)),
         "GUI": Process(target=run_gui, args=(shared_data,)),
+        "TrackingLogic": Process(target=run_tracker_process, args=(shared_data,)),
         "TLEGenerator": Process(target=run_tle_generator, args=(shared_data,)),
     }
 
@@ -164,23 +128,20 @@ if __name__ == "__main__":
     try:
         print("[main] Starting all processes...")
         for name, p in processes.items():
+            p.daemon = False
             p.start()
             print(f"  - Started {name} (PID: {p.pid})")
         print("[main] All processes are running. System is active.")
 
-        # Main thread monitors for shutdown or process failure
         while not shared_data["shutdown"].value:
-            any_process_died = False
-            for name, p in processes.items():
-                if not p.is_alive():
-                    print(f"[main] CRITICAL ERROR: Process '{name}' has terminated unexpectedly.")
-                    any_process_died = True
-
-            if any_process_died:
+            # Check if any critical process has died
+            if not all(p.is_alive() for p in processes.values()):
+                for name, p in processes.items():
+                    if not p.is_alive():
+                        print(f"[main] CRITICAL ERROR: Process '{name}' has terminated unexpectedly.")
                 print("[main] Initiating shutdown due to process failure.")
                 shared_data["shutdown"].value = True
                 break
-
             time.sleep(0.1)
 
     except (KeyboardInterrupt, SystemExit):
