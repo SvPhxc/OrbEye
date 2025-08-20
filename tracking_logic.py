@@ -1213,6 +1213,544 @@ class OrbitalTracker:
                 time.sleep(MIN_CYCLE_TIME - elapsed)
 
 
+from enum import Enum
+import numpy as np
+import math
+import time
+
+
+class TrackerState(Enum):
+    IDLE = 0
+    SEARCHING = 1
+    CONFIRMING_DIRECTION = 2
+    CALCULATING_PLANE = 3
+    TRACKING = 4
+
+
+class CircularDroneTracker:
+    """
+    Tracks a drone moving in a circular orbit using predict-and-wait intercept strategy.
+
+    The drone orbits at 2m radius with 18°/s angular velocity, always moving to the right.
+    Uses a state machine to find, confirm, and track the drone's orbital plane.
+    """
+
+    def __init__(self, shared_data, prediction_time_sec=0.5):
+        """
+        Initialize the drone tracker.
+
+        Args:
+            shared_data: Dictionary of shared memory objects for motor control and sensor data
+            prediction_time_sec: Time to predict ahead for intercept (default 0.5s)
+        """
+        self.state = TrackerState.IDLE
+        self.shared_data = shared_data
+        self.prediction_time_sec = prediction_time_sec
+
+        # Drone parameters
+        self.drone_radius = 2.0  # meters
+        self.drone_angular_velocity = 18.0  # degrees/second
+        self.prediction_angle = self.drone_angular_velocity * prediction_time_sec
+
+        # Read search parameters from shared_data
+        self.initial_heading = shared_data.get("initial_heading", {}).value if "initial_heading" in shared_data else -1
+        self.heading_deviation = shared_data.get("heading_deviation",
+                                                 {}).value if "heading_deviation" in shared_data else 30.0
+        self.initial_inclination = shared_data.get("initial_inclination",
+                                                   {}).value if "initial_inclination" in shared_data else -1
+        self.inclination_deviation = shared_data.get("inclination_deviation",
+                                                     {}).value if "inclination_deviation" in shared_data else 10.0
+
+        # Track drone mode - skip detection, just follow predicted path
+        self.track_drone_mode = shared_data.get("track_drone", {}).value if "track_drone" in shared_data else False
+
+        # Tracking data
+        self.first_point = None  # (az, el, dist)
+        self.second_point = None
+        self.last_confirmed_position = None  # 3D Cartesian
+        self.orbital_normal = None  # Normal vector to orbital plane
+        self.confirmed_points = []  # List of all confirmed points for adaptive tracking
+
+        # Adaptive arc scanning
+        self.arc_confidence = 0.0  # 0-1, increases with successful predictions
+        self.last_angular_velocity = self.drone_angular_velocity  # Track actual velocity
+
+        # Search pattern state
+        self.search_pattern_state = 0
+        self.spiral_radius = 5.0  # degrees
+        self.spiral_step = 2.0  # degrees
+        self.sweep_azimuth = 0.0
+        self.sweep_direction = 1
+
+        # Timing
+        self.last_detection_time = None
+        self.waiting_start_time = None
+        self.max_wait_time = 2.0  # seconds
+
+    def start_search(self, initial_heading=None, heading_deviation=None, initial_inclination=None):
+        """
+        Initialize search parameters and start searching for the drone.
+
+        Args:
+            initial_heading: Expected azimuth direction (-1 if unknown, None to use shared_data)
+            heading_deviation: Uncertainty in heading (degrees, None to use shared_data)
+            initial_inclination: Expected elevation angle (-1 if unknown, None to use shared_data)
+        """
+        # Use provided values or fall back to shared_data values
+        if initial_heading is not None:
+            self.initial_heading = initial_heading
+        if heading_deviation is not None:
+            self.heading_deviation = heading_deviation
+        if initial_inclination is not None:
+            self.initial_inclination = initial_inclination
+
+        # Reset tracking data
+        self.first_point = None
+        self.second_point = None
+        self.last_confirmed_position = None
+        self.orbital_normal = None
+
+        # Initialize search pattern
+        if initial_heading == -1:
+            # Unknown heading - prepare for 360° sweep
+            self.sweep_azimuth = 0.0
+            self.sweep_direction = 1
+        else:
+            # Known heading - prepare for spiral scan
+            self.spiral_radius = 5.0
+            self.search_pattern_state = 0
+
+        self.state = TrackerState.SEARCHING
+
+    def update(self):
+        """
+        Main update loop - reads sensor data and executes state machine logic.
+        """
+        # Check if track_drone mode is enabled
+        if self.track_drone_mode and self.state == TrackerState.IDLE:
+            if self.start_track_drone_mode():
+                # Successfully started track drone mode
+                pass
+            else:
+                # Failed to start, fall back to normal mode
+                self.track_drone_mode = False
+                self.state = TrackerState.SEARCHING
+
+        # Read current motor positions
+        current_az = self.shared_data["stepper_degrees"].value
+        current_el = self.shared_data["servo_degrees"].value
+
+        # Read LiDAR data with lock (only if not in track_drone mode)
+        measurement = None
+        if not self.track_drone_mode or self.state != TrackerState.TRACKING:
+            with self.shared_data["lidar_data"].get_lock():
+                dist, strength, timestamp = self.shared_data["lidar_data"][:]
+
+            # Check if we have a valid drone measurement (2m ± 0.2m)
+            if 180.0 <= dist <= 220.0:  # 2m ± 20cm in cm
+                measurement = (dist / 100.0, strength, timestamp)  # Convert to meters
+
+        # Execute state machine
+        if self.state == TrackerState.IDLE:
+            pass
+
+        elif self.state == TrackerState.SEARCHING:
+            self._execute_searching(current_az, current_el, measurement)
+
+        elif self.state == TrackerState.CONFIRMING_DIRECTION:
+            self._execute_confirming_direction(current_az, current_el, measurement)
+
+        elif self.state == TrackerState.CALCULATING_PLANE:
+            self._execute_calculating_plane()
+
+        elif self.state == TrackerState.TRACKING:
+            if self.track_drone_mode:
+                self._execute_tracking_drone_mode(current_az, current_el)
+            else:
+                self._execute_tracking(current_az, current_el, measurement)
+
+    def _execute_searching(self, current_az, current_el, measurement):
+        """Execute SEARCHING state logic."""
+        if measurement:
+            # Found the drone!
+            self.first_point = (current_az, current_el, measurement[0])
+            self.confirmed_points = [self.first_point]
+            self.last_detection_time = time.time()
+            self.arc_confidence = 0.3  # Low initial confidence
+            print(f"First point found at az={current_az:.1f}°, el={current_el:.1f}°")
+            self.state = TrackerState.CONFIRMING_DIRECTION
+            self.search_pattern_state = 0
+        else:
+            # Continue search pattern
+            if self.initial_heading == -1:
+                # Unknown heading - 360° sweep at medium elevation
+                self._execute_360_sweep()
+            else:
+                # Known heading - spiral scan
+                self._execute_spiral_scan()
+
+    def _execute_confirming_direction(self, current_az, current_el, measurement):
+        """Execute CONFIRMING_DIRECTION state logic with adaptive arc scanning."""
+        if measurement:
+            # Found second point!
+            self.second_point = (current_az, current_el, measurement[0])
+            self.confirmed_points.append(self.second_point)
+
+            # Calculate actual angular velocity from first two points
+            time_diff = time.time() - self.last_detection_time
+            if time_diff > 0:
+                az_diff = self._angle_difference(self.first_point[0], current_az)
+                self.last_angular_velocity = az_diff / time_diff
+                print(f"Measured angular velocity: {self.last_angular_velocity:.2f}°/s")
+
+            print(f"Second point found at az={current_az:.1f}°, el={current_el:.1f}°")
+            self.state = TrackerState.CALCULATING_PLANE
+            self.arc_confidence = 0.5  # Medium confidence after two points
+        else:
+            # Adaptive arc scan that narrows as confidence increases
+            self._adaptive_arc_scan()
+
+    def _execute_calculating_plane(self):
+        """Calculate the orbital plane from two confirmed points."""
+        # Convert spherical to Cartesian for both points
+        p1 = self._spherical_to_cartesian(
+            self.first_point[0], self.first_point[1], self.first_point[2]
+        )
+        p2 = self._spherical_to_cartesian(
+            self.second_point[0], self.second_point[1], self.second_point[2]
+        )
+
+        # Calculate normal vector via cross product
+        self.orbital_normal = np.cross(p1, p2)
+        self.orbital_normal = self.orbital_normal / np.linalg.norm(self.orbital_normal)
+
+        # Store last position for tracking
+        self.last_confirmed_position = p2
+
+        print(f"Orbital plane calculated. Normal vector: {self.orbital_normal}")
+        self.state = TrackerState.TRACKING
+        self.waiting_start_time = None
+
+    def _execute_tracking(self, current_az, current_el, measurement):
+        """Execute TRACKING state - predict and wait strategy with adaptive recovery."""
+        if measurement:
+            # Update confirmed position
+            self.last_confirmed_position = self._spherical_to_cartesian(
+                current_az, current_el, measurement[0]
+            )
+            self.last_detection_time = time.time()
+            self.waiting_start_time = None
+            self.confirmed_points.append((current_az, current_el, measurement[0]))
+
+            # Keep only recent points for adaptive tracking
+            if len(self.confirmed_points) > 10:
+                self.confirmed_points = self.confirmed_points[-10:]
+
+            # Update confidence and velocity estimation
+            self.arc_confidence = min(1.0, self.arc_confidence + 0.1)
+
+            # Update angular velocity based on recent measurements
+            if len(self.confirmed_points) >= 2:
+                recent_time = time.time() - self.last_detection_time
+                if recent_time < 1.0:  # Recent enough to be accurate
+                    az_diff = self._angle_difference(
+                        self.confirmed_points[-2][0],
+                        self.confirmed_points[-1][0]
+                    )
+                    time_diff = 0.5  # Approximate time between measurements
+                    measured_velocity = az_diff / time_diff
+                    # Smooth velocity update
+                    self.last_angular_velocity = (0.7 * self.last_angular_velocity +
+                                                  0.3 * measured_velocity)
+
+            # Immediately predict next intercept point
+            self._predict_and_move()
+
+        elif self.waiting_start_time is None:
+            # Just arrived at predicted point - start waiting
+            self.waiting_start_time = time.time()
+
+        elif time.time() - self.waiting_start_time > self.max_wait_time:
+            # Lost the drone - use adaptive arc scan to reacquire
+            print(f"Target lost, performing adaptive arc scan (confidence={self.arc_confidence:.2f})")
+
+            # Use the sophisticated arc scanning
+            if self.arc_confidence > 0.3:
+                # High confidence - narrow arc search
+                self._adaptive_arc_scan()
+            else:
+                # Low confidence - revert to wider search
+                print("Low confidence - reverting to search mode")
+                self.state = TrackerState.SEARCHING
+                self.search_pattern_state = 0
+
+    def _predict_and_move(self):
+        """Predict next intercept point and command motors."""
+        if self.last_confirmed_position is None or self.orbital_normal is None:
+            return
+
+        # Rotate position around orbital normal by prediction angle
+        predicted_pos = self._rotate_vector_rodrigues(
+            self.last_confirmed_position,
+            self.orbital_normal,
+            np.radians(self.prediction_angle)
+        )
+
+        # Convert back to spherical coordinates
+        az, el, r = self._cartesian_to_spherical(predicted_pos)
+
+        # Command motors to intercept point
+        command_motors_to_target(az, el, self.shared_data)
+
+    def _execute_360_sweep(self):
+        """Execute 360-degree sweep pattern for unknown heading."""
+        target_el = 30.0 if self.initial_inclination == -1 else self.initial_inclination
+
+        # Move to next azimuth position
+        command_motors_to_target(self.sweep_azimuth, target_el, self.shared_data)
+
+        # Update sweep position
+        self.sweep_azimuth += 5.0 * self.sweep_direction
+        if self.sweep_azimuth >= 360.0:
+            self.sweep_azimuth = 355.0
+            self.sweep_direction = -1
+        elif self.sweep_azimuth < 0:
+            self.sweep_azimuth = 5.0
+            self.sweep_direction = 1
+
+    def _execute_spiral_scan(self):
+        """Execute spiral scan pattern around known heading."""
+        # Calculate spiral position
+        angle = self.search_pattern_state * 30  # degrees
+        radius = min(self.spiral_radius, 45.0)  # Cap maximum radius
+
+        # Calculate offset from initial heading
+        az_offset = radius * np.cos(np.radians(angle))
+        el_offset = radius * np.sin(np.radians(angle))
+
+        # Calculate target position
+        target_az = (self.initial_heading + az_offset) % 360.0
+        target_el = 30.0 if self.initial_inclination == -1 else self.initial_inclination
+        target_el = np.clip(target_el + el_offset, 0, 90)
+
+        # Command motors
+        command_motors_to_target(target_az, target_el, self.shared_data)
+
+        # Update spiral state
+        self.search_pattern_state += 1
+        if self.search_pattern_state > 12:  # Complete circle
+            self.search_pattern_state = 0
+            self.spiral_radius += self.spiral_step
+
+    def _angle_difference(self, angle1, angle2):
+        """Calculate the shortest angular difference between two angles."""
+        diff = (angle2 - angle1 + 180) % 360 - 180
+        return diff
+
+    def _adaptive_arc_scan(self):
+        """
+        Adaptive arc scanning that narrows as more points are gathered.
+        Arc width decreases with confidence, search focuses on predicted path.
+        """
+        # Calculate time since last detection
+        time_elapsed = time.time() - self.last_detection_time if self.last_detection_time else 0.5
+
+        # Predict where drone should be based on velocity
+        predicted_movement = self.last_angular_velocity * time_elapsed
+        base_position = self.confirmed_points[-1] if self.confirmed_points else self.first_point
+        predicted_az = (base_position[0] + predicted_movement) % 360.0
+
+        # Adaptive arc width - narrows as confidence increases
+        base_arc_width = 20.0  # Maximum arc width
+        arc_width = base_arc_width * (1.0 - self.arc_confidence * 0.7)  # Minimum 30% of base
+
+        # Increase scan density for smaller arcs
+        if arc_width < 8.0:
+            num_points = 3
+        elif arc_width < 15.0:
+            num_points = 5
+        else:
+            num_points = 7
+
+        # Calculate scan position within arc
+        if self.search_pattern_state < num_points:
+            # Distribute points across the arc
+            if num_points == 1:
+                arc_position = 0
+            else:
+                arc_position = -arc_width / 2 + (arc_width * self.search_pattern_state / (num_points - 1))
+
+            target_az = (predicted_az + arc_position) % 360.0
+            target_el = base_position[1]
+
+            command_motors_to_target(target_az, target_el, self.shared_data)
+            self.search_pattern_state += 1
+
+            print(f"Arc scan {self.search_pattern_state}/{num_points}: "
+                  f"az={target_az:.1f}° (arc width={arc_width:.1f}°, conf={self.arc_confidence:.2f})")
+        else:
+            # Arc complete, reduce confidence and widen next arc
+            self.arc_confidence = max(0, self.arc_confidence - 0.1)
+            self.search_pattern_state = 0
+
+    def _spherical_to_cartesian(self, azimuth_deg, elevation_deg, radius):
+        """Convert spherical coordinates to Cartesian."""
+        az_rad = np.radians(azimuth_deg)
+        el_rad = np.radians(elevation_deg)
+
+        x = radius * np.cos(el_rad) * np.cos(az_rad)
+        y = radius * np.cos(el_rad) * np.sin(az_rad)
+        z = radius * np.sin(el_rad)
+
+        return np.array([x, y, z])
+
+    def _cartesian_to_spherical(self, vec):
+        """Convert Cartesian coordinates to spherical."""
+        x, y, z = vec
+        radius = np.linalg.norm(vec)
+
+        azimuth_rad = np.arctan2(y, x)
+        elevation_rad = np.arcsin(z / radius) if radius > 0 else 0
+
+        azimuth_deg = np.degrees(azimuth_rad) % 360.0
+        elevation_deg = np.degrees(elevation_rad)
+
+        return azimuth_deg, elevation_deg, radius
+
+    def _rotate_vector_rodrigues(self, vec, axis, angle):
+        """
+        Rotate vector around axis by angle using Rodrigues' rotation formula.
+
+        Args:
+            vec: Vector to rotate (numpy array)
+            axis: Rotation axis (unit vector)
+            angle: Rotation angle in radians
+        """
+        cos_angle = np.cos(angle)
+        sin_angle = np.sin(angle)
+
+        # Rodrigues' formula: v_rot = v*cos(θ) + (k×v)*sin(θ) + k*(k·v)*(1-cos(θ))
+        term1 = vec * cos_angle
+        term2 = np.cross(axis, vec) * sin_angle
+        term3 = axis * np.dot(axis, vec) * (1 - cos_angle)
+
+        return term1 + term2 + term3
+
+    def start_track_drone_mode(self):
+        """
+        Start direct tracking mode using known heading and inclination.
+        Skips detection and follows predicted orbital path.
+        """
+        if self.initial_heading == -1 or self.initial_inclination == -1:
+            print("[Track Drone] Error: Heading and inclination must be known for track_drone mode")
+            return False
+
+        print(f"[Track Drone] Starting direct tracking at heading={self.initial_heading:.1f}°, "
+              f"inclination={self.initial_inclination:.1f}°")
+
+        # Create artificial orbital plane based on known parameters
+        # Assume drone is currently at the initial heading/inclination
+        center_pos = self._spherical_to_cartesian(
+            self.initial_heading, self.initial_inclination, self.drone_radius
+        )
+
+        # Create a second point by rotating slightly
+        second_az = (self.initial_heading + 10) % 360
+        second_el = self.initial_inclination
+        second_pos = self._spherical_to_cartesian(second_az, second_el, self.drone_radius)
+
+        # Calculate orbital normal (simplified for circular orbit)
+        self.orbital_normal = np.cross(center_pos, second_pos)
+        self.orbital_normal = self.orbital_normal / np.linalg.norm(self.orbital_normal)
+
+        # Set initial position
+        self.last_confirmed_position = center_pos
+        self.last_detection_time = time.time()
+
+        # Jump directly to tracking state
+        self.state = TrackerState.TRACKING
+        self.tracking_confidence = 1.0  # High confidence since we know the parameters
+
+        print(f"[Track Drone] Orbital plane established. Starting predictive tracking.")
+        return True
+
+    # This function must be defined elsewhere in your project
+    def _execute_tracking_drone_mode(self, current_az, current_el):
+        """Execute tracking in drone mode - no detection, pure prediction."""
+        current_time = time.time()
+
+        # Always predict and move
+        dt = current_time - self.last_detection_time
+
+        # For track_drone mode, continuously update position based on time
+        if dt > 0.1:  # Update every 100ms minimum
+            # Rotate position around orbital normal by the angle traveled
+            angle_traveled = np.radians(self.drone_angular_velocity * dt)
+
+            # Update position using Rodrigues rotation
+            self.last_confirmed_position = self._rotate_vector_rodrigues(
+                self.last_confirmed_position,
+                self.orbital_normal,
+                angle_traveled
+            )
+
+            self.last_detection_time = current_time
+
+            # Convert to spherical and command motors
+            az, el, r = self._cartesian_to_spherical(self.last_confirmed_position)
+
+            # Command motors to the predicted position
+            command_motors_to_target(az, el, self.shared_data)
+
+            # Update satellite points for visualization (simulate detection)
+            with self.shared_data["satellite_points"].get_lock():
+                self.shared_data["satellite_points"][0] = az
+                self.shared_data["satellite_points"][1] = el
+                self.shared_data["satellite_points"][2] = self.drone_radius * 100  # Convert to cm
+                self.shared_data["satellite_points"][3] = 9999  # Simulated high strength
+                self.shared_data["satellite_points"][4] = current_time
+
+            print(f"[Track Drone] Following orbit: az={az:.1f}°, el={el:.1f}°")
+
+    def get_state_string(self):
+        """Get human-readable state string."""
+        return self.state.name
+
+
+# Integration function for running CircularDroneTracker with existing system
+def run_circular_drone_tracker(shared_data):
+    """
+    Run the CircularDroneTracker as a standalone process.
+
+    Args:
+        shared_data: Shared memory dictionary with all required parameters
+    """
+
+    # Create tracker instance
+    tracker = CircularDroneTracker(shared_data, prediction_time_sec=0.5)
+
+    # Check if we should use track_drone mode
+    if "track_drone" in shared_data and shared_data["track_drone"].value:
+        print("[CircularDroneTracker] Track drone mode enabled")
+        # Start search will use the parameters from shared_data
+        tracker.start_search()
+    else:
+        # Normal mode - read parameters from shared_data or use defaults
+        initial_heading = shared_data.get("initial_heading", {}).value if "initial_heading" in shared_data else -1
+        heading_deviation = shared_data.get("heading_deviation",
+                                            {}).value if "heading_deviation" in shared_data else 30.0
+        initial_inclination = shared_data.get("initial_inclination",
+                                              {}).value if "initial_inclination" in shared_data else -1
+
+        print(f"[CircularDroneTracker] Starting search with heading={initial_heading:.1f}°, "
+              f"inclination={initial_inclination:.1f}°")
+
+        tracker.start_search(initial_heading, heading_deviation, initial_inclination)
+
+    # Main loop
+
+
+
 def run_tracker_process(shared_data, background_file="background_scan.npy"):
     """
     Run the robust tracker process. Chooses tracker based on shared_data flags.
@@ -1233,7 +1771,8 @@ def run_tracker_process(shared_data, background_file="background_scan.npy"):
     # Check which tracker to run
     if shared_data.get("demo"):
         # Run the new specialized orbital tracker
-        orbital_tracker = OrbitalTracker(shared_data, standard_tracker)
+       # orbital_tracker = OrbitalTracker(shared_data, standard_tracker)
+        run_circular_drone_tracker(shared_data)
         try:
             orbital_tracker.run()
         except Exception as e:
