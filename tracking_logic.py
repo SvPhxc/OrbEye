@@ -553,8 +553,7 @@ def command_motors_to_target(azimuth, elevation, shared_data):
         shared_data["go_to_target"].value = True
 
 def _start_orbit_patrol(shared_data):
-    # If ClutterFilter is in this same file, just use the class directly (no import).
-    from tracking_logic import ClutterFilter  # remove if this file already defines the class
+    
 
     def worker():
         try:
@@ -602,6 +601,8 @@ def _start_orbit_patrol(shared_data):
             speed = None if speed <= 0.0 else speed
 
             q = shared_data["orbit_patrol_query"].value.decode("utf-8").strip() or "ISS (ZARYA)"
+            incl = float(shared_data["inclination"].value)
+            use_full_circle = abs(incl) < 0.5  # threshold for "equatorial enough"
 
             run_orbit_patrol_from_query(
                 shared_data,
@@ -613,9 +614,11 @@ def _start_orbit_patrol(shared_data):
                 duration_minutes=90,
                 step_seconds=30,
                 start_near_current=True,
-                proceed_condition=proceed_condition,      # <-- detection-gated advance
-                next_wp_speed_deg_per_s=speed,            # derive wait from spacing & speed
-                max_wait_s=max_wait_s
+                proceed_condition=proceed_condition,
+                next_wp_speed_deg_per_s=speed,
+                max_wait_s=max_wait_s,
+                full_circle=use_full_circle,           # <-- NEW
+                full_circle_samples=720                # <-- NEW (optional; 720 gives 0.5° spacing)
             )
         finally:
             shared_data["orbit_patrol_active"].value = False

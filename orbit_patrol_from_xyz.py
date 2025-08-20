@@ -2,6 +2,30 @@ import time, math
 import numpy as np
 
 # ---------- helpers: convert & choose ----------
+def _eci_plane_basis_from_raan_incl(raan_deg: float, incl_deg: float):
+    Ω = math.radians(raan_deg)
+    i = math.radians(incl_deg)
+    # Ascending node (unit) in ECI XY
+    p = np.array([math.cos(Ω), math.sin(Ω), 0.0], dtype=float)
+    # 90° ahead in plane
+    q = np.array([-math.sin(Ω)*math.cos(i), math.cos(Ω)*math.cos(i), math.sin(i)], dtype=float)
+    return p, q
+
+def generate_full_circle_xyz_from_raan_incl(raan_deg: float,
+                                            incl_deg: float,
+                                            n_samples: int = 720):
+    """
+    Returns Nx3 unit vectors covering the entire orbital plane (2π).
+    """
+    p, q = _eci_plane_basis_from_raan_incl(raan_deg, incl_deg)
+    nus = np.linspace(0.0, 2*math.pi, int(n_samples), endpoint=False)
+    pts = np.cos(nus)[:, None] * p[None, :] + np.sin(nus)[:, None] * q[None, :]
+    # Already unit vectors; small numerical drift might exist—normalize to be safe
+    norms = np.linalg.norm(pts, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0
+    return pts / norms
+
+
 def xyz_to_azel_center(xyz: np.ndarray):
     xyz = np.asarray(xyz, dtype=float)
     if xyz.ndim == 1:
@@ -276,7 +300,34 @@ def run_orbit_patrol_from_query(shared_data,
                                 start_near_current: bool = True,
                                 proceed_condition=None,
                                 next_wp_speed_deg_per_s: float | None = None,
-                                max_wait_s: float | None = None):
+                                max_wait_s: float | None = None,
+                                full_circle: bool = False,
+                                full_circle_samples: int = 720):
+    """
+    If full_circle=True, ignore time sampling and generate the entire orbital plane
+    from RAAN & inclination (read from shared_data["rann"], ["inclination"]).
+    Otherwise, sample the orbit over a time window via datahandler.
+    """
+    if full_circle:
+        raan = float(shared_data["rann"].value)
+        incl = float(shared_data["inclination"].value)
+        pts_unit = generate_full_circle_xyz_from_raan_incl(
+            raan, incl, n_samples=full_circle_samples
+        )
+        print(f"[OrbitPatrolXYZ] Full-circle mode: RAAN={raan:.2f}°, inc={incl:.2f}°, samples={len(pts_unit)}")
+        run_orbit_patrol_from_xyz(shared_data,
+                                  pts_unit,
+                                  num_points=num_points,
+                                  dwell_seconds=dwell_seconds,
+                                  min_el_deg=min_el_deg,
+                                  max_el_deg=max_el_deg,
+                                  start_near_current=start_near_current,
+                                  proceed_condition=proceed_condition,
+                                  next_wp_speed_deg_per_s=next_wp_speed_deg_per_s,
+                                  max_wait_s=max_wait_s)
+        return
+
+    # --- time-sampled fallback (existing behavior) ---
     from datahandler import get_orbit_xyz_for_query
     name, pts_km = get_orbit_xyz_for_query(query,
                                            duration_minutes=duration_minutes,
@@ -292,3 +343,4 @@ def run_orbit_patrol_from_query(shared_data,
                               proceed_condition=proceed_condition,
                               next_wp_speed_deg_per_s=next_wp_speed_deg_per_s,
                               max_wait_s=max_wait_s)
+
