@@ -1,5 +1,3 @@
-# GUI.py
-
 import sys
 import numpy as np
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -7,11 +5,19 @@ from PyQt5.QtWidgets import QVBoxLayout, QPushButton, QCheckBox
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 
+from datahandler import (
+    get_orbit_xyz_for_query,  # you already use this to get XYZ points
+    get_acquisition_pan_deg,  # NEW: prints the pan (RAAN)
+    get_ascending_node_unit_vector,  # NEW: for drawing a line (optional)
+    fit_tle_from_satellite_points,
+    # save_tle_to_example,     # keep if you need it
+)
+
 
 class TrackerWindow(QtWidgets.QMainWindow):
-    def __init__(self, shared_data):
-        super().__init__()
-        self.setWindowTitle("Martin Systems - Lidar Tracker GUI")
+    def _init_(self, shared_data):
+        super()._init_()
+        self.setWindowTitle("LockedInMartin")
         # Bigger window to fit heatmap under 3D
         self.resize(1500, 850)
 
@@ -19,6 +25,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.central_widget = QtWidgets.QWidget()
         self.setCentralWidget(self.central_widget)
         main_layout = QtWidgets.QHBoxLayout(self.central_widget)
+
+        self.orbit_items = []  # holds GL items for the plotted orbit
+        self.orbit_as_points = False  # set True for points/cloud; False for a polyline
+        self.orbit_scale_cm_per_km = 0.05  # 6000km --> 300 cm
 
         # ===== Left panel: 3D view (top) + 2D heatmap (bottom) =====
         left_panel = QtWidgets.QWidget()
@@ -28,7 +38,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         # 3D View Setup
         self.view = gl.GLViewWidget()
-        self.view.setCameraPosition(distance=30)
+        self.view.setCameraPosition(distance=1500)
         left_vbox.addWidget(self.view, stretch=3)
 
         grid = gl.GLGridItem()
@@ -74,7 +84,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
             # Fallback for older pyqtgraph: use transform if setRect is problematic
             self.hm_img.resetTransform()
             sx = 360.0 / self.hm_bins.shape[1]  # 360 / 360
-            sy = 91.0 / self.hm_bins.shape[0]   # 91 / 91
+            sy = 91.0 / self.hm_bins.shape[0]  # 91 / 91
             self.hm_img.scale(sx, sy)
             self.hm_img.setPos(0, 0)
 
@@ -100,7 +110,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         controls_layout.addWidget(self.status_label)
         controls_layout.addWidget(self.create_separator())
 
-        mode_box = QtWidgets.QGroupBox("Mode Control")
+        mode_box = QtWidgets.QGroupBox("Main Controls")
         mode_layout = QVBoxLayout()
         self.btn_scan = QPushButton("Start/Stop Background Scan")
         self.btn_scan.setCheckable(True)
@@ -112,10 +122,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_show_background.clicked.connect(self.toggle_background_plot)
         mode_layout.addWidget(self.btn_show_background)
 
-        self.chk_hf_tracking = QCheckBox("Enable High-Frequency Tracking")
-        self.chk_hf_tracking.toggled.connect(self.on_hf_track_toggled)
-        mode_layout.addWidget(self.chk_hf_tracking)
-
         # Clear Heatmap button
         self.btn_clear_heat = QPushButton("Clear Heatmap")
         self.btn_clear_heat.clicked.connect(self.clear_heatmap)
@@ -123,6 +129,29 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         mode_box.setLayout(mode_layout)
         controls_layout.addWidget(mode_box)
+
+        # TLE BOX
+        tle_in_out = QtWidgets.QGroupBox("TLE IN/OUT")
+        tle_layout = QVBoxLayout()
+
+        self.sat_name_input = QtWidgets.QLineEdit()
+        self.sat_name_input.setPlaceholderText("ISS (ZARYA)")
+        tle_layout.addWidget(self.sat_name_input)
+
+        self.btn_fetch_plot = QtWidgets.QPushButton("Fetch/Plot Satellite")
+        self.btn_fetch_plot.clicked.connect(self.fetch_and_plot_satellite)
+        tle_layout.addWidget(self.btn_fetch_plot)
+
+        self.btn_remove_orbit = QtWidgets.QPushButton("Remove Orbit")
+        self.btn_remove_orbit.clicked.connect(self.remove_orbit)
+        tle_layout.addWidget(self.btn_remove_orbit)
+
+        self.btn_output = QtWidgets.QPushButton("Process and Output")
+        self.btn_output.clicked.connect(self.output_TLE)
+        tle_layout.addWidget(self.btn_output)
+
+        tle_in_out.setLayout(tle_layout)
+        controls_layout.addWidget(tle_in_out)
 
         manual_box = QtWidgets.QGroupBox("Manual Control")
         manual_layout = QVBoxLayout()
@@ -135,24 +164,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.btn_go = QPushButton("Go To Position")
         self.btn_go.clicked.connect(self.on_go_clicked)
         manual_layout.addWidget(self.btn_go)
-
-        # D-pad layout for arrow controls
-        dpad_layout = QtWidgets.QGridLayout()
-        btn_up = QtWidgets.QPushButton("↑")
-        btn_down = QtWidgets.QPushButton("↓")
-        btn_left = QtWidgets.QPushButton("←")
-        btn_right = QtWidgets.QPushButton("→")
-        dpad_layout.addWidget(btn_up, 0, 1)
-        dpad_layout.addWidget(btn_left, 1, 0)
-        dpad_layout.addWidget(btn_right, 1, 2)
-        dpad_layout.addWidget(btn_down, 2, 1)
-        manual_layout.addLayout(dpad_layout)
-
-        # Connect new buttons
-        btn_up.clicked.connect(self.set_tilt_up)
-        btn_down.clicked.connect(self.set_tilt_down)
-        btn_left.clicked.connect(self.set_pan_left)
-        btn_right.clicked.connect(self.set_pan_right)
 
         manual_box.setLayout(manual_layout)
         controls_layout.addWidget(manual_box)
@@ -186,9 +197,9 @@ class TrackerWindow(QtWidgets.QMainWindow):
         lcd_layout.addWidget(self.lcd_strength, 3, 1)
         controls_layout.addLayout(lcd_layout)
 
-        self.btn_reactive_mode = QCheckBox("Enable Reactive Mode (No Prediction)")
-        self.btn_reactive_mode.toggled.connect(self.on_reactive_mode_toggled)
-        controls_layout.addWidget(self.btn_reactive_mode)
+        self.chk_reactive_mode = QCheckBox("Enable Reactive Mode (No Prediction)")
+        self.chk_reactive_mode.toggled.connect(self.on_reactive_mode_toggled)
+        controls_layout.addWidget(self.chk_reactive_mode)
 
         controls_layout.addStretch()
 
@@ -200,7 +211,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         # Timers
         self.timer_ui = QtCore.QTimer(self)
         self.timer_ui.timeout.connect(self.update_ui)
-        self.timer_ui.start(100)
+        self.timer_ui.start(15)
 
     # ===== Heatmap helpers =====
     def clear_heatmap(self):
@@ -263,9 +274,121 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         self._hm_last_ts = ts
 
+    # TLE SHOW
+    def output_TLE(self):
+        sp = self.shared_data["satellite_points"]
+        print(sp[:])
+        tle_name, l1, l2 = fit_tle_from_satellite_points(sp[:], unit="cm", name="MY-FIT")
+        # print(l1)
+        # print(l2)
+
+    def print_acquisition_pan(self, also_draw_line=True, line_length_cm=600.0):
+        """
+        Reads the TLE query from the text box, computes acquisition pan (≈ RAAN),
+        prints it, and optionally draws a line from origin in that direction.
+        """
+        from datahandler import normalize_tle_input  # only needed to resolve "TLE"/filename/name
+        query = (self.sat_name_input.text() or "").strip()
+
+        try:
+            name, l1, l2 = normalize_tle_input(query, default_path="example.tle")
+            pan_deg = get_acquisition_pan_deg(tle_lines=(l1, l2))
+            print(f"[TLE] Acquisition pan for '{name}' (ascending node / RAAN): {pan_deg:.2f}°")
+
+            if also_draw_line:
+                # build endpoint in your scene units (cm). Ascending node is in XY plane (z=0).
+                dir_unit = get_ascending_node_unit_vector(tle_lines=(l1, l2))  # (x,y,0), unitless
+                end_cm = dir_unit * float(line_length_cm)
+
+                line = gl.GLLinePlotItem(
+                    pos=np.vstack([np.zeros(3, dtype=float), end_cm]),
+                    width=2.0,
+                    color=(0.2, 1.0, 1.0, 0.95),
+                    antialias=True,
+                    mode='line_strip'
+                )
+                self.view.addItem(line)
+                self.orbit_items.append(line)
+
+        except Exception as e:
+            print(f"[TLE] Acquisition pan failed for '{query}': {e}")
+
+    def fetch_and_plot_satellite(self):
+        """
+        Reads the text field (sat name / 'TLE' / .tle path), gets Nx3 km coords
+        from datahandler, and plots them in the 3D view.
+        """
+        query = (self.sat_name_input.text() or "").strip()
+
+        try:
+            # Ask datahandler to resolve and propagate
+            name, pts_km = get_orbit_xyz_for_query(query, duration_minutes=90, step_seconds=60)
+
+            # Plot as line or points based on self.orbit_as_points
+            self._plot_orbit_xyz(pts_km, as_points=self.orbit_as_points, label=name)
+            self.print_acquisition_pan(also_draw_line=True)
+
+        except Exception as e:
+            print(f"[TLE] Fetch/plot error for '{query}': {e}")
+
+    def _plot_orbit_xyz(self, pts_km: np.ndarray, as_points: bool = False, label: str = "ORBIT"):
+        """
+        pts_km: Nx3 in kilometers (TEME/ECI).
+        We scale to centimeters used by the LiDAR background.
+        """
+        if not isinstance(pts_km, np.ndarray) or pts_km.ndim != 2 or pts_km.shape[1] != 3:
+            print("[TLE] Invalid orbit array; expected Nx3.")
+            return
+
+        try:
+            # --- SCALE: km -> (scaled) cm in your scene
+            pts_cm = pts_km * float(self.orbit_scale_cm_per_km)  # 0.1 cm per km
+
+            if as_points:
+                item = gl.GLScatterPlotItem(pos=pts_cm, size=2.5, color=(1.0, 1.0, 0.2, 0.95))
+            else:
+                item = gl.GLLinePlotItem(pos=pts_cm, width=2.0, color=(1.0, 1.0, 0.0, 0.9),
+                                         antialias=True, mode='line_strip')
+
+            self.view.addItem(item)
+            self.orbit_items.append(item)
+
+            # Optional start marker
+            try:
+                first = pts_cm[0]
+                start_marker = gl.GLScatterPlotItem(pos=first.reshape(1, 3), size=6.0, color=(1.0, 0.4, 0.2, 1.0))
+                self.view.addItem(start_marker)
+                self.orbit_items.append(start_marker)
+            except Exception:
+                pass
+
+            # auto-zoom based on scaled cm radius
+            r_cm = float(np.linalg.norm(pts_cm, axis=1).max())
+            if r_cm > 0:
+                self.view.setCameraPosition(distance=max(100.0, 2.2 * r_cm))
+
+            print(f"[TLE] Plotted '{label}' scaled: 1 km → {self.orbit_scale_cm_per_km} cm. "
+                  f"Max radius ~ {r_cm:.1f} cm.")
+        except Exception as e:
+            print(f"[TLE] Plot error: {e}")
+
+    def remove_orbit(self):
+        if not hasattr(self, "orbit_items"):
+            self.orbit_items = []
+        if not self.orbit_items:
+            print("[TLE] No orbit to remove.")
+            return
+        for item in self.orbit_items:
+            try:
+                self.view.removeItem(item)
+            except Exception:
+                pass
+        self.orbit_items.clear()
+        print("[TLE] Orbit removed.")
+
     # ===== Controls handlers =====
     def on_reactive_mode_toggled(self, checked):
-        self.shared_data["demo"].value = checked
+        self.shared_data["reactive_mode"].value = checked
 
     def toggle_background_plot(self):
         """Loads data from file and displays/hides the plot."""
@@ -291,9 +414,9 @@ class TrackerWindow(QtWidgets.QMainWindow):
                     el_rad = np.radians(el)
                     dist_m = dist_cm / 100.0  # cm -> m
 
-                    x = dist_m * np.cos(el_rad) * np.cos(az_rad)
-                    y = dist_m * np.cos(el_rad) * np.sin(az_rad)
-                    z = dist_m * np.sin(el_rad)
+                    x = dist_cm * np.cos(el_rad) * np.cos(az_rad)
+                    y = dist_cm * np.cos(el_rad) * np.sin(az_rad)
+                    z = dist_cm * np.sin(el_rad)
                     points.append([x, y, z])
 
             if points:
@@ -337,9 +460,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
     def on_scan_toggled(self, checked):
         self.shared_data["background_scan_active"].value = checked
-
-    def on_hf_track_toggled(self, checked):
-        self.shared_data["lidar_track_mode_active"].value = checked
 
     def stop_and_plot_ekf(self):
         self.shared_data["generate_plot_on_stop"].value = True
@@ -395,9 +515,9 @@ class TrackerWindow(QtWidgets.QMainWindow):
             dist_cm = self.shared_data['lidar_data'][0]
             length_m = dist_cm / 100.0 if 10.0 <= dist_cm <= 16000.0 else 15.0
             az_rad, el_rad = np.radians(az), np.radians(el)
-            x = length_m * np.cos(el_rad) * np.cos(az_rad)
-            y = length_m * np.cos(el_rad) * np.sin(az_rad)
-            z = length_m * np.sin(el_rad)
+            x = dist_cm * np.cos(el_rad) * np.cos(az_rad)
+            y = dist_cm * np.cos(el_rad) * np.sin(az_rad)
+            z = dist_cm * np.sin(el_rad)
             tip = np.array([x, y, z])
             self.laser.setData(pos=np.vstack((np.zeros(3), tip)))
             self.satellite.setData(pos=tip.reshape(1, 3))
