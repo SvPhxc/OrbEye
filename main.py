@@ -15,13 +15,23 @@ import signal
 import time
 from multiprocessing import Process, Manager, Value, Array, Lock
 from enum import Enum
-from ctypes import c_char  # Import ctypes for creating a shared string buffer
+from ctypes import c_char
 
 # --- Import process functions from other modules ---
 from hardware_controller import run_hardware_controller
 from GUI import run_gui
 from tracking_logic import run_tracker_process
 from tle_generator import run_tle_generator
+
+
+# --- FIX: Define a named, picklable class for the ctypes array ---
+# This class is defined at the top level so other processes can import/find it.
+class CCharArray(c_char * 256):
+    pass
+
+
+class CCharArrayLarge(c_char * 1024):
+    pass
 
 
 # --- System-wide Enums ---
@@ -75,8 +85,8 @@ def create_shared_data_manager():
         # --- Background Scanning ---
         "background_scan_active": manager.Value('b', False),
         "background_scan_paused": manager.Value('b', False),
-        # CORRECTED: Use a ctypes char array for a mutable shared string.
-        "background_path": manager.Value((c_char * 256), b'background_scan.npy'),
+        # FIX: Use the named, picklable class here.
+        "background_path": manager.Value(CCharArray, b'background_scan.npy'),
         "scan_progress": manager.Value('d', 0.0),
 
         # --- Tracker Control & Output ---
@@ -89,7 +99,8 @@ def create_shared_data_manager():
         "observer_alt": manager.Value('d', 71.0),
         "generate_tle": manager.Value('b', False),
         "tracking_history": manager.list(),
-        "generated_tle": manager.Value((c_char * 1024), b"No TLE generated yet."),
+        # FIX: Use the named, picklable class for the larger TLE string as well.
+        "generated_tle": manager.Value(CCharArrayLarge, b"No TLE generated yet."),
 
         # --- Synchronization Locks ---
         "state_lock": manager.Lock(),
@@ -160,7 +171,6 @@ if __name__ == "__main__":
         # Main thread monitors for shutdown or process failure
         while not shared_data["shutdown"].value:
             any_process_died = False
-            # IMPROVED: Check each process individually to find the culprit
             for name, p in processes.items():
                 if not p.is_alive():
                     print(f"[main] CRITICAL ERROR: Process '{name}' has terminated unexpectedly.")
@@ -171,7 +181,7 @@ if __name__ == "__main__":
                 shared_data["shutdown"].value = True
                 break
 
-            time.sleep(0.1)  # Check status every 100ms
+            time.sleep(0.1)
 
     except (KeyboardInterrupt, SystemExit):
         if not shared_data["shutdown"].value:
@@ -184,7 +194,6 @@ if __name__ == "__main__":
         join_or_escalate(processes["HardwareController"], "HardwareController")
         print("[main] All processes have been terminated.")
 
-        # Cleanly shut down the manager process
         print("[main] Shutting down manager...")
         manager.shutdown()
         print("[main] Program exited cleanly.")
