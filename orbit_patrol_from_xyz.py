@@ -1,7 +1,4 @@
---- START
-OF
-FILE
-orbit_patrol_from_xyz.py - --
+
 
 import time, math
 import numpy as np
