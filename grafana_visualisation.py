@@ -49,8 +49,8 @@ def publish_data_to_aws(shared_data):
                 lidar_data = shared_data["lidar_data"]
                 lidar_distance = lidar_data[0]
                 lidar_intensity = lidar_data[1]
-                stepper_degrees = shared_data["stepper_degrees"].value
-                servo_degrees = shared_data["servo_degrees"].value
+                stepper_degrees = round(shared_data["stepper_degrees"].value,2)
+                servo_degrees = round(shared_data["servo_degrees"].value,2)
                 current_time =  int(time.time())
                 
                 simple_topics = {
