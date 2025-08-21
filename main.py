@@ -228,6 +228,6 @@ if __name__ == "__main__":
         join_or_escalate(processes["HardwareController"], "HardwareController")
         join_or_escalate(processes["TrackingLogic"], "TrackingLogic")
         join_or_escalate(processes["TLEGenerator"], "TLEGenerator")  # <-- ADD TLE PROCESS TO SHUTDOWN
-        #join_or_escalate(processes["GrafanaVisualization"], "GrafanaVisualization")
+        join_or_escalate(processes["GrafanaVisualization"], "GrafanaVisualization")
         print("[main] All processes have been terminated. Program exited cleanly.")
         sys.exit(0)
