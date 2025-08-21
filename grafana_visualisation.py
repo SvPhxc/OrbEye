@@ -31,15 +31,18 @@ print("Connected!\n")
 def current_timestamp():
     return int(time.time())
 
-def publish_simple(topic, payload_data):
+def publish_simple(topic, payload_data, batch_timestamp=None):
     """Simplified publish function with direct payload"""
+    # Use provided batch timestamp or generate new one
+    timestamp = batch_timestamp if batch_timestamp is not None else current_timestamp()
+    
     # Add timestamp to the payload
     if isinstance(payload_data, dict):
-        payload_data["timestamp"] = current_timestamp()
+        payload_data["timestamp"] = timestamp
     else:
         payload_data = {
             "value": payload_data,
-            "timestamp": current_timestamp()
+            "timestamp": timestamp
         }
     
     mqtt_connection.publish(
@@ -47,28 +50,7 @@ def publish_simple(topic, payload_data):
         payload=json.dumps(payload_data), 
         qos=mqtt.QoS.AT_LEAST_ONCE
     )
-    #print(f"Published to {topic}: {json.dumps(payload_data, indent=2)}")
-
-def publish_original(topic, value):
-    """Original publish function - fixed logic"""
-    if isinstance(value, dict):
-        # For dictionaries, send the dict directly as the value
-        payload = {
-            "value": value,
-            "timestamp": {"timeInSeconds": current_timestamp()},
-            "quality": "GOOD"
-        }
-    else:
-        # For strings and numbers, use the appropriate type
-        value_key = "stringValue" if isinstance(value, str) else "doubleValue"
-        payload = {
-            "value": {value_key: value},
-            "timestamp": {"timeInSeconds": current_timestamp()},
-            "quality": "GOOD"
-        }
-    
-    mqtt_connection.publish(topic=topic, payload=json.dumps(payload), qos=mqtt.QoS.AT_LEAST_ONCE)
-    #print(f"Published to {topic}: {json.dumps(payload)}")
+    print(f"Published to {topic}: {json.dumps(payload_data, indent=2)}")
 
 # ==== FAKE DATA GENERATORS ====
 def generate_cpf():
@@ -90,17 +72,6 @@ def generate_cpf():
         "semi_major_axis": round(random.uniform(6700, 7000), 1)
     }
 
-def generate_nps():
-    return {
-        "time_of_flight": round(random.uniform(0.02, 0.04), 6),
-        "range_correction": round(random.uniform(-0.2, 0.2), 4),
-        "atmospheric_correction": round(random.uniform(-0.01, 0.01), 4),
-        "calibration_factor": 1.0,
-        "measurement_timestamp": datetime.now(timezone.utc).isoformat(),
-        "return_strength": round(random.uniform(0.2, 0.5), 3),
-        "background_noise": round(random.uniform(0.0005, 0.003), 5)
-    }
-
 def generate_tle():
     return {
         "line1": "1 25544U 98067A 25210.50000000 .00002182 00000-0 10270-4 0 9999",
@@ -114,42 +85,58 @@ def generate_tle():
 
 def publish_data_to_aws(shared_data):
     try:
-        while True:
-            if not shared_data["shutdown"].value:
-                # Simple approach - direct payloads
-                simple_topics = {
-                    "tracker/lidar/distance": round(shared_data["lidar_data"][0],2),
-                    "tracker/lidar/intensity": round(shared_data["lidar_data"][1],2),
-                    "tracker/tracker/pan_angle": round(shared_data["stepper_degrees"].value,2),
-                    "tracker/tracker/tilt_angle": round(shared_data["servo_degrees"].value,2),
-                    #"tracker/orbit/cpf": shared_data["cpf"].value,
-                    #"tracker/orbit/altitude": shared_data["altitude"].value,
-                    "tracker/orbit/tle": shared_data["tle"].value,
-                    "tracker/position/x": round(shared_data["postion_x"], 2),
-                    "tracker/position/y": round(shared_data["postion_y"], 2),
-                    "tracker/position/z": round(shared_data["postion_z"], 2)
-                }
-                
-                for topic, payload in simple_topics.items():
-                    publish_simple(topic, payload)
-                
-                print("\nAll messages published for this cycle.")
-            else:
-                print("Shutdown flag is set. Exiting data publishing loop.")
-                # Exit the while loop
-                break
-
-            # A longer pause here to control the overall publishing frequency
-            time.sleep(5) 
-            
+        # Get a single timestamp for the entire batch
+        batch_timestamp = current_timestamp()
+        
+        # Simple approach - direct payloads from shared data
+        simple_topics = {
+            "tracker/lidar/distance": round(shared_data["lidar_data"][0], 2),
+            "tracker/lidar/intensity": round(shared_data["lidar_data"][1], 2),
+            "tracker/tracker/pan_angle": round(shared_data["stepper_degrees"].value, 2),
+            "tracker/tracker/tilt_angle": round(shared_data["servo_degrees"].value, 2),
+            "tracker/orbit/tle": shared_data["tle"].value,
+            "tracker/position/x": round(random.uniform(-7000.0, 7000.0), 2),
+            "tracker/position/y": round(random.uniform(-7000.0, 7000.0), 2),
+            "tracker/position/z": round(random.uniform(-7000.0, 7000.0), 2)
+            # "tracker/position/x": round(shared_data["position_x"], 2),  
+            # "tracker/position/y": round(shared_data["position_y"], 2),  
+            #"tracker/position/z": round(shared_data["position_z"], 2)  
+        }
+        
+        # Publish all topics at the same time with the same timestamp
+        for topic, payload in simple_topics.items():
+            publish_simple(topic, payload, batch_timestamp)
+        
+        print("\nAll messages published successfully!")
+        
     except KeyboardInterrupt:
         print("\n\nUser terminated the process.")
     except Exception as e:
         print(f"\nAn error occurred: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         print("Disconnecting from MQTT...")
         mqtt_connection.disconnect().result()
         print("Disconnected.")
 
+# ==== MAIN EXECUTION ====
+if __name__ == "__main__":
+    # Mock shared_data structure for testing
+    class MockValue:
+        def __init__(self, value):
+            self.value = value
 
-
+    # Create test shared_data (replace with your actual shared data source)
+    shared_data = {
+        "lidar_data": [round(random.uniform(300.0, 500.0), 2), round(random.uniform(100.0, 300.0), 2)],
+        "stepper_degrees": MockValue(round(random.uniform(0.0, 180.0), 2)),
+        "servo_degrees": MockValue(round(random.uniform(0.0, 90.0), 2)),
+        "tle": MockValue(generate_tle()),
+        "position_x": round(random.uniform(-7000.0, 7000.0), 2),
+        "position_y": round(random.uniform(-7000.0, 7000.0), 2),
+        "position_z": round(random.uniform(-7000.0, 7000.0), 2)
+    }
+    
+    # Test the function once (like the working version)
+    publish_data_to_aws(shared_data)
