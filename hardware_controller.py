@@ -311,7 +311,7 @@ class ContinuousBackgroundScanner:
 
     def _perform_continuous_azimuth_sweep(self, lidar_controller, stepper_controller):
         """Perform continuous azimuth sweep while collecting data"""
-
+        self.movement_complete = threading.Event()
         # Determine start and end positions based on scan direction
         if self.scan_direction == 1:
             start_az = 0.0
@@ -391,6 +391,7 @@ class ContinuousBackgroundScanner:
 
         # Full stop
         stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
+        self.movement_complete.set()
 
         final_pos = stepper_controller.shared_data["stepper_degrees"].value
         print(f"[HWCtrl] Continuous movement completed. Final position: {final_pos:.1f}°")
