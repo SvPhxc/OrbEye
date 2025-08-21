@@ -22,6 +22,7 @@ import traceback
 # Try to import scipy for KD-tree, fall back to simple implementation if not available
 try:
     from scipy.spatial import cKDTree
+
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
@@ -92,7 +93,7 @@ class ClutterFilter:
                 el_diff = np.abs(self.bg_elevations - elevation)
 
                 # Combined angular distance
-                angular_dist = np.sqrt(az_diff**2 + el_diff**2)
+                angular_dist = np.sqrt(az_diff ** 2 + el_diff ** 2)
                 min_idx = np.argmin(angular_dist)
 
                 if angular_dist[min_idx] < self.angular_tolerance:
@@ -107,6 +108,7 @@ class ClutterFilter:
         # Object is foreground if significantly closer than background
         return distance < (bg_dist - self.distance_margin_cm)
 
+
 class TrackerState(Enum):
     IDLE = 0
     SEARCHING = 1
@@ -114,6 +116,7 @@ class TrackerState(Enum):
     CALCULATING_PLANE = 3
     TRACKING = 4
     LOST = 5
+
 
 class CircularDroneTracker:
     """
