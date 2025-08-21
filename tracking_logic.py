@@ -35,6 +35,7 @@ class ClutterFilter:
         """
         Initializes the filter with a 2D (azimuth, elevation) background map.
 
+
         Args:
             background_file (str): Path to the background scan data.
             angular_tolerance (float): The maximum angle (in degrees) to consider a point
@@ -604,22 +605,24 @@ def _start_orbit_patrol(shared_data):
             incl = float(shared_data["inclination"].value)
             use_full_circle = abs(incl) < 0.5  # threshold for "equatorial enough"
 
-            run_orbit_patrol_from_query(
-                shared_data,
-                query=q,
-                num_points=points,
-                dwell_seconds=dwell_s,
-                min_el_deg=0.0,
-                max_el_deg=60.0,
-                duration_minutes=90,
-                step_seconds=30,
-                start_near_current=True,
-                proceed_condition=proceed_condition,
-                next_wp_speed_deg_per_s=speed,
-                max_wait_s=max_wait_s,
-                full_circle=use_full_circle,           # <-- NEW
-                full_circle_samples=720                # <-- NEW (optional; 720 gives 0.5° spacing)
-            )
+            def run_orbit_patrol_from_query(shared_data,
+                                            query: str,
+                                            num_points: int = 9,
+                                            dwell_seconds: float = 2.0,
+                                            min_el_deg: float = 0.0,
+                                            max_el_deg: float = 60.0,
+                                            duration_minutes: int = 90,
+                                            step_seconds: int = 60,
+                                            start_near_current: bool = True,
+                                            proceed_condition=None,
+                                            next_wp_speed_deg_per_s: float | None = None,
+                                            max_wait_s: float | None = None,
+                                            full_circle: bool = False,
+                                            full_circle_samples: int = 720,
+                                            enable_spiral_search: bool = False,
+                                            spiral_radius_deg: float = 0.5,
+                                            spiral_points_per_rotation: int = 16,
+                                            spiral_rotations: int = 2):
         finally:
             shared_data["orbit_patrol_active"].value = False
             shared_data["orbit_patrol_cancel"].value = False
