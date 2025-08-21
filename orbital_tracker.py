@@ -110,7 +110,7 @@ class ClutterFilter:
                     bg_dist = float('inf')
 
             # Cache result
-            if len(self._cache) < 10000:
+            if len(self._cache) < 100000:
                 self._cache[cache_key] = bg_dist
 
         # Object is foreground if significantly closer than background
@@ -144,10 +144,10 @@ class CircularDroneTracker:
         self.clutter_filter = ClutterFilter(background_file)
 
         # Drone parameters
-        self.TARGET_DISTANCE_CM = 200.0  # 2 meters in cm
+        self.TARGET_DISTANCE_CM = 100.0  # 2 meters in cm
         self.DISTANCE_TOLERANCE_CM = 20.0  # ±20cm tolerance
         self.ANGULAR_VELOCITY_DEG = 18.0  # degrees per second
-        self.MIN_STRENGTH = 100  # Minimum LiDAR strength threshold
+        self.MIN_STRENGTH = 600  # Minimum LiDAR strength threshold
         self.LIDAR_FOV_DEG = 2.0  # LiDAR field of view
 
         # Prediction parameters
@@ -174,9 +174,9 @@ class CircularDroneTracker:
         self.orbital_confidence = 0.0  # 0-1 confidence in orbital model
 
         # Search parameters
-        self.initial_heading = -1
-        self.initial_inclination = -1
-        self.heading_deviation = 30.0
+        self.initial_heading = 0
+        self.initial_inclination = 0
+        self.heading_deviation = 0.0
 
         # Performance tracking
         self.consecutive_hits = 0
@@ -964,7 +964,7 @@ class CircularDroneTracker:
 
         # Use wait-and-scan with expanding radius
         measurement = self.wait_and_scan_for_target(predicted_az, predicted_el,
-                                                    wait_time=0.5,
+                                                    wait_time=1,
                                                     scan_radius=search_radius)
 
         if measurement:
@@ -1010,15 +1010,15 @@ class CircularDroneTracker:
                     if heading is not None:
                         heading = heading.value if hasattr(heading, 'value') else float(heading)
                     else:
-                        heading = -1
+                        heading = 0
 
                     inclination = self.shared_data.get("inclination")
                     if inclination is not None:
                         inclination = inclination.value if hasattr(inclination, 'value') else float(inclination)
                     else:
-                        inclination = -1
+                        inclination =0
 
-                    self.start_tracking(heading, 30.0, inclination)
+                    self.start_tracking(heading, 0.0, inclination)
                 except Exception as e:
                     print("[Tracker] Error reading initial parameters: {}".format(e))
                     self.start_tracking()
@@ -1074,7 +1074,7 @@ def run_circular_tracker(shared_data, background_file="background_scan.npy"):
             shared_data["circular_tracker_active"] = Value('b', False)
 
         tracker = CircularDroneTracker(shared_data,
-                                       prediction_time_sec=0.5,
+                                       prediction_time_sec=1,
                                        background_file=background_file)
         tracker.run()
     except Exception as e:
@@ -1083,7 +1083,7 @@ def run_circular_tracker(shared_data, background_file="background_scan.npy"):
 
 
 # Example of how to control the tracker from your main program
-def start_circular_tracking(shared_data, heading=-1, inclination=-1):
+def start_circular_tracking(shared_data, heading=0, inclination=0):
     """Start the circular tracker with given parameters"""
     try:
         if "heading" in shared_data:
