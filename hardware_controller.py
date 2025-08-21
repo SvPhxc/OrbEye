@@ -443,7 +443,7 @@ class ContinuousBackgroundScanner:
             # Loop until the movement thread signals it is done
         while not self.movement_complete.is_set():
             current_time = time.time()
-             elapsed_time = current_time - sweep_start_time
+            elapsed_time = current_time - sweep_start_time
 
                 # Failsafe to prevent infinite loop
             if elapsed_time > (expected_duration * 1.2):
