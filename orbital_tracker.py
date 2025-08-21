@@ -10,7 +10,7 @@ import numpy as np
 import math
 import time
 from collections import deque
-
+import traceback
 
 class TrackerState(Enum):
     IDLE = 0
@@ -19,7 +19,6 @@ class TrackerState(Enum):
     CALCULATING_PLANE = 3
     TRACKING = 4
     LOST = 5
-
 
 class CircularDroneTracker:
     """
@@ -79,15 +78,18 @@ class CircularDroneTracker:
 
     def command_motors_to_target(self, azimuth, elevation):
         """Command motors to move to target position"""
-        azimuth = azimuth % 360.0  # Normalize azimuth
-        elevation = np.clip(elevation, 0, 90)  # Clamp elevation
+        azimuth = float(azimuth % 360.0)  # Normalize azimuth
+        elevation = float(np.clip(elevation, 0, 90))  # Clamp elevation
 
-        self.shared_data["target_azimuth"].value = float(azimuth)
-        self.shared_data["target_elevation"].value = float(elevation)
-        self.shared_data["go_to_target"].value = True
+        try:
+            self.shared_data["target_azimuth"].value = azimuth
+            self.shared_data["target_elevation"].value = elevation
+            self.shared_data["go_to_target"].value = True
 
-        # Wait briefly for movement to start
-        time.sleep(0.01)
+            # Wait briefly for movement to start
+            time.sleep(0.01)
+        except Exception as e:
+            print("[Tracker] Error commanding motors: {}".format(e))
 
     def wait_for_position(self, target_az, target_el, timeout=1.0):
         """Wait for motors to reach target position"""
@@ -102,7 +104,9 @@ class CircularDroneTracker:
             if az_error < 0.5 and el_error < 0.5:
                 return True
 
-            if self.shared_data["target_reached"].value:
+            # Check if target_reached flag is available and set
+            target_reached = self.shared_data.get("target_reached")
+            if target_reached and target_reached.value:
                 return True
 
             time.sleep(0.002)
@@ -136,11 +140,19 @@ class CircularDroneTracker:
         y = r * math.cos(el_rad) * math.sin(az_rad)
         z = r * math.sin(el_rad)
 
-        return np.array([x, y, z])
+        # Always return as a properly shaped numpy array
+        return np.array([x, y, z], dtype=np.float64)
 
     def cartesian_to_spherical(self, point_3d):
         """Convert 3D Cartesian to spherical coordinates"""
-        x, y, z = point_3d
+        # Ensure point is a numpy array
+        point_3d = np.array(point_3d).flatten()
+
+        if point_3d.shape[0] != 3:
+            print("[Tracker] ERROR: Invalid 3D point shape in cartesian_to_spherical")
+            return 0, 0, 0
+
+        x, y, z = point_3d[0], point_3d[1], point_3d[2]
         r = np.linalg.norm(point_3d)
 
         if r < 0.01:  # Near origin
@@ -157,10 +169,28 @@ class CircularDroneTracker:
 
     def rotate_vector_rodrigues(self, v, k, theta_rad):
         """Rotate vector v around axis k by angle theta using Rodrigues' formula"""
-        k = k / np.linalg.norm(k)  # Normalize axis
+        # Ensure vectors are numpy arrays with correct shape
+        v = np.array(v).flatten()
+        k = np.array(k).flatten()
+
+        # Validate dimensions
+        if v.shape[0] != 3 or k.shape[0] != 3:
+            print("[Tracker] ERROR: Invalid vector dimensions - v:{}, k:{}".format(v.shape, k.shape))
+            return v
+
+        # Normalize axis vector
+        k_norm = np.linalg.norm(k)
+        if k_norm < 1e-10:
+            print("[Tracker] ERROR: Zero-length rotation axis")
+            return v
+
+        k = k / k_norm
+
+        # Rodrigues' rotation formula
         v_rot = (v * math.cos(theta_rad) +
                  np.cross(k, v) * math.sin(theta_rad) +
                  k * np.dot(k, v) * (1 - math.cos(theta_rad)))
+
         return v_rot
 
     def refine_orbital_plane(self):
@@ -176,40 +206,60 @@ class CircularDroneTracker:
 
         points_3d = np.array(points_3d)
 
+        # Validate shape
+        if points_3d.shape[1] != 3:
+            print("[Tracker] ERROR: Invalid 3D points shape: {}".format(points_3d.shape))
+            return
+
         # Use SVD to find best-fit plane through origin
         # The points should lie on a circle, so we find the plane that minimizes
         # the sum of squared distances
-        U, s, Vt = np.linalg.svd(points_3d.T, full_matrices=False)
+        try:
+            U, s, Vt = np.linalg.svd(points_3d.T, full_matrices=False)
 
-        # The normal is the singular vector with smallest singular value
-        new_normal = Vt[-1, :]
+            # The normal is the singular vector with smallest singular value
+            new_normal = Vt[-1, :]
 
-        # Ensure consistency of normal direction
-        if self.orbital_normal is not None:
-            if np.dot(new_normal, self.orbital_normal) < 0:
-                new_normal = -new_normal
+            # Ensure it's a proper 3D vector
+            new_normal = np.array(new_normal).flatten()
+            if new_normal.shape[0] != 3:
+                print("[Tracker] ERROR: SVD produced invalid normal vector")
+                return
 
-        # Smooth update using weighted average
-        if self.orbital_normal is not None:
-            alpha = 0.3  # Smoothing factor
-            self.orbital_normal = (1 - alpha) * self.orbital_normal + alpha * new_normal
-            self.orbital_normal = self.orbital_normal / np.linalg.norm(self.orbital_normal)
-        else:
-            self.orbital_normal = new_normal
+            # Ensure consistency of normal direction
+            if self.orbital_normal is not None:
+                if np.dot(new_normal, self.orbital_normal) < 0:
+                    new_normal = -new_normal
 
-        # Update confidence based on fit quality
-        # Use the ratio of singular values as a measure of planarity
-        if s[2] > 0:
-            planarity = 1.0 - (s[2] / s[0])  # Close to 1 means good plane fit
-            self.orbital_confidence = 0.7 * self.orbital_confidence + 0.3 * planarity
+            # Smooth update using weighted average
+            if self.orbital_normal is not None:
+                alpha = 0.3  # Smoothing factor
+                self.orbital_normal = (1 - alpha) * self.orbital_normal + alpha * new_normal
+                self.orbital_normal = self.orbital_normal / np.linalg.norm(self.orbital_normal)
+            else:
+                self.orbital_normal = new_normal / np.linalg.norm(new_normal)
 
-        # Update arc scan radius based on confidence
-        self.arc_radius_current = self.arc_radius_initial * (1 - self.orbital_confidence * 0.7)
-        self.arc_radius_current = max(self.arc_radius_current, self.arc_radius_min)
+            # Ensure orbital_normal is properly shaped
+            self.orbital_normal = np.array(self.orbital_normal).flatten()
 
-        inclination_deg = math.degrees(math.acos(abs(self.orbital_normal[2])))
-        print("[Tracker] Plane refined - Inclination: {:.1f}°, Confidence: {:.2f}, Arc: {:.1f}°".format(
-            inclination_deg, self.orbital_confidence, self.arc_radius_current))
+            # Update confidence based on fit quality
+            # Use the ratio of singular values as a measure of planarity
+            if s[2] > 0:
+                planarity = 1.0 - (s[2] / s[0])  # Close to 1 means good plane fit
+                self.orbital_confidence = 0.7 * self.orbital_confidence + 0.3 * planarity
+
+            # Update arc scan radius based on confidence
+            self.arc_radius_current = self.arc_radius_initial * (1 - self.orbital_confidence * 0.7)
+            self.arc_radius_current = max(self.arc_radius_current, self.arc_radius_min)
+
+            inclination_deg = math.degrees(math.acos(np.clip(abs(self.orbital_normal[2]), 0, 1)))
+            print("[Tracker] Plane refined - Inclination: {:.1f}°, Confidence: {:.2f}, Arc: {:.1f}°".format(
+                inclination_deg, self.orbital_confidence, self.arc_radius_current))
+
+        except Exception as e:
+            print("[Tracker] ERROR in plane refinement: {}".format(e))
+            import traceback
+            traceback.print_exc()
 
     def perform_arc_scan(self, center_az, center_el, radius_deg):
         """Perform arc scan around predicted position to handle FOV limitation"""
@@ -354,8 +404,16 @@ class CircularDroneTracker:
             # Initialize tracking state
             last_point = self.orbit_points[-1]
             self.last_confirmed_point = last_point
-            self.last_confirmed_3d = self.spherical_to_cartesian(
-                last_point[0], last_point[1], last_point[2])
+
+            # Ensure last_confirmed_3d is properly set as a numpy array
+            self.last_confirmed_3d = np.array(self.spherical_to_cartesian(
+                last_point[0], last_point[1], last_point[2])).flatten()
+
+            # Validate dimensions
+            if self.last_confirmed_3d.shape[0] != 3:
+                print("[Tracker] ERROR: Invalid 3D position shape")
+                self.state = TrackerState.SEARCHING
+                return
 
             print("[Tracker] Entering tracking mode")
             self.state = TrackerState.TRACKING
@@ -366,6 +424,17 @@ class CircularDroneTracker:
     def state_tracking(self):
         """Main tracking loop with predict-and-intercept using arc scanning"""
         if self.last_confirmed_3d is None or self.orbital_normal is None:
+            self.state = TrackerState.SEARCHING
+            return
+
+        # Validate vector dimensions before rotation
+        if not isinstance(self.last_confirmed_3d, np.ndarray):
+            self.last_confirmed_3d = np.array(self.last_confirmed_3d).flatten()
+        if not isinstance(self.orbital_normal, np.ndarray):
+            self.orbital_normal = np.array(self.orbital_normal).flatten()
+
+        if self.last_confirmed_3d.shape[0] != 3 or self.orbital_normal.shape[0] != 3:
+            print("[Tracker] ERROR: Invalid vector dimensions in tracking")
             self.state = TrackerState.SEARCHING
             return
 
@@ -390,7 +459,9 @@ class CircularDroneTracker:
             # Add to orbit points for continuous refinement
             self.orbit_points.append((az, el, dist, time.time()))
             self.last_confirmed_point = (az, el, dist, time.time())
-            self.last_confirmed_3d = self.spherical_to_cartesian(az, el, dist)
+
+            # Ensure last_confirmed_3d is properly updated as numpy array
+            self.last_confirmed_3d = np.array(self.spherical_to_cartesian(az, el, dist)).flatten()
 
             self.consecutive_hits += 1
             self.consecutive_misses = 0
@@ -468,7 +539,10 @@ class CircularDroneTracker:
             # Reset tracking
             self.orbit_points.append((az, el, dist, time.time()))
             self.last_confirmed_point = (az, el, dist, time.time())
-            self.last_confirmed_3d = self.spherical_to_cartesian(az, el, dist)
+
+            # Ensure last_confirmed_3d is properly set as numpy array
+            self.last_confirmed_3d = np.array(self.spherical_to_cartesian(az, el, dist)).flatten()
+
             self.consecutive_misses = 0
             self.arc_radius_current = self.arc_radius_initial
             self.state = TrackerState.TRACKING
@@ -487,14 +561,24 @@ class CircularDroneTracker:
         tracker_active = self.shared_data.get("circular_tracker_active")
         if tracker_active and tracker_active.value:
             if not self.active:
-                # Start tracking
-                heading = self.shared_data.get("heading", -1)
-                if hasattr(heading, 'value'):
-                    heading = heading.value
-                inclination = self.shared_data.get("inclination", -1)
-                if hasattr(inclination, 'value'):
-                    inclination = inclination.value
-                self.start_tracking(heading, 30.0, inclination)
+                # Start tracking - safely get values from shared_data
+                try:
+                    heading = self.shared_data.get("heading")
+                    if heading is not None:
+                        heading = heading.value if hasattr(heading, 'value') else float(heading)
+                    else:
+                        heading = -1
+
+                    inclination = self.shared_data.get("inclination")
+                    if inclination is not None:
+                        inclination = inclination.value if hasattr(inclination, 'value') else float(inclination)
+                    else:
+                        inclination = -1
+
+                    self.start_tracking(heading, 30.0, inclination)
+                except Exception as e:
+                    print("[Tracker] Error reading initial parameters: {}".format(e))
+                    self.start_tracking()
         else:
             if self.active:
                 self.stop_tracking()
@@ -506,18 +590,23 @@ class CircularDroneTracker:
             return True
 
         # Execute state machine
-        if self.state == TrackerState.IDLE:
-            time.sleep(0.1)
-        elif self.state == TrackerState.SEARCHING:
-            self.state_searching()
-        elif self.state == TrackerState.CONFIRMING_DIRECTION:
-            self.state_confirming_direction()
-        elif self.state == TrackerState.CALCULATING_PLANE:
-            self.state_calculating_plane()
-        elif self.state == TrackerState.TRACKING:
-            self.state_tracking()
-        elif self.state == TrackerState.LOST:
-            self.state_lost()
+        try:
+            if self.state == TrackerState.IDLE:
+                time.sleep(0.1)
+            elif self.state == TrackerState.SEARCHING:
+                self.state_searching()
+            elif self.state == TrackerState.CONFIRMING_DIRECTION:
+                self.state_confirming_direction()
+            elif self.state == TrackerState.CALCULATING_PLANE:
+                self.state_calculating_plane()
+            elif self.state == TrackerState.TRACKING:
+                self.state_tracking()
+            elif self.state == TrackerState.LOST:
+                self.state_lost()
+        except Exception as e:
+            print("[Tracker] Error in state {}: {}".format(self.state, e))
+            traceback.print_exc()
+            self.state = TrackerState.SEARCHING
 
         return True
 
@@ -535,28 +624,38 @@ class CircularDroneTracker:
 # Integration function for your system
 def run_circular_tracker(shared_data):
     """Run the circular drone tracker as a separate process"""
-    # Ensure control flag exists
-    if "circular_tracker_active" not in shared_data:
-        from multiprocessing import Value
-        shared_data["circular_tracker_active"] = Value('b', False)
+    try:
+        # Ensure control flag exists
+        if "circular_tracker_active" not in shared_data:
+            from multiprocessing import Value
+            shared_data["circular_tracker_active"] = Value('b', False)
 
-    tracker = CircularDroneTracker(shared_data, prediction_time_sec=0.5)
-    tracker.run()
+        tracker = CircularDroneTracker(shared_data, prediction_time_sec=0.5)
+        tracker.run()
+    except Exception as e:
+        print("[CircularTracker Process] Fatal error: {}".format(e))
+        traceback.print_exc()
 
 
 # Example of how to control the tracker from your main program
 def start_circular_tracking(shared_data, heading=-1, inclination=-1):
     """Start the circular tracker with given parameters"""
-    if "heading" in shared_data:
-        shared_data["heading"].value = heading
-    if "inclination" in shared_data:
-        shared_data["inclination"].value = inclination
+    try:
+        if "heading" in shared_data:
+            shared_data["heading"].value = float(heading)
+        if "inclination" in shared_data:
+            shared_data["inclination"].value = float(inclination)
 
-    shared_data["circular_tracker_active"].value = True
-    print("[Main] Circular tracking activated")
+        shared_data["circular_tracker_active"].value = True
+        print("[Main] Circular tracking activated")
+    except Exception as e:
+        print("[Main] Error starting circular tracking: {}".format(e))
 
 
 def stop_circular_tracking(shared_data):
     """Stop the circular tracker"""
-    shared_data["circular_tracker_active"].value = False
-    print("[Main] Circular tracking deactivated")
+    try:
+        shared_data["circular_tracker_active"].value = False
+        print("[Main] Circular tracking deactivated")
+    except Exception as e:
+        print("[Main] Error stopping circular tracking: {}".format(e))
