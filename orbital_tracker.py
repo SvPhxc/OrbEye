@@ -213,7 +213,7 @@ class CircularDroneTracker:
             if target_reached and target_reached.value:
                 return True
 
-            time.sleep(0.002)
+            time.sleep(0.01)
         return False
 
     def read_current_state(self):
@@ -431,7 +431,7 @@ class CircularDroneTracker:
 
         return best_measurement
 
-    def start_tracking(self, initial_heading=-1, heading_deviation=30.0, initial_inclination=-1):
+    def start_tracking(self, initial_heading=0, heading_deviation=0.0, initial_inclination=0):
         """Initialize search parameters and start tracking"""
         self.initial_heading = initial_heading
         self.heading_deviation = heading_deviation
