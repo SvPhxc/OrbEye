@@ -426,10 +426,10 @@ class ContinuousBackgroundScanner:
 
 
     def _collect_data_during_movement(self, lidar_controller, start_az, end_az):
-            """
-            Collect LiDAR data using time-based interpolation for accurate,
-            real-time angle estimation, avoiding lag from software callbacks.
-            """
+        """
+        Collect LiDAR data using time-based interpolation for accurate,
+        real-time angle estimation, avoiding lag from software callbacks.
+        """
         collection_interval = 1.0 / SCAN_DATA_RATE
         sweep_start_time = time.time()
         last_sample_time = sweep_start_time
