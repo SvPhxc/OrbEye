@@ -117,7 +117,7 @@ def publish_data_to_aws(shared_data):
                 for topic, payload in simple_topics.items():
                     publish_simple(topic, payload, batch_timestamp)
                 
-                print(f"[AWS Publisher] Published {len(simple_topics)} topics at {batch_timestamp}")
+                #print(f"[AWS Publisher] Published {len(simple_topics)} topics at {batch_timestamp}")
                 
                 # Sleep for the publishing interval (5 seconds like the original)
                 time.sleep(5)
