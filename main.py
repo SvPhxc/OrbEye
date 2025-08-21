@@ -98,7 +98,7 @@ if __name__ == "__main__":
         "save_background_trigger": Value('b', False),
         # --- CHANGED: Replaced manager.Value with multiprocessing.Array ---
         "background_path": Array('c', PATH_BUFFER_SIZE),
-        
+
 
         # --- Acquirer (for EKF init) ---
         "acquire_points": Value('b', False),

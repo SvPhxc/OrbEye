@@ -326,7 +326,7 @@ class ContinuousBackgroundScanner:
         stepper_controller.move_to_angle(start_az)
 
         # Start continuous movement
-        print(f"[HWCtrl] Starting continuous movement from {start_az:.1f}° to {end_az:.1f}°")
+
         movement_thread = threading.Thread(
             target=self._continuous_azimuth_movement,
             args=(stepper_controller, start_az, end_az)
@@ -348,7 +348,6 @@ class ContinuousBackgroundScanner:
         movement_time = total_distance / SCAN_AZIMUTH_SPEED
         steps_per_second = SCAN_AZIMUTH_SPEED / MICROSTEP_ANGLE
 
-        print(f"[HWCtrl] Movement: {total_distance:.1f}° in {movement_time:.1f}s at {steps_per_second:.0f} steps/sec")
 
         # Set direction
         direction = 1 if end_az > start_az else 0
@@ -394,11 +393,11 @@ class ContinuousBackgroundScanner:
         self.movement_complete.set()
 
         final_pos = stepper_controller.shared_data["stepper_degrees"].value
-        print(f"[HWCtrl] Continuous movement completed. Final position: {final_pos:.1f}°")
+
 
     def _reset_hardware_after_scan(self, stepper_controller):
         """Reset hardware state after scan completion with a more robust cleanup."""
-        print("[HWCtrl] Resetting stepper hardware state for normal operation...")
+
 
         # 1. Stop all hardware-timed operations on the pin
         stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)  # Stop PWM
@@ -584,7 +583,6 @@ class PWMStepperController:
 
         # Clamp target angle
         target_angle = max(MotorParams.PAN_MIN_ANGLE, min(MotorParams.PAN_MAX_ANGLE, target_angle))
-        print(f"[HWCtrl-Stepper] Moving to {target_angle:.3f}° using segmented motion profile.")
 
         # --- 1. Calculate the complete move ---
         current_pos_steps = self.step_count
@@ -607,7 +605,6 @@ class PWMStepperController:
 
         direction = 1 if error_steps > 0 else 0
         self.pi.write(STEPPER_DIR_PIN, direction)
-        print(f"[HWCtrl-Stepper] Steps to move: {total_steps}, Direction: {direction}")
 
         # --- 2. Build the entire waveform profile in a Python list ---
         if total_steps <= MotorParams.ACCEL_STEPS * 2:
@@ -660,7 +657,6 @@ class PWMStepperController:
             wave_id = self.pi.wave_create()
 
             if wave_id >= 0:
-                print(f"[HWCtrl-Stepper] Sending wave chunk {wave_id} ({len(pulse_chunk) // 2} steps)")
                 self.pi.wave_send_once(wave_id)
 
                 # Wait for the chunk to finish. The callback updates position during this wait.
@@ -676,7 +672,6 @@ class PWMStepperController:
 
         # --- 4. Finalization ---
         final_pos_deg = self.shared_data["stepper_degrees"].value
-        print(f"[HWCtrl-Stepper] Segmented movement complete. Final position: {final_pos_deg:.3f}°")
 
     def move_to_target(self):
         """Move stepper to target azimuth stored in shared data."""
@@ -722,7 +717,6 @@ class ServoController:
         initial_angle = 45.0  # Start at 45 degrees
         self.move_to_angle(initial_angle)
 
-        print(f"[HWCtrl] Servo controller initialized (zero offset: {MotorParams.SERVO_ZERO_OFFSET}°)")
 
     def angle_to_pulse_width(self, angle):
         """Convert angle to servo pulse width with mounting offset correction"""
@@ -750,7 +744,6 @@ class ServoController:
         # Ensure angle is within valid range (what user sees)
         target_angle = max(MotorParams.SERVO_MIN_ANGLE, min(MotorParams.SERVO_MAX_ANGLE, target_angle))
 
-        print(f"[HWCtrl-Servo] Moving to {target_angle:.1f}° (user angle)")
 
         pulse_width = self.angle_to_pulse_width(target_angle)
         self.pi.set_servo_pulsewidth(SERVO_PIN, pulse_width)
@@ -760,7 +753,6 @@ class ServoController:
             self.shared_data["servo_degrees"].value = target_angle
 
         physical_angle = target_angle - MotorParams.SERVO_ZERO_OFFSET
-        print(f"[HWCtrl-Servo] Physical angle: {physical_angle:.1f}°, Pulse: {pulse_width}µs")
 
     def control_servo(self):
         """Control servo position based on target elevation"""
