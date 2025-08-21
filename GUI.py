@@ -423,22 +423,15 @@ class TrackerWindow(QtWidgets.QMainWindow):
     # TLE SHOW
     def output_TLE(self):
         try:
-            # tracking_history is a Manager().list() of [az, el, dist_cm, strength, ts]
             hist = list(self.shared_data["tracking_history"])
             if len(hist) < 3:
-                print(f"[TLE] Need at least 3 points; currently have {len(hist)}.")
+                print(f"[TLE] Need ≥3 points; have {len(hist)}.")
                 return
-
-            # If your fitter expects numpy:
             import numpy as np
             arr = np.array(hist, dtype=float)
-
             tle_name, l1, l2 = fit_tle_from_satellite_points(arr, unit="cm", name="MY-FIT")
             print("[TLE] Fitted TLE:")
-            print(tle_name)
-            print(l1)
-            print(l2)
-
+            print(tle_name); print(l1); print(l2)
         except Exception as e:
             print(f"[TLE] Output failed: {e}")
 
@@ -650,7 +643,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.shared_data["lidar_track_mode_active"].value = False
 
     def on_debug_mode_toggled(self, en):
-        self.shared_data["debug_mode"].value = bool(en)
+        self.shared_data["circular_tracker_active"].value = bool(en)
         # This key was removed from main.py, so it is commented out.
         # self.shared_data["lidar_acceptance_range"][:] = [0.2, 2.0] if en else [3.0, 50.0]
 

@@ -219,19 +219,18 @@ def patrol_waypoints(shared_data,
                 try:
                     with shared_data["satellite_points"].get_lock():
                         shared_data["satellite_points"][:] = [az, el, dist_cm, strength, ts]
-                        print("added satellite point")
+                        print("[Patrol] saved -> satellite_points")
                 except Exception:
-                    # Fallback if no lock (Array('d') normally has get_lock)
                     shared_data["satellite_points"][:] = [az, el, dist_cm, strength, ts]
+                    print("[Patrol] saved -> satellite_points (no lock)")
 
                 # 2) Append to the growing history for TLE fitting
                 try:
                     shared_data["tracking_history"].append([az, el, dist_cm, strength, ts])
-                    print("added history point")
+                    print(f"[Patrol] appended to tracking_history (N={len(shared_data['tracking_history'])})")
                 except Exception as e:
                     print(f"[Patrol] WARNING: couldn't append to tracking_history: {e}")
 
-                # Optional: raise a flag others can react to
                 if shared_data.get("satellite_detected"):
                     shared_data["satellite_detected"].value = True
 
@@ -283,7 +282,7 @@ def run_orbit_patrol_from_xyz(shared_data,
 def make_detection_proceed_condition_from_callable(detector, shared_data,
                                                    confirm_hits=3, max_age_s=0.5):
     """
-    detector: callable (az, el, dist_cm, strength) -> bool
+    detector(az, el, dist_cm, strength) -> bool
     Returns proceed_condition(az, el, deadline_s) that waits until detector is True
     for 'confirm_hits' fresh LiDAR samples (or until deadline).
     """
@@ -291,30 +290,43 @@ def make_detection_proceed_condition_from_callable(detector, shared_data,
         ok_streak = 0
         last_seen_ts = -1.0
         import time as _t
+        print(f"[Patrol] Waiting for detection @ ({az:.2f}°, {el:.2f}°) "
+              f"confirm_hits={confirm_hits}, max_age={max_age_s}s")
         while _t.monotonic() < deadline_s:
             if (shared_data["shutdown"].value
                 or (shared_data.get("orbit_patrol_cancel") and shared_data["orbit_patrol_cancel"].value)
                 or shared_data["background_scan_active"].value
                 or shared_data["lidar_track_mode_active"].value):
+                print("[Patrol] Aborted proceed-condition wait.")
                 return False
 
-            dist_cm = float(shared_data["lidar_data"][0])
+            dist_cm  = float(shared_data["lidar_data"][0])
             strength = float(shared_data["lidar_data"][1])
-            ts = float(shared_data["lidar_data"][2])
+            ts       = float(shared_data["lidar_data"][2])
 
             if ts > 0 and (_t.time() - ts) <= max_age_s:
-                if bool(detector(az, el, dist_cm, strength)):
+                hit = bool(detector(az, el, dist_cm, strength))
+                if hit:
                     if ts != last_seen_ts:
                         ok_streak += 1
                         last_seen_ts = ts
+                        print(f"[Patrol]   hit {ok_streak}/{confirm_hits} "
+                              f"(dist={dist_cm:.1f}cm, str={strength:.0f}, ts={ts:.3f})")
                     if ok_streak >= confirm_hits:
+                        print("[Patrol] Detection confirmed.")
                         return True
                 else:
+                    # Only log resets if we had started a streak
+                    if ok_streak > 0:
+                        print("[Patrol]   streak reset.")
                     ok_streak = 0
 
             _t.sleep(0.01)
+
+        print("[Patrol] Proceed deadline reached with no detection.")
         return False
     return proceed_condition
+
 
 def run_orbit_patrol_from_query(shared_data,
                                 query: str,
