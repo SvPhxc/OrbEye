@@ -10,7 +10,7 @@ def publish_data_to_aws(shared_data):
     
     # ==== CONFIGURATION ====
     ENDPOINT = "a1rrwkx8cway2b-ats.iot.us-east-1.amazonaws.com"
-    CLIENT_ID = "LiDAR_Publisher"
+    CLIENT_ID = "basicPubSub"
     PATH_TO_CERT = "LockedInMartinPi.cert.pem"
     PATH_TO_KEY = "LockedInMartinPi.private.key"
     PATH_TO_ROOT_CA = "root-CA.crt"
