@@ -605,7 +605,7 @@ def _start_orbit_patrol(shared_data):
             incl = float(shared_data["inclination"].value)
             use_full_circle = abs(incl) < 0.5  # threshold for "equatorial enough"
 
-            def run_orbit_patrol_from_query(shared_data,
+            run_orbit_patrol_from_query(shared_data,
                                             query: str,
                                             num_points: int = 9,
                                             dwell_seconds: float = 2.0,
