@@ -259,7 +259,7 @@ def patrol_waypoints(shared_data,
                      spiral_radius_deg: float = 4,
                      spiral_points_per_rotation: int = 16,
                      spiral_rotations: int = 2,
-                     spiral_settle_s: float = 0.05):  # MODIFIED: Added parameter
+                     spiral_settle_s: float = 0.001):  # MODIFIED: Added parameter
     """
     For each waypoint: slew+settle -> [search] -> wait until detection or timeout -> next.
     """
@@ -375,7 +375,7 @@ def run_orbit_patrol_from_xyz(shared_data,
                               spiral_radius_deg: float = 0.5,
                               spiral_points_per_rotation: int = 16,
                               spiral_rotations: int = 2,
-                              spiral_settle_s: float = 0.15):  # MODIFIED: Added parameter
+                              spiral_settle_s: float = 0.001):  # MODIFIED: Added parameter
     azel_path = xyz_to_azel_center(pts_xyz)
     visible = filter_by_elevation(azel_path, min_el=min_el_deg, max_el=max_el_deg)
     if not visible:
@@ -472,9 +472,9 @@ def run_orbit_patrol_from_query(shared_data,
                                 enable_spiral_search: bool = True,
                                 continuous_spiral_search: bool = True,
                                 spiral_radius_deg: float = 4,
-                                spiral_points_per_rotation: int = 12,
-                                spiral_rotations: int = 2,
-                                spiral_settle_s: float = 0.01):  # MODIFIED: Added parameter
+                                spiral_points_per_rotation: int = 8,
+                                spiral_rotations: int = 0,
+                                spiral_settle_s: float = 0.001):  # MODIFIED: Added parameter
     """
     If full_circle=True, generate the entire orbital plane.
     Otherwise, sample the orbit over a time window via datahandler.
