@@ -74,7 +74,7 @@ def _goto_and_wait(shared_data, az, el, settle_timeout_s=3.0):
     while (time.monotonic() - t0) < settle_timeout_s and not shared_data["shutdown"].value:
         if shared_data["target_reached"].value:
             return True
-        time.sleep(0.01)
+        time.sleep(0.005)
     return shared_data["target_reached"].value
 
 
@@ -475,7 +475,7 @@ def run_orbit_patrol_from_query(shared_data,
                                 full_circle_samples: int = 720,
                                 enable_spiral_search: bool = False,
                                 continuous_spiral_search: bool = False,
-                                spiral_radius_deg: float = 0.5,
+                                spiral_radius_deg: float = 1.5,
                                 spiral_points_per_rotation: int = 8,
                                 spiral_rotations: int = 1):
     """

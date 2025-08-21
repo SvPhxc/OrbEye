@@ -621,7 +621,7 @@ def _start_orbit_patrol(shared_data):
                 full_circle=use_full_circle,           # <-- NEW
                 full_circle_samples=720,
                 enable_spiral_search = True,  # <-- ADD THIS LINE
-                spiral_radius_deg = 1,
+                spiral_radius_deg = 1.5,
                 continuous_spiral_search = True  # <-- NEW (optional; True to keep searching after the patrol)
             # <-- NEW (optional; 720 gives 0.5° spacing)
             )
