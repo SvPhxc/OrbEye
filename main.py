@@ -187,7 +187,8 @@ if __name__ == "__main__":
         "TLEGenerator": Process(target=run_tle_generator, args=(shared_data,)),  # <-- ADD THE NEW PROCESS
         "GrafanaVisualization": Process(target=publish_data_to_aws, args=(shared_data,)),
         "TLEGenerator": Process(target=run_tle_generator, args=(shared_data,)),
-        "tracker_process": = Process(target=run_circular_tracker, args=(shared_data,)),# <-- ADD THE NEW PROCESS
+        "tracker_process": = Process(target=run_circular_tracker, args=(shared_data,)),
+    # <-- ADD THE NEW PROCESS
     }
 
 
