@@ -520,7 +520,7 @@ class CircularDroneTracker:
 
         return normal
 
-    def perform_arc_scan(self, center_az, center_el, radius_deg, radius_el_deg=None, num_points=None):
+    def perform_arc_scan(self, center_az, center_el, radius_deg, radius_el_deg=15, num_points=None):
         """
         Perform arc scan around predicted position to handle FOV limitation.
         radius_deg: azimuth search radius
