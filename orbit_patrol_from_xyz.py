@@ -375,11 +375,11 @@ def run_orbit_patrol_from_xyz(shared_data,
                               proceed_condition=None,
                               max_wait_s: float | None = None,
                               next_wp_speed_deg_per_s: float | None = None,
-                              enable_spiral_search: bool = False,
-                              continuous_spiral_search: bool = False,
-                              spiral_radius_deg: float = 0.5,
-                              spiral_points_per_rotation: int = 16,
-                              spiral_rotations: int = 2):
+                              enable_spiral_search: bool = True,
+                              continuous_spiral_search: bool = True,
+                              spiral_radius_deg: float = 1.5,
+                              spiral_points_per_rotation: int = 8,
+                              spiral_rotations: int = 1):
     azel_path = xyz_to_azel_center(pts_xyz)
     visible = filter_by_elevation(azel_path, min_el=min_el_deg, max_el=max_el_deg)
     if not visible:
@@ -473,8 +473,8 @@ def run_orbit_patrol_from_query(shared_data,
                                 max_wait_s: float | None = None,
                                 full_circle: bool = False,
                                 full_circle_samples: int = 720,
-                                enable_spiral_search: bool = False,
-                                continuous_spiral_search: bool = False,
+                                enable_spiral_search: bool = True,
+                                continuous_spiral_search: bool = True,
                                 spiral_radius_deg: float = 1.5,
                                 spiral_points_per_rotation: int = 8,
                                 spiral_rotations: int = 1):
