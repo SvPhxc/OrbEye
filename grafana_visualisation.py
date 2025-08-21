@@ -24,6 +24,8 @@ def publish_data_to_aws(shared_data):
 
     try:
         # Connect to AWS IoT
+        time.sleep(10)  # Wait for other processes to start
+        print("[LiDAR Publisher] Waiting to connect to AWS IoT...")
         mqtt_connection = mqtt_connection_builder.mtls_from_path(
             endpoint=ENDPOINT,
             cert_filepath=PATH_TO_CERT,
