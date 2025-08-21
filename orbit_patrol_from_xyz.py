@@ -243,8 +243,8 @@ def patrol_waypoints(shared_data,
                      settle_timeout_s: float = 3.0,
                      max_wait_s: float | None = None,
                      next_wp_speed_deg_per_s: float | None = None,
-                     enable_spiral_search: bool = False,
-                     spiral_radius_deg: float = 0.5,
+                     enable_spiral_search: bool = True,
+                     spiral_radius_deg: float = 2,
                      spiral_points_per_rotation: int = 16,
                      spiral_rotations: int = 2):
     """
