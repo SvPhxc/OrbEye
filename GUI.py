@@ -432,6 +432,26 @@ class TrackerWindow(QtWidgets.QMainWindow):
             tle_name, l1, l2 = fit_tle_from_satellite_points(arr, unit="cm", name="MY-FIT")
             print("[TLE] Fitted TLE:")
             print(tle_name); print(l1); print(l2)
+            pan_deg = get_acquisition_pan_deg(tle_lines=(l1, l2))
+            inc_deg = get_inclination_deg(tle_lines=(l1,l2))
+            
+            self.shared_data["rann"].value = float(pan_deg)
+            self.shared_data["inclination"].value = float(inc_deg)
+            print(f"[TLE] Acquisition pan for '{tle_name}' (ascending node / RAAN): {pan_deg:.2f}°, (inclination): {inc_deg:.2f}°")
+            # build endpoint in your scene units (cm). Ascending node is in XY plane (z=0).
+            dir_unit = get_ascending_node_unit_vector(tle_lines=(l1, l2))  # (x,y,0), unitless
+            end_cm = dir_unit * float(600.0)
+
+            line = gl.GLLinePlotItem(
+                pos=np.vstack([np.zeros(3, dtype=float), end_cm]),
+                width=2.0,
+                color=(0.2, 1.0, 1.0, 0.95),
+                antialias=True,
+                mode='line_strip'
+            )
+            self.view.addItem(line)
+            self.orbit_items.append(line)
+            
         except Exception as e:
             print(f"[TLE] Output failed: {e}")
 
