@@ -85,6 +85,11 @@ def generate_tle():
 
 def publish_data_to_aws(shared_data):
     try:
+        # Check shutdown flag before doing anything
+        if shared_data.get("shutdown") and shared_data["shutdown"].value:
+            print("Shutdown flag is set. Exiting immediately.")
+            return
+            
         # Get a single timestamp for the entire batch
         batch_timestamp = current_timestamp()
         
@@ -95,30 +100,40 @@ def publish_data_to_aws(shared_data):
             "tracker/tracker/pan_angle": round(shared_data["stepper_degrees"].value, 2),
             "tracker/tracker/tilt_angle": round(shared_data["servo_degrees"].value, 2),
             "tracker/orbit/tle": shared_data["tle"].value,
-            "tracker/position/x": round(random.uniform(-7000.0, 7000.0), 2),
-            "tracker/position/y": round(random.uniform(-7000.0, 7000.0), 2),
-            "tracker/position/z": round(random.uniform(-7000.0, 7000.0), 2)
-            # "tracker/position/x": round(shared_data["position_x"], 2),  
-            # "tracker/position/y": round(shared_data["position_y"], 2),  
-            #"tracker/position/z": round(shared_data["position_z"], 2)  
+            "tracker/position/x": round(shared_data["position_x"], 2),  # Fixed typo
+            "tracker/position/y": round(shared_data["position_y"], 2),  # Fixed typo
+            "tracker/position/z": round(shared_data["position_z"], 2)   # Fixed typo
         }
         
         # Publish all topics at the same time with the same timestamp
         for topic, payload in simple_topics.items():
+            # Check shutdown flag during publishing loop
+            if shared_data.get("shutdown") and shared_data["shutdown"].value:
+                print("Shutdown flag detected during publishing. Stopping...")
+                break
             publish_simple(topic, payload, batch_timestamp)
         
         print("\nAll messages published successfully!")
         
     except KeyboardInterrupt:
-        print("\n\nUser terminated the process.")
+        print("\n\nUser terminated the process (Ctrl+C).")
     except Exception as e:
         print(f"\nAn error occurred: {e}")
         import traceback
         traceback.print_exc()
     finally:
+        # Graceful disconnect with timeout
         print("Disconnecting from MQTT...")
-        mqtt_connection.disconnect().result()
-        print("Disconnected.")
+        try:
+            # Use a short timeout for quick disconnect
+            disconnect_future = mqtt_connection.disconnect()
+            disconnect_future.result(timeout=2.0)  # 2 second timeout
+            print("Disconnected gracefully.")
+        except Exception as disconnect_error:
+            print(f"Disconnect timeout or error: {disconnect_error}")
+            print("Force closing connection...")
+        
+        print("Shutdown complete.")
 
 # ==== MAIN EXECUTION ====
 if __name__ == "__main__":
@@ -135,7 +150,8 @@ if __name__ == "__main__":
         "tle": MockValue(generate_tle()),
         "position_x": round(random.uniform(-7000.0, 7000.0), 2),
         "position_y": round(random.uniform(-7000.0, 7000.0), 2),
-        "position_z": round(random.uniform(-7000.0, 7000.0), 2)
+        "position_z": round(random.uniform(-7000.0, 7000.0), 2),
+        "shutdown": MockValue(False)  # Added shutdown flag
     }
     
     # Test the function once (like the working version)
