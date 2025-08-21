@@ -185,7 +185,7 @@ if __name__ == "__main__":
         "GUI": Process(target=run_gui, args=(shared_data,)),
         "TrackingLogic": Process(target=run_tracker_process, args=(shared_data,)),
         "TLEGenerator": Process(target=run_tle_generator, args=(shared_data,)),  # <-- ADD THE NEW PROCESS
-        "GrafanaVisualization": Process(target=publish_data_to_aws, args=(shared_data,)),
+        #"GrafanaVisualization": Process(target=publish_data_to_aws, args=(shared_data,)),
         "TLEGenerator": Process(target=run_tle_generator, args=(shared_data,)),
         "tracker_process":  Process(target=run_circular_tracker, args=(shared_data,)),
     # <-- ADD THE NEW PROCESS
@@ -228,6 +228,6 @@ if __name__ == "__main__":
         join_or_escalate(processes["HardwareController"], "HardwareController")
         join_or_escalate(processes["TrackingLogic"], "TrackingLogic")
         join_or_escalate(processes["TLEGenerator"], "TLEGenerator")  # <-- ADD TLE PROCESS TO SHUTDOWN
-        join_or_escalate(processes["GrafanaVisualization"], "GrafanaVisualization")
+        #join_or_escalate(processes["GrafanaVisualization"], "GrafanaVisualization")
         print("[main] All processes have been terminated. Program exited cleanly.")
         sys.exit(0)
