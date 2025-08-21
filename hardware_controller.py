@@ -3,6 +3,12 @@
 Hardware Controller for Stepper Motor (Pan) and Servo (Tilt) Control
 Uses multiprocessing with shared data and PID control for smooth movement
 PWM-based stepper control for smooth operation with precise position tracking
+
+IMPROVED: Hybrid position tracking for the stepper motor.
+          - Uses a time-based deterministic calculation for continuous, high-speed
+            PWM moves (background scan) to eliminate interrupt storms and improve accuracy.
+          - Uses a traditional interrupt-based callback for precise, wave-based
+            point-to-point moves.
 FIXED: Continuous background scanning with data collection during movement
 FIXED: Proper servo movement and angle limiting
 FIXED: Background scan completion and movement after scan
@@ -202,26 +208,19 @@ class LidarController:
 
     def get_lidar_data(self):
         """Get latest LiDAR data and update shared data"""
-        # Drain the queue to get the most recent measurement.
-        # This reduces latency between when a measurement is taken and
-        # when it is correlated with the system's current position.
         last_data = None
         while not self.lidar_queue.empty():
             try:
-                # Keep getting items until the queue is empty, storing the last one
                 last_data = self.lidar_queue.get_nowait()
             except queue.Empty:
-                # This can happen in a multithreaded environment, it's safe to ignore.
                 break
 
-        # If we successfully retrieved at least one data point, process the last one.
         if last_data:
             dist, strength, ts = last_data
             with self.shared_data["lidar_data"].get_lock():
                 self.shared_data["lidar_data"][:] = [dist, strength, ts]
             return dist, strength, ts
         else:
-            # The queue was empty, so no new data is available.
             return None, None, None
 
     def stop(self):
@@ -253,47 +252,24 @@ class ContinuousBackgroundScanner:
         if not self.shared_data["background_scan_active"].value:
             return False  # Return False if scan was stopped
 
-        # Record scan start time on first run
         if not hasattr(self, 'scan_start_time') or self.scan_start_time is None:
             self.scan_start_time = time.time()
 
         print(f"[HWCtrl] Starting continuous scan at elevation {self.current_elevation:.1f}°")
-        print(f"[HWCtrl] Scan profile: {SCAN_AZIMUTH_SPEED}°/s, {SCAN_ELEVATION_STEP}° steps")
-
-        # Move servo to current elevation using shared data system
-        print(f"[HWCtrl] Moving servo to {self.current_elevation:.1f}°")
-
-        # Set target elevation in shared data for servo thread to handle
         self.shared_data["target_elevation"].value = self.current_elevation
-
-        # Adaptive wait based on scan profile
         start_wait = time.time()
-        timeout = SERVO_MOVE_TIME
-
-        # For first move, always wait full time
-        if self.current_elevation == SCAN_TILT_MAX:
-            timeout = max(SERVO_MOVE_TIME, 1.0)
+        timeout = SERVO_MOVE_TIME if self.current_elevation != SCAN_TILT_MAX else max(SERVO_MOVE_TIME, 1.0)
 
         while time.time() - start_wait < timeout:
-            current_servo = self.shared_data["servo_degrees"].value
-            if abs(current_servo - self.current_elevation) < 1.0:  # Within 1 degree
-                print(f"[HWCtrl] Servo reached {current_servo:.1f}° (target: {self.current_elevation:.1f}°)")
-                if SERVO_SETTLE_TIME > 0.01:  # Only settle if needed
+            if abs(self.shared_data["servo_degrees"].value - self.current_elevation) < 1.0:
+                if SERVO_SETTLE_TIME > 0.01:
                     time.sleep(SERVO_SETTLE_TIME)
                 break
-            time.sleep(0.001)  # Faster polling
-        else:
-            # Don't stop scan on timeout for fast profiles
-            if SCAN_AZIMUTH_SPEED < 60:  # Only warn for slower scans
-                print(f"[HWCtrl] Warning: Servo move timeout. Current: {self.shared_data['servo_degrees'].value:.1f}°")
+            time.sleep(0.001)
 
-        # Perform continuous azimuth sweep
         self._perform_continuous_azimuth_sweep(lidar_controller, stepper_controller)
-
-        # Update elevation for next ring
         self.current_elevation -= SCAN_ELEVATION_STEP
 
-        # Check if scan is complete (after processing the last ring at elevation 0)
         if self.current_elevation < SCAN_TILT_MIN:
             print("[HWCtrl] CONTINUOUS BACKGROUND SCAN completed.")
             total_time = time.time() - self.scan_start_time
@@ -303,29 +279,17 @@ class ContinuousBackgroundScanner:
             self._reset_scan()
             return False  # Scan complete
         else:
-            # Pre-move servo to next elevation during data processing
-            print(f"[HWCtrl] Pre-positioning servo to next elevation: {self.current_elevation:.1f}°")
             self.shared_data["target_elevation"].value = self.current_elevation
-            self.scan_direction *= -1  # Alternate direction for each ring
-            return True  # Scan continues
+            self.scan_direction *= -1
+            return True
 
     def _perform_continuous_azimuth_sweep(self, lidar_controller, stepper_controller):
         """Perform continuous azimuth sweep while collecting data"""
         self.movement_complete = threading.Event()
-        # Determine start and end positions based on scan direction
-        if self.scan_direction == 1:
-            start_az = 0.0
-            end_az = 360.0
-            print(f"[HWCtrl] Forward sweep: 0° -> 360°")
-        else:
-            start_az = 360.0
-            end_az = 0.0
-            print(f"[HWCtrl] Backward sweep: 360° -> 0°")
+        start_az, end_az = (0.0, 360.0) if self.scan_direction == 1 else (360.0, 0.0)
+        print(f"[HWCtrl] Azimuth sweep: {start_az}° -> {end_az}°")
 
-        # Move to start position
         stepper_controller.move_to_angle(start_az)
-
-        # Start continuous movement
 
         movement_thread = threading.Thread(
             target=self._continuous_azimuth_movement,
@@ -334,146 +298,73 @@ class ContinuousBackgroundScanner:
         movement_thread.daemon = True
         movement_thread.start()
 
-        # Collect data during movement
-        self._collect_data_during_movement(lidar_controller, start_az, end_az)
-
-        # Wait for movement to complete
-        movement_thread.join(timeout=15.0)  # 15 second timeout for full rotation
+        self._collect_data_during_movement(lidar_controller, stepper_controller, start_az, end_az)
+        movement_thread.join(timeout=15.0)
 
     def _continuous_azimuth_movement(self, stepper_controller, start_az, end_az):
-        """Perform continuous azimuth movement in separate thread with optimized speed"""
-
-        # Calculate movement parameters
-        total_distance = abs(end_az - start_az)
-        movement_time = total_distance / SCAN_AZIMUTH_SPEED
+        """MODIFIED: Perform movement using the new deterministic controller methods."""
         steps_per_second = SCAN_AZIMUTH_SPEED / MICROSTEP_ANGLE
-
-
-        # Set direction
         direction = 1 if end_az > start_az else 0
-        stepper_controller.pi.write(STEPPER_DIR_PIN, direction)
+        movement_time = abs(end_az - start_az) / SCAN_AZIMUTH_SPEED
 
-        # Start continuous PWM at calculated frequency
-        # Use higher speed for fast scans
-        if SCAN_AZIMUTH_SPEED > 60:
-            # For high-speed scans, start at cruise speed immediately
-            frequency = min(int(steps_per_second), MotorParams.STEPPER_MAX_SPEED)
-            stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, frequency, 500000)
-        else:
-            # For normal scans, ramp up
-            target_freq = min(int(steps_per_second), MotorParams.STEPPER_MAX_SPEED)
-            ramp_steps = 10
-            for i in range(ramp_steps):
-                freq = int((target_freq / ramp_steps) * (i + 1))
-                stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, freq, 500000)
-                time.sleep(0.001)
+        stepper_controller.start_continuous_move(steps_per_second, direction)
+        time.sleep(movement_time)
+        stepper_controller.stop_continuous_move()
 
-        # Setup step counting for position tracking
-        if not stepper_controller.step_callback:
-            stepper_controller.step_callback = stepper_controller.pi.callback(
-                STEPPER_PULSE_PIN, pigpio.RISING_EDGE, stepper_controller._step_counter_callback
-            )
-
-        # Run for calculated time
-        start_time = time.time()
-        while (time.time() - start_time) < movement_time and stepper_controller.running:
-            time.sleep(0.001)
-
-        # Stop movement with deceleration for slower scans
-        if SCAN_AZIMUTH_SPEED <= 60:
-            # Gentle deceleration
-            current_freq = int(steps_per_second)
-            while current_freq > 1000:
-                current_freq = int(current_freq * 0.9)
-                stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, current_freq, 500000)
-                time.sleep(0.001)
-
-        # Full stop
-        stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
         self.movement_complete.set()
 
-        final_pos = stepper_controller.shared_data["stepper_degrees"].value
+    def _collect_data_during_movement(self, lidar_controller, stepper_controller, start_az, end_az):
+        """MODIFIED: Collect data using the deterministic position tracking method."""
+        collection_interval = 1.0 / SCAN_DATA_RATE
+        start_time = time.time()
+        last_sample_time = start_time
+        movement_duration = abs(end_az - start_az) / SCAN_AZIMUTH_SPEED
+        print(f"[HWCtrl] Data collection: {SCAN_DATA_RATE} Hz for {movement_duration:.1f}s")
+        sample_count = 0
 
+        while (time.time() - start_time) < movement_duration:
+            current_time = time.time()
+            if (current_time - last_sample_time) >= collection_interval:
+                # ***KEY CHANGE***: Get position from the deterministic calculator
+                current_az = stepper_controller.update_and_get_virtual_position()
+                current_el = self.shared_data["servo_degrees"].value
+                dist, strength, timestamp = lidar_controller.get_lidar_data()
+
+                if dist is not None and dist > 0:
+                    self.background_data_buffer.append([current_az, current_el, dist, strength])
+                    sample_count += 1
+                last_sample_time = current_time
+            else:
+                time.sleep(0.001)
+        print(f"[HWCtrl] Data collection completed. Total samples: {sample_count}")
 
     def _reset_hardware_after_scan(self, stepper_controller):
-        """Reset hardware state after scan completion with a more robust cleanup."""
+        """Reset hardware state after scan completion."""
+        stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
+        stepper_controller.pi.wave_tx_stop()
+        stepper_controller.pi.wave_clear()
 
-
-        # 1. Stop all hardware-timed operations on the pin
-        stepper_controller.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)  # Stop PWM
-        stepper_controller.pi.wave_tx_stop()  # Stop any waves
-        stepper_controller.pi.wave_clear()  # Clear all waveforms from memory
-
-        # 2. Cancel the existing callback before changing the pin mode
         if stepper_controller.step_callback:
             stepper_controller.step_callback.cancel()
-            stepper_controller.step_callback = None  # Good practice to nullify it
+            stepper_controller.step_callback = None
 
-        # 3. Explicitly set the pin back to a simple OUTPUT mode and set it low.
-        # This acts as a hard reset for the pin's function, releasing it from PWM mode.
         stepper_controller.pi.set_mode(STEPPER_PULSE_PIN, pigpio.OUTPUT)
         stepper_controller.pi.write(STEPPER_PULSE_PIN, 0)
-
-        # 4. A brief delay to ensure the hardware state has settled
         time.sleep(0.05)
-
-        # 5. Re-establish the callback for normal wave-based operation
         stepper_controller.step_callback = stepper_controller.pi.callback(
             STEPPER_PULSE_PIN, pigpio.RISING_EDGE,
             stepper_controller._step_counter_callback
         )
         print("[HWCtrl] Stepper hardware has been reset and is ready.")
 
-    def _collect_data_during_movement(self, lidar_controller, start_az, end_az):
-        """Collect LiDAR data during continuous movement"""
-        collection_interval = 1.0 / SCAN_DATA_RATE  # Time between samples
-        start_time = time.time()
-        last_sample_time = start_time
-
-        total_distance = abs(end_az - start_az)
-        movement_duration = total_distance / SCAN_AZIMUTH_SPEED
-
-        print(f"[HWCtrl] Data collection: {SCAN_DATA_RATE} Hz for {movement_duration:.1f}s")
-
-        sample_count = 0
-
-        while (time.time() - start_time) < movement_duration:
-            current_time = time.time()
-
-            # Check if it's time for next sample
-            if (current_time - last_sample_time) >= collection_interval:
-
-                # Get current position
-                current_az = self.shared_data["stepper_degrees"].value
-                current_el = self.shared_data["servo_degrees"].value  # Use actual servo position
-
-                # Get LiDAR data
-                dist, strength, timestamp = lidar_controller.get_lidar_data()
-
-                if dist is not None and dist > 0:
-                    # Store sample
-                    sample = [current_az, current_el, dist, strength]
-                    self.background_data_buffer.append(sample)
-                    sample_count += 1
-
-                last_sample_time = current_time
-            else:
-                # Short sleep to prevent CPU spinning
-                time.sleep(0.001)
-
-        print(f"[HWCtrl] Data collection completed. Total samples: {sample_count}")
     def _save_scan_data(self):
         """Save collected scan data to file"""
         if self.background_data_buffer:
             try:
-                # Use the path from shared_data
                 path = "background_scan.npy"
                 data_array = np.array(self.background_data_buffer)
                 np.save(path, data_array)
                 print(f"[HWCtrl] Saved {len(self.background_data_buffer)} scan points to {path}")
-                print(f"[HWCtrl] Data shape: {data_array.shape}")
-                print(f"[HWCtrl] Azimuth range: {data_array[:, 0].min():.1f}° to {data_array[:, 0].max():.1f}°")
-                print(f"[HWCtrl] Elevation range: {data_array[:, 1].min():.1f}° to {data_array[:, 1].max():.1f}°")
             except Exception as e:
                 print(f"[HWCtrl] Error saving scan data: {e}")
         else:
@@ -485,27 +376,10 @@ class ContinuousBackgroundScanner:
         time_per_rotation = 360.0 / SCAN_AZIMUTH_SPEED
         time_per_servo = SERVO_MOVE_TIME + SERVO_SETTLE_TIME
         total_scan_time = (num_rings * time_per_rotation) + ((num_rings - 1) * time_per_servo)
-
-        samples_per_rotation = int(time_per_rotation * SCAN_DATA_RATE)
-        total_samples = samples_per_rotation * num_rings
-
-        profile_name = 'UNKNOWN'
-        if SCAN_AZIMUTH_SPEED >= 120:
-            profile_name = 'ULTRA_FAST'
-        elif SCAN_AZIMUTH_SPEED >= 90:
-            profile_name = 'FAST'
-        elif SCAN_AZIMUTH_SPEED >= 60:
-            profile_name = 'NORMAL'
-        else:
-            profile_name = 'HIGH_QUALITY'
-
+        total_samples = int(total_scan_time * SCAN_DATA_RATE)
         print(f"[HWCtrl] ========== SCAN CONFIGURATION ==========")
-        print(f"[HWCtrl] Profile: {profile_name}")
-        print(f"[HWCtrl] Azimuth speed: {SCAN_AZIMUTH_SPEED}°/s")
-        print(f"[HWCtrl] Elevation steps: {SCAN_ELEVATION_STEP}°")
-        print(f"[HWCtrl] Number of rings: {num_rings}")
-        print(f"[HWCtrl] Time per rotation: {time_per_rotation:.1f}s")
-        print(f"[HWCtrl] Expected total time: {total_scan_time:.1f}s ({total_scan_time / 60:.1f} minutes)")
+        print(f"[HWCtrl] Azimuth speed: {SCAN_AZIMUTH_SPEED}°/s, Elevation steps: {SCAN_ELEVATION_STEP}°")
+        print(f"[HWCtrl] Expected total time: ~{total_scan_time / 60:.1f} minutes")
         print(f"[HWCtrl] Expected samples: ~{total_samples:,}")
         print(f"[HWCtrl] ========================================")
 
@@ -516,162 +390,161 @@ class ContinuousBackgroundScanner:
         self.background_data_buffer = []
         self.shared_data["background_scan_active"].value = False
         self.scan_start_time = None
-        print("[HWCtrl] Scan parameters reset for next scan")
-        print("[HWCtrl] Background scan flag set to False")
+        print("[HWCtrl] Scan parameters reset. Background scan flag set to False.")
 
 
+# --- vvv NEW AND IMPROVED STEPPER CONTROLLER vvv ---
 class PWMStepperController:
     """
-    Open-loop stepper motor controller using pre-calculated motion profiles
-    and pigpio waveforms for precise, hardware-timed execution.
-    This version includes a step-counting callback to provide LIVE angle updates
-    and breaks large movements into smaller chunks to ensure stability.
+    IMPROVED Stepper motor controller with a hybrid position tracking system.
+    - Time-based (deterministic) tracking for high-speed continuous PWM moves.
+    - Callback-based (interrupt-driven) tracking for precise wave-based moves.
+    This prevents interrupt storms and improves accuracy during scans.
     """
 
     def __init__(self, pi, shared_data):
         self.pi = pi
         self.shared_data = shared_data
         self.running = True
-        self.step_count = 0  # Tracks the motor's absolute position in steps
+        self.step_count = 0
+        self.direction = 1
+
+        # State for continuous PWM movement
+        self.is_in_continuous_move = False
+        self.continuous_move_start_time = 0.0
+        self.continuous_move_start_steps = 0
+        self.continuous_move_sps = 0.0
 
         # Setup GPIO pins
         self.pi.set_mode(STEPPER_PULSE_PIN, pigpio.OUTPUT)
         self.pi.set_mode(STEPPER_DIR_PIN, pigpio.OUTPUT)
         self.pi.set_mode(STEPPER_ENABLE_PIN, pigpio.OUTPUT)
         self.pi.set_mode(STEPPER_SLEEP_PIN, pigpio.OUTPUT)
-
-        # Enable stepper driver
-        self.pi.write(STEPPER_ENABLE_PIN, 0)  # Active low
-        self.pi.write(STEPPER_SLEEP_PIN, 1)  # Wake up driver
+        self.pi.write(STEPPER_ENABLE_PIN, 0)
+        self.pi.write(STEPPER_SLEEP_PIN, 1)
         time.sleep(0.001)
 
-        # Set up the callback for live position tracking
         self.step_callback = self.pi.callback(STEPPER_PULSE_PIN, pigpio.RISING_EDGE, self._step_counter_callback)
-
-        print("[HWCtrl] Open-Loop Stepper controller with LIVE feedback initialized.")
+        print("[HWCtrl] Improved Stepper controller with HYBRID feedback initialized.")
 
     def _step_counter_callback(self, gpio, level, tick):
-        """
-        Callback function that triggers on every step pulse.
-        This provides live position updates during movement.
-        """
-        if level == 1:  # Rising edge
-            direction = self.pi.read(STEPPER_DIR_PIN)
-            if direction:
-                self.step_count += 1
-            else:
-                self.step_count -= 1
+        """Callback for WAVE-BASED moves. Ignored during continuous PWM moves."""
+        if self.is_in_continuous_move or level != 1:
+            return
 
-            # Wrap around at 360 degrees
-            steps_per_rotation = int(360.0 / MICROSTEP_ANGLE)
-            self.step_count = self.step_count % steps_per_rotation
+        if self.pi.read(STEPPER_DIR_PIN):
+            self.step_count += 1
+        else:
+            self.step_count -= 1
 
-            degrees = self.step_count * MICROSTEP_ANGLE
+        # Update shared memory directly. The performance gain outweighs the minimal risk of a race condition.
+        self.shared_data["stepper_degrees"].value = (self.step_count * MICROSTEP_ANGLE) % 360.0
 
-            # Update shared position data immediately
-            with self.shared_data["stepper_degrees"].get_lock():
-                self.shared_data["stepper_degrees"].value = degrees
+    def start_continuous_move(self, steps_per_second, direction):
+        """Starts a hardware PWM move and engages time-based position tracking."""
+        if self.is_in_continuous_move:
+            self.stop_continuous_move()
+
+        print(f"[HWCtrl-Stepper] Starting continuous move at {steps_per_second:.0f} steps/sec.")
+        self.is_in_continuous_move = True
+        self.direction = direction
+        self.pi.write(STEPPER_DIR_PIN, self.direction)
+
+        self.continuous_move_start_steps = self.step_count
+        self.continuous_move_sps = steps_per_second
+        self.continuous_move_start_time = time.time()
+
+        self.pi.hardware_PWM(STEPPER_PULSE_PIN, int(steps_per_second), 500000)
+
+    def stop_continuous_move(self):
+        """Stops a hardware PWM move and syncs the final position."""
+        if not self.is_in_continuous_move:
+            return
+
+        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 0)
+        elapsed_time = time.time() - self.continuous_move_start_time
+        steps_moved = int(elapsed_time * self.continuous_move_sps)
+
+        if self.direction == 1:
+            self.step_count = self.continuous_move_start_steps + steps_moved
+        else:
+            self.step_count = self.continuous_move_start_steps - steps_moved
+
+        self.is_in_continuous_move = False
+        final_degrees = (self.step_count * MICROSTEP_ANGLE) % 360.0
+        self.shared_data["stepper_degrees"].value = final_degrees
+        print(f"[HWCtrl-Stepper] Continuous move stopped. Final position: {final_degrees:.2f}°")
+
+    def update_and_get_virtual_position(self):
+        """Calculates and returns the current position during a continuous move."""
+        if self.is_in_continuous_move:
+            elapsed_time = time.time() - self.continuous_move_start_time
+            steps_moved = elapsed_time * self.continuous_move_sps
+            current_steps = self.continuous_move_start_steps + (steps_moved if self.direction == 1 else -steps_moved)
+            current_degrees = (current_steps * MICROSTEP_ANGLE) % 360.0
+            self.shared_data["stepper_degrees"].value = current_degrees
+            return current_degrees
+        else:
+            return self.shared_data["stepper_degrees"].value
 
     def move_to_angle(self, target_angle):
-        """
-        Calculates a full motion profile and executes it by dividing the
-        total pulse waveform into smaller, sequential chunks.
-        """
-        # Stop any existing hardware PWM or waves before starting a new move
-        self.pi.hardware_PWM(STEPPER_PULSE_PIN, 0, 500000)
-        self.pi.wave_tx_stop()
+        """Calculates and executes a point-to-point move using pigpio waves."""
+        if self.is_in_continuous_move:
+            self.stop_continuous_move()
 
-        # Clamp target angle
+        self.pi.wave_tx_stop()
         target_angle = max(MotorParams.PAN_MIN_ANGLE, min(MotorParams.PAN_MAX_ANGLE, target_angle))
 
-        # --- 1. Calculate the complete move ---
         current_pos_steps = self.step_count
         target_pos_steps = int(target_angle / MICROSTEP_ANGLE)
         error_steps = target_pos_steps - current_pos_steps
-
-        # Use the shortest path for 360-degree rotation
         steps_per_rotation = int(360.0 / MICROSTEP_ANGLE)
+
         if abs(error_steps) > (steps_per_rotation / 2):
-            if error_steps > 0:
-                error_steps -= steps_per_rotation
-            else:
-                error_steps += steps_per_rotation
+            error_steps -= steps_per_rotation if error_steps > 0 else -steps_per_rotation
 
-        total_steps = abs(error_steps)
-
-        if total_steps < 1:
-
+        if abs(error_steps) < 1:
             return
 
         direction = 1 if error_steps > 0 else 0
         self.pi.write(STEPPER_DIR_PIN, direction)
 
-        # --- 2. Build the entire waveform profile in a Python list ---
-        if total_steps <= MotorParams.ACCEL_STEPS * 2:
-            accel_steps_actual = total_steps // 2
-            decel_steps_actual = total_steps - accel_steps_actual
-        else:
-            accel_steps_actual = MotorParams.ACCEL_STEPS
-            decel_steps_actual = MotorParams.ACCEL_STEPS
+        total_steps = abs(error_steps)
+        accel_steps_actual = min(total_steps // 2, MotorParams.ACCEL_STEPS)
+        decel_steps_actual = accel_steps_actual
+        cruise_steps = total_steps - (accel_steps_actual + decel_steps_actual)
 
         pulses = []
-        # Acceleration ramp
         for i in range(1, accel_steps_actual + 1):
-            speed = MotorParams.STEPPER_MIN_SPEED + (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) * (
-                i / accel_steps_actual)
-            delay_us = int(500000 / speed)
-            pulses.append(pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us))
-            pulses.append(pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us))
-        # Cruise phase
-        cruise_steps = total_steps - (accel_steps_actual + decel_steps_actual)
+            speed = MotorParams.STEPPER_MIN_SPEED + (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) * (i / accel_steps_actual)
+            delay = int(500000 / speed)
+            pulses.extend([pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay), pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay)])
         if cruise_steps > 0:
-            delay_us = int(500000 / MotorParams.STEPPER_MAX_SPEED)
+            delay = int(500000 / MotorParams.STEPPER_MAX_SPEED)
             for _ in range(cruise_steps):
-                pulses.append(pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us))
-                pulses.append(pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us))
-        # Deceleration ramp
+                pulses.extend([pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay), pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay)])
         for i in range(decel_steps_actual, 0, -1):
-            speed = MotorParams.STEPPER_MIN_SPEED + (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) * (
-                i / decel_steps_actual)
-            delay_us = int(500000 / speed)
-            pulses.append(pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay_us))
-            pulses.append(pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay_us))
+            speed = MotorParams.STEPPER_MIN_SPEED + (MotorParams.STEPPER_MAX_SPEED - MotorParams.STEPPER_MIN_SPEED) * (i / decel_steps_actual)
+            delay = int(500000 / speed)
+            pulses.extend([pigpio.pulse(1 << STEPPER_PULSE_PIN, 0, delay), pigpio.pulse(0, 1 << STEPPER_PULSE_PIN, delay)])
 
-        # --- 3. Execute the waveform in smaller, sequential chunks ---
-        MAX_PULSES_PER_CHUNK = 4000  # Safe number of pulses per wave (2000 steps)
-        num_pulses = len(pulses)
+        MAX_PULSES_PER_CHUNK = 4000
         start_index = 0
-
-        while start_index < num_pulses:
+        while start_index < len(pulses):
             if self.shared_data["shutdown"].value:
-                print("[HWCtrl-Stepper] Shutdown commanded, aborting movement.")
                 break
-
-            # Prepare the next chunk
-            end_index = min(start_index + MAX_PULSES_PER_CHUNK, num_pulses)
-            pulse_chunk = pulses[start_index:end_index]
-
-            # Clear old wave data, add new chunk, and create the wave
+            end_index = min(start_index + MAX_PULSES_PER_CHUNK, len(pulses))
             self.pi.wave_clear()
-            self.pi.wave_add_generic(pulse_chunk)
+            self.pi.wave_add_generic(pulses[start_index:end_index])
             wave_id = self.pi.wave_create()
-
             if wave_id >= 0:
                 self.pi.wave_send_once(wave_id)
-
-                # Wait for the chunk to finish. The callback updates position during this wait.
                 while self.pi.wave_tx_busy():
                     time.sleep(0.01)
-
                 self.pi.wave_delete(wave_id)
             else:
-                print(f"[HWCtrl-Stepper] CRITICAL: Failed to create wave (error {wave_id}). Halting movement.")
                 break
-
             start_index = end_index
-
-        # --- 4. Finalization ---
-        final_pos_deg = self.shared_data["stepper_degrees"].value
 
     def move_to_target(self):
         """Move stepper to target azimuth stored in shared data."""
@@ -683,23 +556,20 @@ class PWMStepperController:
         """Stops the stepper controller and cleans up resources."""
         self.running = False
         print("[HWCtrl] Stopping stepper controller...")
-
-        # Stop any active waveforms and clear the pulse pin
         try:
             self.pi.wave_tx_stop()
             self.pi.wave_clear()
             self.pi.write(STEPPER_PULSE_PIN, 0)
         except Exception as e:
-            print(f"[HWCtrl] Warning: Harmless error during stepper stop: {e}")
+            print(f"[HWCtrl] Warning during stepper stop: {e}")
 
-        # Cancel the step counting callback
         if self.step_callback:
             self.step_callback.cancel()
             self.step_callback = None
 
-        # Disable the stepper driver
         self.pi.write(STEPPER_ENABLE_PIN, 1)
         print("[HWCtrl] Stepper controller stopped.")
+# --- ^^^ NEW AND IMPROVED STEPPER CONTROLLER ^^^ ---
 
 
 class ServoController:
@@ -709,77 +579,46 @@ class ServoController:
         self.pi = pi
         self.shared_data = shared_data
         self.running = True
-
-        # Initialize servo
         self.pi.set_mode(SERVO_PIN, pigpio.OUTPUT)
-
-        # Set initial position to middle
-        initial_angle = 45.0  # Start at 45 degrees
-        self.move_to_angle(initial_angle)
-
+        self.move_to_angle(45.0)  # Start at 45 degrees
 
     def angle_to_pulse_width(self, angle):
         """Convert angle to servo pulse width with mounting offset correction"""
-        # Clamp input angle to valid range (0-90 degrees as seen by user)
         user_angle = max(MotorParams.SERVO_MIN_ANGLE, min(MotorParams.SERVO_MAX_ANGLE, angle))
-
-        # Apply mounting offset to get physical servo angle
         physical_angle = user_angle - MotorParams.SERVO_ZERO_OFFSET
-
-        # Ensure physical angle is within servo's physical limits
         physical_angle = max(MotorParams.SERVO_MIN_ANGLE, min(MotorParams.SERVO_MAX_ANGLE, physical_angle))
-
-        # Convert to pulse width
         pulse_range = MotorParams.SERVO_MAX_PULSE - MotorParams.SERVO_MIN_PULSE
         angle_range = MotorParams.SERVO_MAX_ANGLE - MotorParams.SERVO_MIN_ANGLE
-
-        pulse_width = MotorParams.SERVO_MIN_PULSE + (
-            (physical_angle - MotorParams.SERVO_MIN_ANGLE) / angle_range * pulse_range
-        )
-
+        pulse_width = MotorParams.SERVO_MIN_PULSE + ((physical_angle - MotorParams.SERVO_MIN_ANGLE) / angle_range * pulse_range)
         return int(pulse_width)
 
     def move_to_angle(self, target_angle):
         """Direct movement to target angle with angle limiting"""
-        # Ensure angle is within valid range (what user sees)
         target_angle = max(MotorParams.SERVO_MIN_ANGLE, min(MotorParams.SERVO_MAX_ANGLE, target_angle))
-
-
         pulse_width = self.angle_to_pulse_width(target_angle)
         self.pi.set_servo_pulsewidth(SERVO_PIN, pulse_width)
-
-        # Update shared data with user-visible angle
         with self.shared_data["servo_degrees"].get_lock():
             self.shared_data["servo_degrees"].value = target_angle
-
-        physical_angle = target_angle - MotorParams.SERVO_ZERO_OFFSET
 
     def control_servo(self):
         """Control servo position based on target elevation"""
         while self.running:
             target_elevation = self.shared_data["target_elevation"].value
-            current_servo = self.shared_data["servo_degrees"].value
-
-            # Check if servo needs to move (with hysteresis to prevent hunting)
-            if abs(target_elevation - current_servo) > 0.5:  # 0.5 degree tolerance
+            if abs(target_elevation - self.shared_data["servo_degrees"].value) > 0.5:
                 self.move_to_angle(target_elevation)
-
-            time.sleep(0.001)  # 1000Hz update rate
+            time.sleep(0.001)
 
     def stop(self):
         """Stop the servo controller"""
         self.running = False
-        self.pi.set_servo_pulsewidth(SERVO_PIN, 0)  # Stop servo signal
+        self.pi.set_servo_pulsewidth(SERVO_PIN, 0)
         print("[HWCtrl] Servo controller stopped")
 
 
 def combined_controller_process(shared_data):
     """Combined process for controlling stepper, servo, LiDAR, and background scanning"""
     pi = None
-    stepper = None
-    servo = None
-    lidar = None
-    servo_thread = None
+    stepper, servo, lidar, servo_thread = None, None, None, None
 
     try:
         pi = pigpio.pi()
@@ -787,52 +626,33 @@ def combined_controller_process(shared_data):
             print("[HWCtrl] Failed to connect to pigpio daemon")
             return
 
-        print(f"[HWCtrl] Initializing with servo zero offset: {MotorParams.SERVO_ZERO_OFFSET}°")
-        print(f"[HWCtrl] Pan limits: {MotorParams.PAN_MIN_ANGLE}° - {MotorParams.PAN_MAX_ANGLE}°")
-        print(f"[HWCtrl] Tilt limits: {MotorParams.SERVO_MIN_ANGLE}° - {MotorParams.SERVO_MAX_ANGLE}°")
-        print(f"[HWCtrl] Scan speed profile: {SCAN_AZIMUTH_SPEED}°/s azimuth, {SCAN_ELEVATION_STEP}° elevation steps")
-
-        # Initialize controllers
+        print(f"[HWCtrl] Initializing...")
         stepper = PWMStepperController(pi, shared_data)
         servo = ServoController(pi, shared_data)
         lidar = LidarController(shared_data)
         scanner = ContinuousBackgroundScanner(shared_data)
+        print("[HWCtrl] Combined controller initialized.")
 
-        print("[HWCtrl] Combined controller initialized with continuous scanning")
-
-        # Start servo control thread
         servo_thread = threading.Thread(target=servo.control_servo)
         servo_thread.daemon = True
         servo_thread.start()
 
-        # Main control loop
         while not shared_data["shutdown"].value:
-            # Update LiDAR data continuously
             lidar.get_lidar_data()
 
-            # Handle continuous background scanning
             if shared_data["background_scan_active"].value:
+                # Pass controller instances to the scanner
                 scan_continues = scanner.start_continuous_scan(lidar, stepper, servo)
                 if not scan_continues:
-                    # Scan completed, ensure stepper is ready for normal operation
-                    print("[HWCtrl] Background scan completed, ready for normal movement")
-                    # Small delay before accepting new commands
+                    print("[HWCtrl] Background scan cycle finished.")
                     time.sleep(0.1)
 
-            # Handle normal stepper movement only when not scanning
             elif shared_data["go_to_target"].value:
-                # Reset target reached flag
                 shared_data["target_reached"].value = False
-
-                # Move stepper to target
                 stepper.move_to_target()
-
-                # Clear go_to_target flag when done
                 shared_data["go_to_target"].value = False
-
             else:
-                # Idle - just update LiDAR data
-                time.sleep(0.001)  # 1ms main loop
+                time.sleep(0.001)
 
     except Exception as e:
         import traceback
@@ -840,28 +660,20 @@ def combined_controller_process(shared_data):
         traceback.print_exc()
     finally:
         print("[HWCtrl] Shutting down...")
-        if stepper:
-            stepper.stop()
-        if servo:
-            servo.stop()
-        if servo_thread:
-            servo_thread.join(timeout=1.0)
-        if lidar:
-            lidar.stop()
-        if pi and pi.connected:
-            pi.stop()
+        if stepper: stepper.stop()
+        if servo: servo.stop()
+        if servo_thread: servo_thread.join(timeout=1.0)
+        if lidar: lidar.stop()
+        if pi and pi.connected: pi.stop()
         print("[HWCtrl] Shutdown complete.")
 
 
 def run_hardware_controller(shared_data):
     """Main function to start the combined hardware controller"""
-    print("[HWCtrl] Starting continuous scanning hardware controller process...")
+    print("[HWCtrl] Starting hardware controller process...")
     try:
         combined_controller_process(shared_data)
     except KeyboardInterrupt:
         print("[HWCtrl] Process interrupted by user.")
-    except Exception as e:
-        import traceback
-        print(f"[HWCtrl] Unexpected error: {e}")
-        traceback.print_exc()
-    print("[HWCtrl] Hardware controller process stopped.")
+    finally:
+        print("[HWCtrl] Hardware controller process stopped.")
