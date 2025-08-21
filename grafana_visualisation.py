@@ -47,7 +47,7 @@ def publish_simple(topic, payload_data):
         payload=json.dumps(payload_data), 
         qos=mqtt.QoS.AT_LEAST_ONCE
     )
-    print(f"Published to {topic}: {json.dumps(payload_data, indent=2)}")
+    #print(f"Published to {topic}: {json.dumps(payload_data, indent=2)}")
 
 def publish_original(topic, value):
     """Original publish function - fixed logic"""
@@ -68,7 +68,7 @@ def publish_original(topic, value):
         }
     
     mqtt_connection.publish(topic=topic, payload=json.dumps(payload), qos=mqtt.QoS.AT_LEAST_ONCE)
-    print(f"Published to {topic}: {json.dumps(payload)}")
+    #print(f"Published to {topic}: {json.dumps(payload)}")
 
 # ==== FAKE DATA GENERATORS ====
 def generate_cpf():
