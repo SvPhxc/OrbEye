@@ -12,6 +12,7 @@ import time
 from collections import deque
 import traceback
 
+
 class TrackerState(Enum):
     IDLE = 0
     SEARCHING = 1
@@ -19,6 +20,7 @@ class TrackerState(Enum):
     CALCULATING_PLANE = 3
     TRACKING = 4
     LOST = 5
+
 
 class CircularDroneTracker:
     """
@@ -46,7 +48,7 @@ class CircularDroneTracker:
         self.prediction_angle = self.ANGULAR_VELOCITY_DEG * prediction_time_sec
 
         # Arc scan parameters (adaptive)
-        self.arc_radius_initial = 5.0  # Initial arc scan radius in degrees
+        self.arc_radius_initial = 90.0  # Initial arc scan radius in degrees
         self.arc_radius_min = 1.5  # Minimum arc radius (slightly larger than FOV/2)
         self.arc_radius_current = self.arc_radius_initial
         self.arc_scan_points = 5  # Number of points in arc scan
@@ -64,8 +66,8 @@ class CircularDroneTracker:
         self.orbital_confidence = 0.0  # 0-1 confidence in orbital model
 
         # Search parameters
-        self.initial_heading = -1
-        self.initial_inclination = -1
+        self.initial_heading = 0
+        self.initial_inclination = 0
         self.heading_deviation = 30.0
 
         # Performance tracking
