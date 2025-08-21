@@ -136,7 +136,7 @@ def _perform_spiral_search(shared_data, center_az, center_el, spiral_radius_deg,
         if not _goto_and_wait(shared_data, az, el, settle_timeout_s=0.5):
             continue  # Move to next point if settle fails
 
-        time.sleep(0.05)  # Brief pause for LiDAR to update
+        time.sleep(0.005)  # Brief pause for LiDAR to update
 
         strength = float(shared_data["lidar_data"][1])
         ts = float(shared_data["lidar_data"][2])
