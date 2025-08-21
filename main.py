@@ -116,7 +116,7 @@ if __name__ == "__main__":
         "tracking_logic_ready": Value('b', False),
         "reactive_mode": Value('b', False),
         "rann": Value('d', 0),
-        "inclination": Value('d', 0),
+        "inclination": Value('d', 40),
 
         # --- Active Tracker (High-Frequency Hunt) ---
         "lidar_track_mode_active": Value('b', False),

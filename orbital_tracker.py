@@ -155,7 +155,7 @@ class CircularDroneTracker:
         self.prediction_angle = self.ANGULAR_VELOCITY_DEG * prediction_time_sec
 
         # Arc scan parameters (adaptive)
-        self.arc_radius_initial = 5.0  # Initial arc scan radius in degrees
+        self.arc_radius_initial = 15.0  # Initial arc scan radius in degrees
         self.arc_radius_min = 1.5  # Minimum arc radius (slightly larger than FOV/2)
         self.arc_radius_current = self.arc_radius_initial
         self.arc_scan_points = 5  # Default number of points in arc scan
@@ -1018,7 +1018,7 @@ class CircularDroneTracker:
                     else:
                         inclination =-1
 
-                    self.start_tracking(heading, 0.0, -1)
+                    self.start_tracking(heading, 0.0, inclination)
                 except Exception as e:
                     print("[Tracker] Error reading initial parameters: {}".format(e))
                     self.start_tracking()
