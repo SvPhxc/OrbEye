@@ -91,7 +91,7 @@ def publish_data_to_aws(shared_data):
         while not shared_data["shutdown"].value:
             try:
                 # Check if Grafana visualization is enabled
-                if not shared_data.get("grafana_enabled", Value('b', True)).value:
+                if not shared_data["grafana_enabled"].value:
                     time.sleep(1)  # Sleep if disabled
                     continue
                 
