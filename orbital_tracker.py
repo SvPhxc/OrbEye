@@ -3,6 +3,13 @@
 CircularDroneTracker: Real-time tracking of a drone in circular orbit
 Uses predict-and-wait intercept strategy with continuous orbital refinement
 Implements adaptive arc scanning to handle 2° LiDAR FOV constraint
+
+Key Features:
+- Clutter filtering to reject background objects
+- Wide hemisphere search when inclination is unknown
+- Adaptive arc scanning that shrinks as confidence increases
+- Continuous orbital plane refinement using SVD
+- Fallback for systems without scipy
 """
 
 from enum import Enum
@@ -12,6 +19,93 @@ import time
 from collections import deque
 import traceback
 
+# Try to import scipy for KD-tree, fall back to simple implementation if not available
+try:
+    from scipy.spatial import cKDTree
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+    print("[CircularDroneTracker] scipy not available, using simple clutter filter")
+
+
+class ClutterFilter:
+    """
+    Clutter filter for background rejection with fallback for systems without scipy.
+    """
+
+    def __init__(self, background_file="background_scan.npy"):
+        self.angular_tolerance = 1.0  # degrees
+        self.distance_margin_cm = 50.0  # cm closer than background
+        self.background_tree = None
+        self.background_data = None
+        self._cache = {}
+
+        try:
+            self.background_data = np.load(background_file)
+            print("[ClutterFilter] Loaded {} background points.".format(len(self.background_data)))
+
+            if HAS_SCIPY:
+                # Build KD-tree for fast lookups
+                coords = self.background_data[:, [0, 1]]  # az, el columns
+                self.background_tree = cKDTree(coords, leafsize=16)
+                self.bg_distances = self.background_data[:, 2]  # distance column
+            else:
+                # Simple implementation without scipy
+                self.bg_azimuths = self.background_data[:, 0]
+                self.bg_elevations = self.background_data[:, 1]
+                self.bg_distances = self.background_data[:, 2]
+
+        except FileNotFoundError:
+            print("[ClutterFilter] WARNING: Background file '{}' not found.".format(background_file))
+        except Exception as e:
+            print("[ClutterFilter] ERROR: {}".format(e))
+
+    def is_foreground(self, azimuth, elevation, distance, strength):
+        """Check if measurement is foreground (not background clutter)"""
+        if self.background_data is None:
+            return True  # No background data, accept all
+
+        # Check cache first
+        cache_key = (int(azimuth * 10), int(elevation * 10))
+        if cache_key in self._cache:
+            bg_dist = self._cache[cache_key]
+        else:
+            if HAS_SCIPY and self.background_tree is not None:
+                # Fast KD-tree query
+                query_point = np.array([azimuth, elevation])
+                try:
+                    angular_dist, idx = self.background_tree.query(query_point, k=1)
+
+                    if angular_dist < self.angular_tolerance:
+                        bg_dist = self.bg_distances[idx]
+                    else:
+                        bg_dist = float('inf')  # No background at this angle
+
+                except Exception as e:
+                    print("[ClutterFilter] Query error: {}".format(e))
+                    return True
+            else:
+                # Simple brute-force search
+                az_diff = np.abs(self.bg_azimuths - azimuth)
+                # Handle wraparound at 360 degrees
+                az_diff = np.minimum(az_diff, 360 - az_diff)
+                el_diff = np.abs(self.bg_elevations - elevation)
+
+                # Combined angular distance
+                angular_dist = np.sqrt(az_diff**2 + el_diff**2)
+                min_idx = np.argmin(angular_dist)
+
+                if angular_dist[min_idx] < self.angular_tolerance:
+                    bg_dist = self.bg_distances[min_idx]
+                else:
+                    bg_dist = float('inf')
+
+            # Cache result
+            if len(self._cache) < 10000:
+                self._cache[cache_key] = bg_dist
+
+        # Object is foreground if significantly closer than background
+        return distance < (bg_dist - self.distance_margin_cm)
 
 class TrackerState(Enum):
     IDLE = 0
@@ -21,7 +115,6 @@ class TrackerState(Enum):
     TRACKING = 4
     LOST = 5
 
-
 class CircularDroneTracker:
     """
     Tracks a drone moving in a circular orbit at 2m distance.
@@ -29,18 +122,21 @@ class CircularDroneTracker:
     LiDAR FOV: 2° - requires arc scanning for reliable detection
     """
 
-    def __init__(self, shared_data, prediction_time_sec=0.5):
+    def __init__(self, shared_data, prediction_time_sec=0.5, background_file="background_scan.npy"):
         self.shared_data = shared_data
         self.state = TrackerState.IDLE
 
         # Control flags from shared_data
         self.active = False
 
+        # Initialize clutter filter for background rejection
+        self.clutter_filter = ClutterFilter(background_file)
+
         # Drone parameters
         self.TARGET_DISTANCE_CM = 200.0  # 2 meters in cm
         self.DISTANCE_TOLERANCE_CM = 20.0  # ±20cm tolerance
         self.ANGULAR_VELOCITY_DEG = 18.0  # degrees per second
-        self.MIN_STRENGTH = 500  # Minimum LiDAR strength threshold
+        self.MIN_STRENGTH = 100  # Minimum LiDAR strength threshold
         self.LIDAR_FOV_DEG = 2.0  # LiDAR field of view
 
         # Prediction parameters
@@ -48,10 +144,11 @@ class CircularDroneTracker:
         self.prediction_angle = self.ANGULAR_VELOCITY_DEG * prediction_time_sec
 
         # Arc scan parameters (adaptive)
-        self.arc_radius_initial = 90.0  # Initial arc scan radius in degrees
+        self.arc_radius_initial = 5.0  # Initial arc scan radius in degrees
         self.arc_radius_min = 1.5  # Minimum arc radius (slightly larger than FOV/2)
         self.arc_radius_current = self.arc_radius_initial
-        self.arc_scan_points = 5  # Number of points in arc scan
+        self.arc_scan_points = 5  # Default number of points in arc scan
+        self.arc_scan_points_wide = 9  # More points for wide searches
 
         # Tracking state
         self.orbit_points = deque(maxlen=20)  # Rolling buffer of confirmed points
@@ -66,9 +163,9 @@ class CircularDroneTracker:
         self.orbital_confidence = 0.0  # 0-1 confidence in orbital model
 
         # Search parameters
-        self.initial_heading = 0
+        self.initial_heading = -1
         self.initial_inclination = -1
-        self.heading_deviation = 0.0
+        self.heading_deviation = 30.0
 
         # Performance tracking
         self.consecutive_hits = 0
@@ -77,6 +174,8 @@ class CircularDroneTracker:
 
         print("[CircularDroneTracker] Initialized with {:.1f}° FOV, prediction: {:.2f}s".format(
             self.LIDAR_FOV_DEG, prediction_time_sec))
+        print("[CircularDroneTracker] Clutter filter: {}".format(
+            "Enabled" if self.clutter_filter.background_data is not None else "Disabled"))
 
     def command_motors_to_target(self, azimuth, elevation):
         """Command motors to move to target position"""
@@ -126,11 +225,24 @@ class CircularDroneTracker:
 
         return current_az, current_el, dist, strength, timestamp
 
-    def is_valid_measurement(self, dist, strength):
+    def is_valid_measurement(self, dist, strength, az=None, el=None):
         """Check if LiDAR measurement is valid drone detection"""
+        # Check distance and strength
         min_dist = self.TARGET_DISTANCE_CM - self.DISTANCE_TOLERANCE_CM
         max_dist = self.TARGET_DISTANCE_CM + self.DISTANCE_TOLERANCE_CM
-        return (min_dist < dist < max_dist) and (strength >= self.MIN_STRENGTH)
+
+        if not (min_dist < dist < max_dist):
+            return False
+
+        if strength < self.MIN_STRENGTH:
+            return False
+
+        # Check against background clutter if position is provided
+        if az is not None and el is not None and self.clutter_filter:
+            if not self.clutter_filter.is_foreground(az, el, dist, strength):
+                return False
+
+        return True
 
     def spherical_to_cartesian(self, az_deg, el_deg, dist_cm):
         """Convert spherical coordinates to 3D Cartesian"""
@@ -263,13 +375,24 @@ class CircularDroneTracker:
             import traceback
             traceback.print_exc()
 
-    def perform_arc_scan(self, center_az, center_el, radius_deg):
-        """Perform arc scan around predicted position to handle FOV limitation"""
+    def perform_arc_scan(self, center_az, center_el, radius_deg, radius_el_deg=None, num_points=None):
+        """
+        Perform arc scan around predicted position to handle FOV limitation.
+        radius_deg: azimuth search radius
+        radius_el_deg: elevation search radius (if None, uses radius_deg * 0.5)
+        num_points: number of scan points (if None, uses self.arc_scan_points)
+        """
         best_measurement = None
         best_strength = 0
 
+        if radius_el_deg is None:
+            radius_el_deg = radius_deg * 0.5
+
+        if num_points is None:
+            num_points = self.arc_scan_points
+
         # Generate arc points
-        for i in range(self.arc_scan_points):
+        for i in range(num_points):
             if not self.active or self.shared_data["shutdown"].value:
                 break
 
@@ -279,10 +402,10 @@ class CircularDroneTracker:
                 scan_az = center_az
                 scan_el = center_el
             else:
-                # Arc points
-                angle = (2 * math.pi * (i - 1)) / (self.arc_scan_points - 1)
+                # Arc points distributed around circle
+                angle = (2 * math.pi * (i - 1)) / (num_points - 1)
                 scan_az = (center_az + radius_deg * math.cos(angle)) % 360.0
-                scan_el = np.clip(center_el + radius_deg * math.sin(angle) * 0.5, 0, 90)
+                scan_el = np.clip(center_el + radius_el_deg * math.sin(angle), 0, 90)
 
             # Move to scan point
             self.command_motors_to_target(scan_az, scan_el)
@@ -295,7 +418,8 @@ class CircularDroneTracker:
             for _ in range(3):
                 current_az, current_el, dist, strength, timestamp = self.read_current_state()
 
-                if self.is_valid_measurement(dist, strength):
+                # Check if valid with clutter filtering
+                if self.is_valid_measurement(dist, strength, current_az, current_el):
                     if strength > best_strength:
                         best_measurement = (current_az, current_el, dist, strength, timestamp)
                         best_strength = strength
@@ -304,7 +428,7 @@ class CircularDroneTracker:
 
         return best_measurement
 
-    def start_tracking(self, initial_heading=0, heading_deviation=00.0, initial_inclination=-1):
+    def start_tracking(self, initial_heading=-1, heading_deviation=30.0, initial_inclination=-1):
         """Initialize search parameters and start tracking"""
         self.initial_heading = initial_heading
         self.heading_deviation = heading_deviation
@@ -332,50 +456,131 @@ class CircularDroneTracker:
         """Search for first drone detection with arc scanning"""
         # Determine search center
         if self.initial_heading != -1:
-            # Search around known heading
+            # Search around known heading with normal scan points
             center_az = self.initial_heading
             center_el = 45 if self.initial_inclination == -1 else self.initial_inclination
+            num_points = self.arc_scan_points
         else:
-            # Sweep search
+            # Sweep search - use more points for wider coverage
             sweep_time = time.time() % 10.0
             center_az = (sweep_time * 36.0) % 360.0
             center_el = 30.0
+            num_points = self.arc_scan_points_wide
 
-        # Perform arc scan
-        measurement = self.perform_arc_scan(center_az, center_el, self.heading_deviation / 2)
+        # Perform arc scan with both azimuth and elevation radius
+        measurement = self.perform_arc_scan(center_az, center_el,
+                                            self.heading_deviation / 2,
+                                            self.heading_deviation / 3,
+                                            num_points)
 
         if measurement:
             az, el, dist, strength, timestamp = measurement
             self.orbit_points.append((az, el, dist, time.time()))
-            print("[Tracker] First point found at ({:.1f}°, {:.1f}°) dist={:.0f}cm".format(
-                az, el, dist))
+            print("[Tracker] First point found at ({:.1f}°, {:.1f}°) dist={:.0f}cm str={:.0f}".format(
+                az, el, dist, strength))
             self.state = TrackerState.CONFIRMING_DIRECTION
 
     def state_confirming_direction(self):
-        """Find second point to determine direction"""
+        """Find second point to determine direction and start defining orbital plane"""
         if len(self.orbit_points) == 0:
             self.state = TrackerState.SEARCHING
             return
 
         first_point = self.orbit_points[-1]
 
-        # Wait briefly for drone to move
+        # Wait for drone to move (0.5 seconds = 9 degrees of movement)
         time_elapsed = time.time() - first_point[3]
-        if time_elapsed < 0.3:
-            time.sleep(0.3 - time_elapsed)
+        wait_time = 0.5
+        if time_elapsed < wait_time:
+            time.sleep(wait_time - time_elapsed)
 
-        # Predict next position (drone moves right)
-        predicted_az = (first_point[0] + self.ANGULAR_VELOCITY_DEG * 0.5) % 360.0
-        predicted_el = first_point[1]
+        # Predict next position - drone moves "right" at 18 deg/s
+        predicted_az = (first_point[0] + self.ANGULAR_VELOCITY_DEG * wait_time) % 360.0
 
-        # Arc scan with larger radius for second point
-        measurement = self.perform_arc_scan(predicted_az, predicted_el, 8.0)
+        if self.initial_inclination != -1:
+            # Inclination known - narrow search
+            predicted_el = first_point[1]
+            # Small arc scan since we know roughly where to look
+            measurement = self.perform_arc_scan(predicted_az, predicted_el, 8.0, 4.0)
+        else:
+            # Inclination unknown - must search wide area
+            # The drone could be at any elevation depending on orbital plane
+            print("[Tracker] Unknown inclination - performing wide hemisphere search")
+
+            # Search strategy: Cover the right hemisphere where drone should be
+            # Center the search 9 degrees to the right of first point
+            best_measurement = None
+            best_strength = 0
+
+            # Search in a grid pattern covering possible positions
+            # Azimuth: ±15° around predicted position (covers timing uncertainty)
+            # Elevation: ±30° from first point (covers most orbital inclinations)
+            az_offsets = [0, 5, -5, 10, -10, 15, -15]
+            el_offsets = [0, 5, -5, 10, -10, 15, -15, 20, -20, 25, -25, 30, -30]
+
+            # Quick grid search
+            for el_offset in el_offsets:
+                search_el = np.clip(first_point[1] + el_offset, 5, 85)
+
+                for az_offset in az_offsets:
+                    if not self.active or self.shared_data["shutdown"].value:
+                        break
+
+                    scan_az = (predicted_az + az_offset) % 360.0
+
+                    # Move and check
+                    self.command_motors_to_target(scan_az, search_el)
+                    if self.wait_for_position(scan_az, search_el, timeout=0.05):
+
+                        # Take readings
+                        for _ in range(2):  # Fewer readings for speed
+                            current_az, current_el, dist, strength, timestamp = self.read_current_state()
+
+                            # Check if valid with clutter filtering
+                            if self.is_valid_measurement(dist, strength, current_az, current_el):
+                                if strength > best_strength:
+                                    best_measurement = (current_az, current_el, dist, strength, timestamp)
+                                    best_strength = strength
+                                    print("[Tracker] Found candidate at ({:.1f}°, {:.1f}°) str={}".format(
+                                        current_az, current_el, strength))
+
+                            time.sleep(0.002)
+
+                # If we found a strong signal, can stop early
+                if best_strength > self.MIN_STRENGTH * 3:
+                    print("[Tracker] Strong signal found, ending search early")
+                    break
+
+            measurement = best_measurement
 
         if measurement:
             az, el, dist, strength, timestamp = measurement
             self.orbit_points.append((az, el, dist, time.time()))
-            print("[Tracker] Second point found at ({:.1f}°, {:.1f}°)".format(az, el))
+
+            # Calculate approximate inclination from first two points
+            az_change = (az - first_point[0] + 180) % 360 - 180
+            el_change = el - first_point[1]
+
+            if abs(az_change) > 0.1:
+                # Estimate the orbital plane inclination
+                # If elevation increases as azimuth increases, plane is tilted
+                approx_inclination = math.degrees(math.atan2(el_change, abs(az_change)))
+                print("[Tracker] Second point found at ({:.1f}°, {:.1f}°)".format(az, el))
+                print("[Tracker] Elevation change: {:.1f}°, Azimuth change: {:.1f}°".format(
+                    el_change, az_change))
+                print("[Tracker] Estimated orbital tilt: {:.1f}°".format(approx_inclination))
+
+                # Store this estimate for future use
+                if self.initial_inclination == -1:
+                    self.initial_inclination = first_point[1] + approx_inclination * 5
+            else:
+                print("[Tracker] Second point found at ({:.1f}°, {:.1f}°)".format(az, el))
+
             self.state = TrackerState.CALCULATING_PLANE
+        else:
+            print("[Tracker] Failed to find second point, returning to search")
+            self.orbit_points.clear()
+            self.state = TrackerState.SEARCHING
 
     def state_calculating_plane(self):
         """Calculate initial orbital plane from points"""
@@ -390,7 +595,8 @@ class CircularDroneTracker:
             predicted_az = (last_point[0] + self.ANGULAR_VELOCITY_DEG * 0.3) % 360.0
             predicted_el = last_point[1]
 
-            measurement = self.perform_arc_scan(predicted_az, predicted_el, 6.0)
+            # Use moderate search radius since we're still learning the plane
+            measurement = self.perform_arc_scan(predicted_az, predicted_el, 6.0, 4.0)
 
             if measurement:
                 az, el, dist, strength, timestamp = measurement
@@ -452,7 +658,11 @@ class CircularDroneTracker:
         pred_az, pred_el, pred_dist = self.cartesian_to_spherical(predicted_3d)
 
         # INTERCEPT: Perform arc scan around predicted position
-        measurement = self.perform_arc_scan(pred_az, pred_el, self.arc_radius_current)
+        # Use adaptive radius based on confidence
+        elevation_radius = self.arc_radius_current * 0.7  # Slightly smaller for elevation
+        measurement = self.perform_arc_scan(pred_az, pred_el,
+                                            self.arc_radius_current,
+                                            elevation_radius)
 
         if measurement:
             # Success - update tracking
@@ -526,13 +736,21 @@ class CircularDroneTracker:
         time_elapsed = time.time() - self.last_confirmed_point[3]
         predicted_angle = self.ANGULAR_VELOCITY_DEG * time_elapsed
 
-        # Search in expanding spiral
+        # Search in expanding pattern
         search_radius = 10.0 + 5.0 * (self.consecutive_misses - self.max_misses)
+        search_radius = min(search_radius, 45.0)  # Cap at 45 degrees
 
         predicted_az = (self.last_confirmed_point[0] + predicted_angle) % 360.0
         predicted_el = self.last_confirmed_point[1]
 
-        measurement = self.perform_arc_scan(predicted_az, predicted_el, search_radius)
+        # Use more scan points for wider searches
+        num_points = self.arc_scan_points_wide if search_radius > 20 else self.arc_scan_points
+
+        # Wide search in both azimuth and elevation
+        measurement = self.perform_arc_scan(predicted_az, predicted_el,
+                                            search_radius,
+                                            search_radius * 0.8,
+                                            num_points)
 
         if measurement:
             print("[Tracker] Reacquired target!")
@@ -624,7 +842,7 @@ class CircularDroneTracker:
 
 
 # Integration function for your system
-def run_circular_tracker(shared_data):
+def run_circular_tracker(shared_data, background_file="background_scan.npy"):
     """Run the circular drone tracker as a separate process"""
     try:
         # Ensure control flag exists
@@ -632,7 +850,9 @@ def run_circular_tracker(shared_data):
             from multiprocessing import Value
             shared_data["circular_tracker_active"] = Value('b', False)
 
-        tracker = CircularDroneTracker(shared_data, prediction_time_sec=0.5)
+        tracker = CircularDroneTracker(shared_data,
+                                       prediction_time_sec=0.5,
+                                       background_file=background_file)
         tracker.run()
     except Exception as e:
         print("[CircularTracker Process] Fatal error: {}".format(e))
