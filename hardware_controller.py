@@ -468,7 +468,7 @@ class ContinuousBackgroundScanner:
         if self.background_data_buffer:
             try:
                 # Use the path from shared_data
-                path = self.shared_data["background_path"].value
+                path = "background_scan.npy"
                 data_array = np.array(self.background_data_buffer)
                 np.save(path, data_array)
                 print(f"[HWCtrl] Saved {len(self.background_data_buffer)} scan points to {path}")
