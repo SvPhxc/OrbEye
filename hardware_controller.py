@@ -448,7 +448,7 @@ class ContinuousBackgroundScanner:
                 # Failsafe to prevent infinite loop
             if elapsed_time > (expected_duration * 1.2):
                 print("[HWCtrl] WARNING: Data collection timed out. Forcing stop.")
-                 break
+                break
 
             if (current_time - last_sample_time) >= collection_interval:
                 # --- ANGLE INTERPOLATION ---
