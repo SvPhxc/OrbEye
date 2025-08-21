@@ -600,7 +600,7 @@ class PWMStepperController:
         total_steps = abs(error_steps)
 
         if total_steps < 1:
-            print("[HWCtrl-Stepper] Already at target position.")
+
             return
 
         direction = 1 if error_steps > 0 else 0
