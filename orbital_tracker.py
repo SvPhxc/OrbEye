@@ -790,7 +790,7 @@ class CircularDroneTracker:
                     if heading is not None:
                         heading = heading.value if hasattr(heading, 'value') else float(heading)
                     else:
-                        heading = -1
+                        heading = 0
 
                     inclination = self.shared_data.get("inclination")
                     if inclination is not None:
@@ -798,7 +798,7 @@ class CircularDroneTracker:
                     else:
                         inclination = -1
 
-                    self.start_tracking(heading, 30.0, inclination)
+                    self.start_tracking(heading, 00.0, inclination)
                 except Exception as e:
                     print("[Tracker] Error reading initial parameters: {}".format(e))
                     self.start_tracking()
@@ -854,7 +854,7 @@ def run_circular_tracker(shared_data, background_file="background_scan.npy"):
             shared_data["circular_tracker_active"] = Value('b', False)
 
         tracker = CircularDroneTracker(shared_data,
-                                       prediction_time_sec=0.5,
+                                       prediction_time_sec=1,
                                        background_file=background_file)
         tracker.run()
     except Exception as e:
@@ -863,7 +863,7 @@ def run_circular_tracker(shared_data, background_file="background_scan.npy"):
 
 
 # Example of how to control the tracker from your main program
-def start_circular_tracking(shared_data, heading=-1, inclination=-1):
+def start_circular_tracking(shared_data, heading=0, inclination=0):
     """Start the circular tracker with given parameters"""
     try:
         if "heading" in shared_data:
