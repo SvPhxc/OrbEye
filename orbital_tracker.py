@@ -133,7 +133,7 @@ class CircularDroneTracker:
     LiDAR FOV: 2° - requires arc scanning for reliable detection
     """
 
-    def __init__(self, shared_data, prediction_time_sec=0.5, background_file="background_scan.npy"):
+    def __init__(self, shared_data, prediction_time_sec=1, background_file="background_scan.npy"):
         self.shared_data = shared_data
         self.state = TrackerState.IDLE
 
@@ -224,7 +224,7 @@ class CircularDroneTracker:
             time.sleep(0.002)
         return False
 
-    def wait_and_scan_for_target(self, center_az, center_el, wait_time=0.5, scan_radius=2.0):
+    def wait_and_scan_for_target(self, center_az, center_el, wait_time=0.5, scan_radius=15.0):
         """
         Move to position and wait for drone to arrive, continuously scanning.
         Returns the strongest measurement during the wait period.
