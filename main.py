@@ -8,7 +8,7 @@ from multiprocessing import Process, Array, Value, Manager
 import traceback
 from tracking_logic import run_tracker_process
 from tle_generator import run_tle_generator
-from circular_tracker import run_circular_tracker
+from orbital_tracker import run_circular_tracker
 from grafana_visualisation import publish_data_to_aws
 
 # Import all process functions
@@ -171,7 +171,7 @@ if __name__ == "__main__":
         "circular_tracker_active": Value('b', False),
 
         #----Grafana Visualization---
-        "grafana_enabled": Value('b', True),  # Enable Grafana visualization
+        "grafana_enabled": Value('b', False),  # Enable Grafana visualization
     }
 
     # Initialize the character arrays with their default values
