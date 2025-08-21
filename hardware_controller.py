@@ -425,57 +425,57 @@ class ContinuousBackgroundScanner:
         print("[HWCtrl] Stepper hardware has been reset and is ready.")
 
 
-        def _collect_data_during_movement(self, lidar_controller, start_az, end_az):
+    def _collect_data_during_movement(self, lidar_controller, start_az, end_az):
             """
             Collect LiDAR data using time-based interpolation for accurate,
             real-time angle estimation, avoiding lag from software callbacks.
             """
-            collection_interval = 1.0 / SCAN_DATA_RATE
-            sweep_start_time = time.time()
-            last_sample_time = sweep_start_time
+        collection_interval = 1.0 / SCAN_DATA_RATE
+        sweep_start_time = time.time()
+        last_sample_time = sweep_start_time
+        total_distance = 360.0
+        expected_duration = total_distance / SCAN_AZIMUTH_SPEED
+        direction_multiplier = 1.0 if end_az > start_az else -1.0
 
-            total_distance = 360.0
-            expected_duration = total_distance / SCAN_AZIMUTH_SPEED
-            direction_multiplier = 1.0 if end_az > start_az else -1.0
-
-            print(f"[HWCtrl] Data collection with interpolation started for {expected_duration:.2f}s.")
-            sample_count = 0
+        print(f"[HWCtrl] Data collection with interpolation started for {expected_duration:.2f}s.")
+        sample_count = 0
 
             # Loop until the movement thread signals it is done
-            while not self.movement_complete.is_set():
-                current_time = time.time()
-                elapsed_time = current_time - sweep_start_time
+        while not self.movement_complete.is_set():
+            current_time = time.time()
+             elapsed_time = current_time - sweep_start_time
 
                 # Failsafe to prevent infinite loop
-                if elapsed_time > (expected_duration * 1.2):
-                    print("[HWCtrl] WARNING: Data collection timed out. Forcing stop.")
-                    break
+            if elapsed_time > (expected_duration * 1.2):
+                print("[HWCtrl] WARNING: Data collection timed out. Forcing stop.")
+                 break
 
-                if (current_time - last_sample_time) >= collection_interval:
-                    # --- ANGLE INTERPOLATION ---
-                    # Calculate the predicted angle based on time. This is smooth and lag-free.
-                    progress = min(elapsed_time / expected_duration, 1.0)  # Cap progress at 100%
+            if (current_time - last_sample_time) >= collection_interval:
+                # --- ANGLE INTERPOLATION ---
+                # Calculate the predicted angle based on time. This is smooth and lag-free.
+                progress = min(elapsed_time / expected_duration, 1.0)  # Cap progress at 100%
 
                     # Handle start angle for forward vs backward scan
-                    if direction_multiplier == 1:  # Forward 0 -> 360
-                        interpolated_az = start_az + (total_distance * progress)
-                    else:  # Backward 360 -> 0
-                        interpolated_az = start_az - (total_distance * progress)
+                if direction_multiplier == 1:  # Forward 0 -> 360
+                    interpolated_az = start_az + (total_distance * progress)
+                else:  # Backward 360 -> 0
+                    interpolated_az = start_az - (total_distance * progress)
 
-                    interpolated_az %= 360.0  # Keep angle in 0-360 range
+                interpolated_az %= 360.0  # Keep angle in 0-360 range
 
-                    current_el = self.shared_data["servo_degrees"].value
-                    dist, strength, ts = lidar_controller.get_lidar_data()
+                current_el = self.shared_data["servo_degrees"].value
+                dist, strength, ts = lidar_controller.get_lidar_data()
 
-                    if dist is not None and dist > 0:
-                        self.background_data_buffer.append([interpolated_az, current_el, dist, strength])
-                        sample_count += 1
+                if dist is not None and dist > 0:
+                    self.background_data_buffer.append([interpolated_az, current_el, dist, strength])
+                    sample_count += 1
 
-                    last_sample_time = current_time
-                else:
-                    time.sleep(0.0005)  # Prevent high CPU usage
+                last_sample_time = current_time
+            else:
+                time.sleep(0.0005)  # Prevent high CPU usage
 
-            print(f"[HWCtrl] Data collection finished. Collected {sample_count} samples.")
+
+        print(f"[HWCtrl] Data collection finished. Collected {sample_count} samples.")
 
         print(f"[HWCtrl] Data collection completed. Total samples: {sample_count}")
 
