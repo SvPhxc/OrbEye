@@ -17,7 +17,7 @@ def make_connection():
         pri_key_filepath=PATH_TO_KEY,
         ca_filepath=PATH_TO_ROOT_CA,
         client_id=client_id,
-        clean_session=True,
+        clean_session=False,
         keep_alive_secs=30,
         on_connection_interrupted=lambda c, e, **kw: print(f"[MQTT] interrupted: {e}"),
         on_connection_resumed=lambda c, rc, sp, **kw: print(f"[MQTT] resumed rc={rc} session_present={sp}")
