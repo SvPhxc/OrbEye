@@ -465,8 +465,8 @@ def run_orbit_patrol_from_query(shared_data,
                                 full_circle_samples: int = 720,
                                 enable_spiral_search: bool = False,
                                 spiral_radius_deg: float = 0.5,
-                                spiral_points_per_rotation: int = 16,
-                                spiral_rotations: int = 2):
+                                spiral_points_per_rotation: int = 8,
+                                spiral_rotations: int = 1):
     """
     If full_circle=True, ignore time sampling and generate the entire orbital plane
     from RAAN & inclination (read from shared_data["rann"], ["inclination"]).
