@@ -131,7 +131,7 @@ def _perform_spiral_search(shared_data, center_az, center_el, spiral_radius_deg,
         if not _goto_and_wait(shared_data, az, el, settle_timeout_s=0.5):
             continue
 
-        time.sleep(0.05)
+        time.sleep(0.005)
 
         strength = float(shared_data["lidar_data"][1])
         ts = float(shared_data["lidar_data"][2])
@@ -244,7 +244,7 @@ def _search_with_continuous_spiral(shared_data, center_az, center_el, deadline_s
                         return True, (az, el)
                 else:
                     ok_streak = 0
-            time.sleep(0.01)
+            time.sleep(0.001)
 
     print("[Patrol.Search] Deadline reached with no confirmed detection.")
     return False, (center_az, center_el)
@@ -477,7 +477,7 @@ def run_orbit_patrol_from_query(shared_data,
                                 continuous_spiral_search: bool = False,
                                 spiral_radius_deg: float = 0.5,
                                 spiral_points_per_rotation: int = 8,
-                                spiral_rotations: int = 2):
+                                spiral_rotations: int = 1):
     """
     If full_circle=True, generate the entire orbital plane.
     Otherwise, sample the orbit over a time window via datahandler.
