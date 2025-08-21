@@ -30,15 +30,16 @@ print("Connected!\n")
 # ==== UTILITIES ====
 def current_timestamp():
     return int(time.time())
-def publish_simple(topic, payload_data, batch_timestamp):
+
+def publish_simple(topic, payload_data):
     """Simplified publish function with direct payload"""
     # Add timestamp to the payload
     if isinstance(payload_data, dict):
-        payload_data["timestamp"] = batch_timestamp
+        payload_data["timestamp"] = current_timestamp()
     else:
         payload_data = {
             "value": payload_data,
-            "timestamp": batch_timestamp
+            "timestamp": current_timestamp()
         }
     
     mqtt_connection.publish(
@@ -46,15 +47,15 @@ def publish_simple(topic, payload_data, batch_timestamp):
         payload=json.dumps(payload_data), 
         qos=mqtt.QoS.AT_LEAST_ONCE
     )
-# print(f"Published to {topic}: {json.dumps(payload_data, indent=2)}")
+    print(f"Published to {topic}: {json.dumps(payload_data, indent=2)}")
 
-def publish_original(topic, value, batch_timestamp):
+def publish_original(topic, value):
     """Original publish function - fixed logic"""
     if isinstance(value, dict):
         # For dictionaries, send the dict directly as the value
         payload = {
             "value": value,
-            "timestamp": {"timeInSeconds": batch_timestamp},
+            "timestamp": {"timeInSeconds": current_timestamp()},
             "quality": "GOOD"
         }
     else:
@@ -62,14 +63,14 @@ def publish_original(topic, value, batch_timestamp):
         value_key = "stringValue" if isinstance(value, str) else "doubleValue"
         payload = {
             "value": {value_key: value},
-            "timestamp": {"timeInSeconds": batch_timestamp},
+            "timestamp": {"timeInSeconds": current_timestamp()},
             "quality": "GOOD"
         }
     
     mqtt_connection.publish(topic=topic, payload=json.dumps(payload), qos=mqtt.QoS.AT_LEAST_ONCE)
-    #print(f"Published to {topic}: {json.dumps(payload)}")
+    print(f"Published to {topic}: {json.dumps(payload)}")
 
-# ==== FAKE DATA GENERATORS (No changes here) ====
+# ==== FAKE DATA GENERATORS ====
 def generate_cpf():
     return {
         "format_version": "1.0",
@@ -111,36 +112,35 @@ def generate_tle():
         "inclination": 51.6461
     }
 
-# ==== MAIN LOOP (Corrected) ====
 def publish_data_to_aws(shared_data):
     try:
         while True:
             if not shared_data["shutdown"].value:
-                # 1. Generate the timestamp once before the loop
-                batch_timestamp = int(time.time())
-                
+                # Simple approach - direct payloads
                 simple_topics = {
                     "tracker/lidar/distance": round(shared_data["lidar_data"][0],2),
                     "tracker/lidar/intensity": round(shared_data["lidar_data"][1],2),
                     "tracker/tracker/pan_angle": round(shared_data["stepper_degrees"].value,2),
                     "tracker/tracker/tilt_angle": round(shared_data["servo_degrees"].value,2),
-                    #"tracker/orbit/tle": shared_data["tle"].value,
-                    "tracker/position/x":round(random.uniform(0, 360), 2),
-                    "tracker/position/y":round(random.uniform(0, 360), 2),
-                    "tracker/position/z": round(random.uniform(0, 360), 2)
+                    #"tracker/orbit/cpf": shared_data["cpf"].value,
+                    #"tracker/orbit/altitude": shared_data["altitude"].value,
+                    "tracker/orbit/tle": shared_data["tle"].value,
+                    "tracker/position/x": round(shared_data["postion_x"], 2),
+                    "tracker/position/y": round(shared_data["postion_y"], 2),
+                    "tracker/position/z": round(shared_data["postion_z"], 2)
                 }
                 
                 for topic, payload in simple_topics.items():
-                    # 2. Pass the single timestamp into the publishing function
-                    publish_simple(topic, payload, batch_timestamp)
+                    publish_simple(topic, payload)
                 
                 print("\nAll messages published for this cycle.")
             else:
                 print("Shutdown flag is set. Exiting data publishing loop.")
+                # Exit the while loop
                 break
 
             # A longer pause here to control the overall publishing frequency
-            time.sleep(2) 
+            time.sleep(5) 
             
     except KeyboardInterrupt:
         print("\n\nUser terminated the process.")
@@ -150,3 +150,6 @@ def publish_data_to_aws(shared_data):
         print("Disconnecting from MQTT...")
         mqtt_connection.disconnect().result()
         print("Disconnected.")
+
+
+
