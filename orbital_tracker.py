@@ -155,7 +155,7 @@ class CircularDroneTracker:
         self.prediction_angle = self.ANGULAR_VELOCITY_DEG * prediction_time_sec
 
         # Arc scan parameters (adaptive)
-        self.arc_radius_initial = 15.0  # Initial arc scan radius in degrees
+        self.arc_radius_initial = 90.0  # Initial arc scan radius in degrees
         self.arc_radius_min = 1.5  # Minimum arc radius (slightly larger than FOV/2)
         self.arc_radius_current = self.arc_radius_initial
         self.arc_scan_points = 5  # Default number of points in arc scan
