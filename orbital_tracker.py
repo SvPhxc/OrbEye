@@ -34,6 +34,7 @@ import traceback
 # Try to import scipy for KD-tree, fall back to simple implementation if not available
 try:
     from scipy.spatial import cKDTree
+
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
@@ -104,7 +105,7 @@ class ClutterFilter:
                 el_diff = np.abs(self.bg_elevations - elevation)
 
                 # Combined angular distance
-                angular_dist = np.sqrt(az_diff**2 + el_diff**2)
+                angular_dist = np.sqrt(az_diff ** 2 + el_diff ** 2)
                 min_idx = np.argmin(angular_dist)
 
                 if angular_dist[min_idx] < self.angular_tolerance:
@@ -119,6 +120,7 @@ class ClutterFilter:
         # Object is foreground if significantly closer than background
         return distance < (bg_dist - self.distance_margin_cm)
 
+
 class TrackerState(Enum):
     IDLE = 0
     SEARCHING = 1
@@ -126,6 +128,7 @@ class TrackerState(Enum):
     CALCULATING_PLANE = 3
     TRACKING = 4
     LOST = 5
+
 
 class CircularDroneTracker:
     """
@@ -432,11 +435,11 @@ class CircularDroneTracker:
         n = len(az_array)
         sum_az = np.sum(az_array)
         sum_el = np.sum(el_array)
-        sum_az_sq = np.sum(az_array**2)
+        sum_az_sq = np.sum(az_array ** 2)
         sum_az_el = np.sum(az_array * el_array)
 
         # Slope (tan of inclination)
-        denominator = n * sum_az_sq - sum_az**2
+        denominator = n * sum_az_sq - sum_az ** 2
         if abs(denominator) > 1e-10:
             slope = (n * sum_az_el - sum_az * sum_el) / denominator
             intercept = (sum_el - slope * sum_az) / n
@@ -446,8 +449,8 @@ class CircularDroneTracker:
 
             # Calculate R-squared for fit quality
             el_pred = intercept + slope * az_array
-            ss_res = np.sum((el_array - el_pred)**2)
-            ss_tot = np.sum((el_array - np.mean(el_array))**2)
+            ss_res = np.sum((el_array - el_pred) ** 2)
+            ss_tot = np.sum((el_array - np.mean(el_array)) ** 2)
 
             if ss_tot > 0:
                 r_squared = 1 - (ss_res / ss_tot)
@@ -570,7 +573,7 @@ class CircularDroneTracker:
             # Scan points along the line
             for i in range(self.arc_scan_points):
                 # Distribute points along the line
-                offset = -scan_length/2 + (scan_length * i / (self.arc_scan_points - 1))
+                offset = -scan_length / 2 + (scan_length * i / (self.arc_scan_points - 1))
 
                 scan_az = (center_az + offset) % 360.0
                 scan_el = center_el + offset * tan_incl
@@ -630,7 +633,7 @@ class CircularDroneTracker:
         print("[Tracker] Target: 2m distance, 18°/s angular velocity")
         print("[Tracker] Initial heading: {}".format(
             "{:.1f}°".format(initial_heading) if initial_heading != -1 else "UNKNOWN (will search)"))
-        print("[Tracker] Heading deviation: ±{:.1f}°".format(heading_deviation/2))
+        print("[Tracker] Heading deviation: ±{:.1f}°".format(heading_deviation / 2))
         print("[Tracker] Initial inclination: {}".format(
             "{:.1f}°".format(initial_inclination) if initial_inclination != -1 else "UNKNOWN (will determine)"))
         if initial_inclination != -1:
@@ -741,7 +744,7 @@ class CircularDroneTracker:
             best_strength = 0
 
             # Try different inclinations within the deviation range
-            for incl_offset in [0, -self.inclination_deviation/2, self.inclination_deviation/2,
+            for incl_offset in [0, -self.inclination_deviation / 2, self.inclination_deviation / 2,
                                 -self.inclination_deviation, self.inclination_deviation]:
                 test_incl = self.initial_inclination + incl_offset
                 tan_incl = math.tan(math.radians(test_incl))
@@ -800,7 +803,8 @@ class CircularDroneTracker:
 
                 # Store the calculated inclination
                 self.orbital_inclination = calculated_inclination
-                self.orbital_el_intercept = first_point[1] - first_point[0] * math.tan(math.radians(calculated_inclination))
+                self.orbital_el_intercept = first_point[1] - first_point[0] * math.tan(
+                    math.radians(calculated_inclination))
             else:
                 print("[Tracker] Points too close in azimuth, need more separation")
                 self.orbit_points.pop()  # Remove second point
@@ -1105,7 +1109,8 @@ class CircularDroneTracker:
 
                     inclination_dev = self.shared_data.get("inclination_deviation")
                     if inclination_dev is not None:
-                        inclination_dev = inclination_dev.value if hasattr(inclination_dev, 'value') else float(inclination_dev)
+                        inclination_dev = inclination_dev.value if hasattr(inclination_dev, 'value') else float(
+                            inclination_dev)
                     else:
                         inclination_dev = 10.0
 
