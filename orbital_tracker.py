@@ -1016,7 +1016,7 @@ class CircularDroneTracker:
                     if inclination is not None:
                         inclination = inclination.value if hasattr(inclination, 'value') else float(inclination)
                     else:
-                        inclination =0
+                        inclination =30
 
                     self.start_tracking(heading, 0.0, inclination)
                 except Exception as e:
