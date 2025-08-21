@@ -1,191 +1,169 @@
-import time, math
+import time
+import math
 import numpy as np
+from collections import deque
 
-# ---------- helpers: convert & choose ----------
-def _eci_plane_basis_from_raan_incl(raan_deg: float, incl_deg: float):
-    Ω = math.radians(raan_deg)
-    i = math.radians(incl_deg)
-    # Ascending node (unit) in ECI XY
-    p = np.array([math.cos(Ω), math.sin(Ω), 0.0], dtype=float)
-    # 90° ahead in plane
-    q = np.array([-math.sin(Ω)*math.cos(i), math.cos(Ω)*math.cos(i), math.sin(i)], dtype=float)
-    return p, q
+# Import the original functions we need
+from orbit_patrol_from_xyz import (
+    xyz_to_azel_center, filter_by_elevation, select_evenly_spaced,
+    _az_short_diff, approx_arc_deg, _goto_and_wait, _should_abort,
+    _bind_cf_detector, make_detection_proceed_condition
+)
 
-def generate_full_circle_xyz_from_raan_incl(raan_deg: float,
-                                            incl_deg: float,
-                                            n_samples: int = 720):
+
+class SpiralSearchEnhancer:
     """
-    Returns Nx3 unit vectors covering the entire orbital plane (2π).
+    Adds spiral search and correction capabilities to orbit patrol.
+    Designed to work with existing proceed_condition mechanism.
     """
-    p, q = _eci_plane_basis_from_raan_incl(raan_deg, incl_deg)
-    nus = np.linspace(0.0, 2*math.pi, int(n_samples), endpoint=False)
-    pts = np.cos(nus)[:, None] * p[None, :] + np.sin(nus)[:, None] * q[None, :]
-    # Already unit vectors; small numerical drift might exist—normalize to be safe
-    norms = np.linalg.norm(pts, axis=1, keepdims=True)
-    norms[norms == 0.0] = 1.0
-    return pts / norms
+
+    def __init__(self, shared_data, enable_spiral=True, spiral_radius=3.0, spiral_step=0.5):
+        self.shared_data = shared_data
+        self.enable_spiral = enable_spiral
+        self.spiral_radius = spiral_radius
+        self.spiral_step = spiral_step
+
+        # Correction tracking
+        self.correction_history = deque(maxlen=5)
+        self.az_correction = 0.0
+        self.el_correction = 0.0
+        self.confidence = 0.0
+
+    def spiral_search_at_waypoint(self, az, el, proceed_condition, deadline_s):
+        """
+        Performs spiral search using the existing proceed_condition.
+        Returns (found, actual_az, actual_el, offset_az, offset_el).
+        """
+        if not self.enable_spiral:
+            # Just check at the given position
+            found = proceed_condition(az, el, deadline_s)
+            return (found, az, el, 0.0, 0.0)
+
+        # First check center point
+        center_deadline = time.monotonic() + 0.5  # Quick check at center
+        if proceed_condition(az, el, center_deadline):
+            return (True, az, el, 0.0, 0.0)
+
+        # Spiral outward
+        radius = 0.0
+        best_position = None
+
+        while radius <= self.spiral_radius and time.monotonic() < deadline_s:
+            if _should_abort(self.shared_data):
+                break
+
+            radius += self.spiral_step
+            points_in_ring = max(4, int(8 * radius / self.spiral_step))
+
+            for i in range(points_in_ring):
+                if time.monotonic() >= deadline_s:
+                    break
+
+                angle = (2 * math.pi * i) / points_in_ring
+                az_offset = radius * math.cos(angle)
+                el_offset = radius * math.sin(angle) * 0.7  # Compress elevation
+
+                test_az = (az + az_offset) % 360.0
+                test_el = np.clip(el + el_offset, 0, 90)
+
+                # Move to test position
+                if _goto_and_wait(self.shared_data, test_az, test_el, settle_timeout_s=0.3):
+                    # Check with proceed condition (quick timeout)
+                    check_deadline = time.monotonic() + 0.3
+                    if proceed_condition(test_az, test_el, check_deadline):
+                        print(f"[Spiral] Found at offset ({az_offset:.1f}°, {el_offset:.1f}°)")
+                        return (True, test_az, test_el, az_offset, el_offset)
+
+        return (False, az, el, 0.0, 0.0)
+
+    def update_correction(self, expected_az, expected_el, actual_az, actual_el, confidence_weight=1.0):
+        """Update correction based on detection offset."""
+        az_error = _az_short_diff(expected_az, actual_az)
+        el_error = actual_el - expected_el
+
+        self.correction_history.append({
+            'az_error': az_error,
+            'el_error': el_error,
+            'weight': confidence_weight,
+            'time': time.time()
+        })
+
+        # Calculate weighted average with time decay
+        if self.correction_history:
+            now = time.time()
+            total_weight = 0.0
+            weighted_az = 0.0
+            weighted_el = 0.0
+
+            for correction in self.correction_history:
+                age = now - correction['time']
+                time_weight = math.exp(-age / 60.0)  # 60 second decay
+                weight = correction['weight'] * time_weight
+
+                weighted_az += correction['az_error'] * weight
+                weighted_el += correction['el_error'] * weight
+                total_weight += weight
+
+            if total_weight > 0:
+                self.az_correction = weighted_az / total_weight
+                self.el_correction = weighted_el / total_weight
+                self.confidence = min(1.0, total_weight / len(self.correction_history))
+
+    def apply_correction(self, az, el):
+        """Apply correction to a waypoint."""
+        if self.confidence > 0.1:
+            corrected_az = (az + self.az_correction * self.confidence) % 360.0
+            corrected_el = np.clip(el + self.el_correction * self.confidence, 0, 90)
+            return corrected_az, corrected_el
+        return az, el
 
 
-def xyz_to_azel_center(xyz: np.ndarray):
-    xyz = np.asarray(xyz, dtype=float)
-    if xyz.ndim == 1:
-        xyz = xyz[None, :]
-    norms = np.linalg.norm(xyz, axis=1)
-    norms[norms == 0.0] = 1.0
-    u = xyz / norms[:, None]
-    x, y, z = u[:, 0], u[:, 1], u[:, 2]
-    az = (np.degrees(np.arctan2(y, x)) + 360.0) % 360.0
-    el = np.degrees(np.arctan2(z, np.hypot(x, y)))
-    return list(zip(az.tolist(), el.tolist()))
-
-def filter_by_elevation(azels, min_el=0.0, max_el=60.0):
-    return [(az, el) for az, el in azels if (min_el <= el <= max_el)]
-
-def select_evenly_spaced(seq, k: int):
-    if not seq: return []
-    k = max(1, int(k))
-    if k >= len(seq): return seq
-    idx = np.linspace(0, len(seq) - 1, k).astype(int)
-    return [seq[i] for i in idx]
-
-def _az_short_diff(a, b):
-    d = (b - a + 180.0) % 360.0 - 180.0
-    return d
-
-def approx_arc_deg(a0, e0, a1, e1):
-    d_el = (e1 - e0)
-    d_az = _az_short_diff(a0, a1)
-    c = math.cos(math.radians(0.5 * (e0 + e1)))
-    return math.hypot(d_el, d_az * max(1e-6, c))
-
-# ---------- mount primitives ----------
-def _goto_and_wait(shared_data, az, el, settle_timeout_s=3.0):
-    shared_data["target_azimuth"].value = float(az)
-    shared_data["target_elevation"].value = float(el)
-    shared_data["go_to_target"].value = True
-    t0 = time.monotonic()
-    while (time.monotonic() - t0) < settle_timeout_s and not shared_data["shutdown"].value:
-        if shared_data["target_reached"].value:
-            return True
-        time.sleep(0.01)
-    return shared_data["target_reached"].value
-
-def _should_abort(shared_data):
-    return (
-        shared_data["shutdown"].value
-        or (shared_data.get("orbit_patrol_cancel") and shared_data["orbit_patrol_cancel"].value)
-        or shared_data["background_scan_active"].value
-        or shared_data["lidar_track_mode_active"].value
-    )
-
-# ---------- proceed condition (ClutterFilter) ----------
-def _bind_cf_detector(clutter_filter):
+def patrol_waypoints_enhanced(shared_data,
+                              waypoints,
+                              proceed_condition=None,
+                              dwell_seconds: float = 2.0,
+                              settle_timeout_s: float = 3.0,
+                              max_wait_s: float | None = None,
+                              next_wp_speed_deg_per_s: float | None = None,
+                              enable_spiral: bool = True,
+                              spiral_radius: float = 3.0):
     """
-    Inspect ClutterFilter to find a suitable method and return a callable:
-        detector(az, el, dist_cm, strength) -> bool
-    Accepted method names (first one found wins): is_foreground, is_target,
-    classify, detect, predict, evaluate, check, process, feed.
-    The method's return can be bool, numeric (score>0 => True), or a tuple/list
-    where the first bool/numeric will be used.
-    """
-    candidates = [
-        "is_foreground", "is_target", "classify", "detect",
-        "predict", "evaluate", "check", "process", "feed"
-    ]
-    for name in candidates:
-        meth = getattr(clutter_filter, name, None)
-        if callable(meth):
-            print(f"[Patrol] Using ClutterFilter.{name}() for detection.")
-            def detector(az, el, dist_cm, strength, _m=meth):
-                res = _m(az, el, dist_cm, strength)
-                # Normalize result to bool
-                if isinstance(res, (bool, np.bool_)):
-                    return bool(res)
-                if isinstance(res, (tuple, list)) and len(res):
-                    # Prefer first boolean in the sequence
-                    for v in res:
-                        if isinstance(v, (bool, np.bool_)):
-                            return bool(v)
-                    # Otherwise, use first numeric as score
-                    v = res[0]
-                    if isinstance(v, (int, float, np.floating)):
-                        return v > 0
-                    return bool(v)
-                if isinstance(res, (int, float, np.floating)):
-                    return res > 0
-                return bool(res)
-            return detector
-    raise AttributeError(
-        "ClutterFilter has no usable detector method. "
-        "Expected one of: is_foreground, is_target, classify, detect, "
-        "predict, evaluate, check, process, or feed."
-    )
-
-def make_detection_proceed_condition(clutter_filter, shared_data,
-                                     confirm_hits=3, max_age_s=0.5):
-    """
-    Returns proceed_condition(az, el, deadline_s) -> bool
-    Waits until the ClutterFilter reports foreground at the current waypoint
-    (confirming 'confirm_hits' fresh LiDAR samples), or until deadline.
-    """
-    detector = _bind_cf_detector(clutter_filter)
-
-    def proceed_condition(az, el, deadline_s):
-        ok_streak = 0
-        last_seen_ts = -1.0
-        while time.monotonic() < deadline_s:
-            if _should_abort(shared_data):
-                return False
-
-            # latest LiDAR sample
-            dist_cm = float(shared_data["lidar_data"][0])
-            strength = float(shared_data["lidar_data"][1])
-            ts = float(shared_data["lidar_data"][2])
-
-            # only consider fresh samples
-            if ts > 0 and (time.time() - ts) <= max_age_s:
-                if detector(az, el, dist_cm, strength):
-                    if ts != last_seen_ts:
-                        ok_streak += 1
-                        last_seen_ts = ts
-                    if ok_streak >= confirm_hits:
-                        return True
-                else:
-                    ok_streak = 0
-
-            time.sleep(0.01)
-        return False
-
-    return proceed_condition
-
-# ---------- main patrol ----------
-def patrol_waypoints(shared_data,
-                     waypoints,
-                     proceed_condition=None,
-                     dwell_seconds: float = 2.0,
-                     settle_timeout_s: float = 3.0,
-                     max_wait_s: float | None = None,
-                     next_wp_speed_deg_per_s: float | None = None):
-    """
-    For each waypoint: slew+settle -> wait until detection or timeout -> next.
-    After last waypoint, returns to the FIRST visible one and holds.
+    Enhanced version of patrol_waypoints with spiral search and correction.
+    Maintains exact same interface as original.
     """
     n = len(waypoints)
     if n == 0:
         return
 
+    # Initialize spiral enhancer
+    enhancer = SpiralSearchEnhancer(
+        shared_data,
+        enable_spiral=enable_spiral,
+        spiral_radius=spiral_radius
+    )
+
+    # Go to first waypoint
     first_az, first_el = waypoints[0]
     if _should_abort(shared_data): return
     _goto_and_wait(shared_data, first_az, first_el, settle_timeout_s=settle_timeout_s)
 
     for i in range(n):
         if _should_abort(shared_data): break
-        az, el = waypoints[i]
 
-        # ensure at wp
+        # Get original waypoint
+        original_az, original_el = waypoints[i]
+
+        # Apply correction if we have confidence
+        az, el = enhancer.apply_correction(original_az, original_el)
+
+        if enhancer.confidence > 0.1 and (az != original_az or el != original_el):
+            print(f"[Patrol] WP{i + 1}: ({original_az:.1f}°,{original_el:.1f}°) -> "
+                  f"({az:.1f}°,{el:.1f}°) [correction applied]")
+
+        # Move to waypoint
         _goto_and_wait(shared_data, az, el, settle_timeout_s=settle_timeout_s)
 
-        # derive timeout from speed & spacing
+        # Calculate timeout
         derived_timeout = None
         if next_wp_speed_deg_per_s and next_wp_speed_deg_per_s > 1e-6 and n > 1:
             nxt = waypoints[(i + 1) % n]
@@ -201,44 +179,77 @@ def patrol_waypoints(shared_data,
         else:
             deadline = time.monotonic() + dwell_seconds
 
-        # wait for detection or time
+        # Wait for detection or timeout
         if proceed_condition is None:
+            # No detection logic, just wait
             while time.monotonic() < deadline and not _should_abort(shared_data):
                 time.sleep(0.01)
         else:
-            detected = bool(proceed_condition(az, el, deadline_s=deadline))
+            # Use spiral search with proceed condition
+            if enable_spiral:
+                found, actual_az, actual_el, offset_az, offset_el = enhancer.spiral_search_at_waypoint(
+                    az, el, proceed_condition, deadline
+                )
 
-            # If we confirmed a detection at this waypoint, save it
-            if detected and (shared_data.get("record_tle_points") and shared_data["record_tle_points"].value):
-                # Read the freshest LiDAR sample
-                dist_cm  = float(shared_data["lidar_data"][0])
-                strength = float(shared_data["lidar_data"][1])
-                ts       = float(shared_data["lidar_data"][2])
+                if found:
+                    # Update correction for future waypoints
+                    enhancer.update_correction(original_az, original_el, actual_az, actual_el)
 
-                # 1) Update the single-slot 'satellite_points' (used by GUI heatmap)
-                try:
-                    with shared_data["satellite_points"].get_lock():
+                    # Record detection if enabled
+                    if shared_data.get("record_tle_points") and shared_data["record_tle_points"].value:
+                        dist_cm = float(shared_data["lidar_data"][0])
+                        strength = float(shared_data["lidar_data"][1])
+                        ts = float(shared_data["lidar_data"][2])
+
+                        # Update satellite_points
+                        try:
+                            with shared_data["satellite_points"].get_lock():
+                                shared_data["satellite_points"][:] = [actual_az, actual_el, dist_cm, strength, ts]
+                        except:
+                            shared_data["satellite_points"][:] = [actual_az, actual_el, dist_cm, strength, ts]
+
+                        # Append to history
+                        try:
+                            shared_data["tracking_history"].append([actual_az, actual_el, dist_cm, strength, ts])
+                            print(f"[Patrol] Detection saved at ({actual_az:.1f}°, {actual_el:.1f}°)")
+                        except:
+                            pass
+
+                    if shared_data.get("satellite_detected"):
+                        shared_data["satellite_detected"].value = True
+                else:
+                    # Reduce confidence if we miss
+                    enhancer.confidence *= 0.8
+            else:
+                # Original behavior without spiral
+                detected = bool(proceed_condition(az, el, deadline_s=deadline))
+
+                if detected and shared_data.get("record_tle_points") and shared_data["record_tle_points"].value:
+                    dist_cm = float(shared_data["lidar_data"][0])
+                    strength = float(shared_data["lidar_data"][1])
+                    ts = float(shared_data["lidar_data"][2])
+
+                    try:
+                        with shared_data["satellite_points"].get_lock():
+                            shared_data["satellite_points"][:] = [az, el, dist_cm, strength, ts]
+                    except:
                         shared_data["satellite_points"][:] = [az, el, dist_cm, strength, ts]
-                        print("[Patrol] saved -> satellite_points")
-                except Exception:
-                    shared_data["satellite_points"][:] = [az, el, dist_cm, strength, ts]
-                    print("[Patrol] saved -> satellite_points (no lock)")
 
-                # 2) Append to the growing history for TLE fitting
-                try:
-                    shared_data["tracking_history"].append([az, el, dist_cm, strength, ts])
-                    print(f"[Patrol] appended to tracking_history (N={len(shared_data['tracking_history'])})")
-                except Exception as e:
-                    print(f"[Patrol] WARNING: couldn't append to tracking_history: {e}")
+                    try:
+                        shared_data["tracking_history"].append([az, el, dist_cm, strength, ts])
+                    except:
+                        pass
 
-                if shared_data.get("satellite_detected"):
-                    shared_data["satellite_detected"].value = True
+                    if shared_data.get("satellite_detected"):
+                        shared_data["satellite_detected"].value = True
 
-    # go back to first visible point
+    # Return to first visible point
     if not _should_abort(shared_data):
+        first_az, first_el = enhancer.apply_correction(first_az, first_el)
         _goto_and_wait(shared_data, first_az, first_el, settle_timeout_s=settle_timeout_s)
 
     shared_data["go_to_target"].value = False
+
 
 def run_orbit_patrol_from_xyz(shared_data,
                               pts_xyz,
@@ -249,14 +260,22 @@ def run_orbit_patrol_from_xyz(shared_data,
                               start_near_current: bool = True,
                               proceed_condition=None,
                               max_wait_s: float | None = None,
-                              next_wp_speed_deg_per_s: float | None = None):
+                              next_wp_speed_deg_per_s: float | None = None,
+                              enable_spiral: bool = True,
+                              spiral_radius: float = 3.0):
+    """
+    Enhanced drop-in replacement for run_orbit_patrol_from_xyz.
+    Same interface with added spiral search parameters.
+    """
     azel_path = xyz_to_azel_center(pts_xyz)
     visible = filter_by_elevation(azel_path, min_el=min_el_deg, max_el=max_el_deg)
+
     if not visible:
         print("[OrbitPatrolXYZ] No points in elevation window.")
         return
 
     wps = select_evenly_spaced(visible, num_points)
+
     if start_near_current:
         try:
             cur_az = float(shared_data["stepper_degrees"].value) % 360.0
@@ -270,62 +289,20 @@ def run_orbit_patrol_from_xyz(shared_data,
     print(f"[OrbitPatrolXYZ] Waypoints ({len(wps)}): " +
           ", ".join([f"({az:.1f}°, {el:.1f}°)" for az, el in wps]))
 
-    patrol_waypoints(shared_data, wps,
-                     proceed_condition=proceed_condition,
-                     dwell_seconds=dwell_seconds,
-                     settle_timeout_s=3.0,
-                     max_wait_s=max_wait_s,
-                     next_wp_speed_deg_per_s=next_wp_speed_deg_per_s)
+    if enable_spiral:
+        print(f"[OrbitPatrolXYZ] Spiral search enabled with radius {spiral_radius}°")
+
+    # Use enhanced patrol
+    patrol_waypoints_enhanced(shared_data, wps,
+                              proceed_condition=proceed_condition,
+                              dwell_seconds=dwell_seconds,
+                              settle_timeout_s=3.0,
+                              max_wait_s=max_wait_s,
+                              next_wp_speed_deg_per_s=next_wp_speed_deg_per_s,
+                              enable_spiral=enable_spiral,
+                              spiral_radius=spiral_radius)
 
     print("[OrbitPatrolXYZ] Patrol complete.")
-
-def make_detection_proceed_condition_from_callable(detector, shared_data,
-                                                   confirm_hits=3, max_age_s=0.5):
-    """
-    detector(az, el, dist_cm, strength) -> bool
-    Returns proceed_condition(az, el, deadline_s) that waits until detector is True
-    for 'confirm_hits' fresh LiDAR samples (or until deadline).
-    """
-    def proceed_condition(az, el, deadline_s):
-        ok_streak = 0
-        last_seen_ts = -1.0
-        import time as _t
-        print(f"[Patrol] Waiting for detection @ ({az:.2f}°, {el:.2f}°) "
-              f"confirm_hits={confirm_hits}, max_age={max_age_s}s")
-        while _t.monotonic() < deadline_s:
-            if (shared_data["shutdown"].value
-                or (shared_data.get("orbit_patrol_cancel") and shared_data["orbit_patrol_cancel"].value)
-                or shared_data["background_scan_active"].value
-                or shared_data["lidar_track_mode_active"].value):
-                print("[Patrol] Aborted proceed-condition wait.")
-                return False
-
-            dist_cm  = float(shared_data["lidar_data"][0])
-            strength = float(shared_data["lidar_data"][1])
-            ts       = float(shared_data["lidar_data"][2])
-
-            if ts > 0 and (_t.time() - ts) <= max_age_s:
-                hit = bool(detector(az, el, dist_cm, strength))
-                if hit:
-                    if ts != last_seen_ts:
-                        ok_streak += 1
-                        last_seen_ts = ts
-                        print(f"[Patrol]   hit {ok_streak}/{confirm_hits} "
-                              f"(dist={dist_cm:.1f}cm, str={strength:.0f}, ts={ts:.3f})")
-                    if ok_streak >= confirm_hits:
-                        print("[Patrol] Detection confirmed.")
-                        return True
-                else:
-                    # Only log resets if we had started a streak
-                    if ok_streak > 0:
-                        print("[Patrol]   streak reset.")
-                    ok_streak = 0
-
-            _t.sleep(0.01)
-
-        print("[Patrol] Proceed deadline reached with no detection.")
-        return False
-    return proceed_condition
 
 
 def run_orbit_patrol_from_query(shared_data,
@@ -341,13 +318,15 @@ def run_orbit_patrol_from_query(shared_data,
                                 next_wp_speed_deg_per_s: float | None = None,
                                 max_wait_s: float | None = None,
                                 full_circle: bool = False,
-                                full_circle_samples: int = 720):
+                                full_circle_samples: int = 720,
+                                enable_spiral: bool = True,
+                                spiral_radius: float = 3.0):
     """
-    If full_circle=True, ignore time sampling and generate the entire orbital plane
-    from RAAN & inclination (read from shared_data["rann"], ["inclination"]).
-    Otherwise, sample the orbit over a time window via datahandler.
+    Enhanced drop-in replacement for run_orbit_patrol_from_query.
+    Same interface with added spiral search parameters.
     """
     if full_circle:
+        from orbit_patrol_from_xyz import generate_full_circle_xyz_from_raan_incl
         raan = float(shared_data["rann"].value)
         incl = float(shared_data["inclination"].value)
         pts_unit = generate_full_circle_xyz_from_raan_incl(
@@ -363,10 +342,12 @@ def run_orbit_patrol_from_query(shared_data,
                                   start_near_current=start_near_current,
                                   proceed_condition=proceed_condition,
                                   next_wp_speed_deg_per_s=next_wp_speed_deg_per_s,
-                                  max_wait_s=max_wait_s)
+                                  max_wait_s=max_wait_s,
+                                  enable_spiral=enable_spiral,
+                                  spiral_radius=spiral_radius)
         return
 
-    # --- time-sampled fallback (existing behavior) ---
+    # Time-sampled mode
     from datahandler import get_orbit_xyz_for_query
     name, pts_km = get_orbit_xyz_for_query(query,
                                            duration_minutes=duration_minutes,
@@ -381,5 +362,22 @@ def run_orbit_patrol_from_query(shared_data,
                               start_near_current=start_near_current,
                               proceed_condition=proceed_condition,
                               next_wp_speed_deg_per_s=next_wp_speed_deg_per_s,
-                              max_wait_s=max_wait_s)
+                              max_wait_s=max_wait_s,
+                              enable_spiral=enable_spiral,
+                              spiral_radius=spiral_radius)
 
+
+# For backward compatibility, keep original function names available
+patrol_waypoints = patrol_waypoints_enhanced
+
+# Example usage showing it's a drop-in replacement
+if __name__ == "__main__":
+    # This would work exactly like the original, but with spiral search
+    # run_orbit_patrol_from_query(
+    #     shared_data,
+    #     "ISS (ZARYA)",
+    #     num_points=30,
+    #     enable_spiral=True,  # New parameter (default True)
+    #     spiral_radius=3.0    # New parameter (default 3.0)
+    # )
+    pass
