@@ -136,7 +136,7 @@ class CircularDroneTracker:
         self.clutter_filter = ClutterFilter(background_file)
 
         # Drone parameters
-        self.TARGET_DISTANCE_CM = 200.0  # 2 meters in cm
+        self.TARGET_DISTANCE_CM = 100.0  # 2 meters in cm
         self.DISTANCE_TOLERANCE_CM = 20.0  # ±20cm tolerance
         self.ANGULAR_VELOCITY_DEG = 18.0  # degrees per second
         self.MIN_STRENGTH = 100  # Minimum LiDAR strength threshold
