@@ -169,13 +169,13 @@ class CircularDroneTracker:
         self.orbital_center = np.array([0, 0, 0])  # Assume sensor at origin
 
         # Orbital refinement
-        self.refinement_interval = 5  # Refine plane every N points
+        self.refinement_interval = 3  # Refine plane every N points
         self.points_since_refinement = 0
         self.orbital_confidence = 0.0  # 0-1 confidence in orbital model
 
         # Search parameters
         self.initial_heading = 0
-        self.initial_inclination = 0
+        self.initial_inclination = 30
         self.heading_deviation = 0.0
 
         # Performance tracking
