@@ -84,61 +84,69 @@ def generate_tle():
     }
 
 def publish_data_to_aws(shared_data):
+    """Main process function that runs continuously until shutdown"""
+    print("[AWS Publisher] Starting AWS IoT publishing process...")
+    
     try:
-        # Check shutdown flag before doing anything
-        if shared_data.get("shutdown") and shared_data["shutdown"].value:
-            print("Shutdown flag is set. Exiting immediately.")
-            return
-            
-        # Get a single timestamp for the entire batch
-        batch_timestamp = current_timestamp()
-        
-        # Simple approach - direct payloads from shared data
-        simple_topics = {
-            "tracker/lidar/distance": round(shared_data["lidar_data"][0], 2),
-            "tracker/lidar/intensity": round(shared_data["lidar_data"][1], 2),
-            "tracker/tracker/pan_angle": round(shared_data["stepper_degrees"].value, 2),
-            "tracker/tracker/tilt_angle": round(shared_data["servo_degrees"].value, 2),
-            #"tracker/orbit/tle": shared_data["tle"].value,
-            #"tracker/position/x": round(shared_data["position_x"], 2), 
-            "tracker/position/x": round(random.uniform(-7000.0, 7000.0), 2),
-            "tracker/position/y": round(random.uniform(-7000.0, 7000.0), 2),
-            "tracker/position/z": round(random.uniform(-7000.0, 7000.0), 2)
-            # "tracker/position/y": round(shared_data["position_y"], 2),  
-            # "tracker/position/z": round(shared_data["position_z"], 2)   
+        while not shared_data["shutdown"].value:
+            try:
+                # Check if Grafana visualization is enabled
+                if not shared_data.get("grafana_enabled", Value('b', True)).value:
+                    time.sleep(1)  # Sleep if disabled
+                    continue
+                
+                # Get a single timestamp for the entire batch
+                batch_timestamp = current_timestamp()
+                
+                # Simple approach - direct payloads from shared data (original topics only)
+                simple_topics = {
+                    "tracker/lidar/distance": round(shared_data["lidar_data"][0], 2),
+                    "tracker/lidar/intensity": round(shared_data["lidar_data"][1], 2),
+                    "tracker/tracker/pan_angle": round(shared_data["stepper_degrees"].value, 2),
+                    "tracker/tracker/tilt_angle": round(shared_data["servo_degrees"].value, 2),
+                    #"tracker/orbit/tle": shared_data["tle"].value,
+                    #"tracker/position/x": round(shared_data["position_x"], 2), 
+                    "tracker/position/x": round(random.uniform(-7000.0, 7000.0), 2),
+                    "tracker/position/y": round(random.uniform(-7000.0, 7000.0), 2),
+                    "tracker/position/z": round(random.uniform(-7000.0, 7000.0), 2)
+                    # "tracker/position/y": round(shared_data["position_y"], 2),  
+                    # "tracker/position/z": round(shared_data["position_z"], 2)   
         }
-        
-        # Publish all topics at the same time with the same timestamp
-        for topic, payload in simple_topics.items():
-            # Check shutdown flag during publishing loop
-            if shared_data.get("shutdown") and shared_data["shutdown"].value:
-                print("Shutdown flag detected during publishing. Stopping...")
-                break
-            publish_simple(topic, payload, batch_timestamp)
-        
-        print("\nAll messages published successfully!")
-        
+                
+                # Publish all topics at the same time with the same timestamp
+                for topic, payload in simple_topics.items():
+                    publish_simple(topic, payload, batch_timestamp)
+                
+                print(f"[AWS Publisher] Published {len(simple_topics)} topics at {batch_timestamp}")
+                
+                # Sleep for the publishing interval (5 seconds like the original)
+                time.sleep(5)
+                
+            except Exception as batch_error:
+                print(f"[AWS Publisher] Error in publishing batch: {batch_error}")
+                time.sleep(1)  # Short sleep before retrying
+                
     except KeyboardInterrupt:
-        print("\n\nUser terminated the process (Ctrl+C).")
+        print("\n[AWS Publisher] Keyboard interrupt received.")
     except Exception as e:
-        print(f"\nAn error occurred: {e}")
+        print(f"\n[AWS Publisher] Unexpected error: {e}")
         import traceback
         traceback.print_exc()
     finally:
         # Graceful disconnect with timeout
-        print("Disconnecting from MQTT...")
+        print("[AWS Publisher] Shutting down...")
         try:
             # Use a short timeout for quick disconnect
             disconnect_future = mqtt_connection.disconnect()
             disconnect_future.result(timeout=2.0)  # 2 second timeout
-            print("Disconnected gracefully.")
+            print("[AWS Publisher] Disconnected gracefully.")
         except Exception as disconnect_error:
-            print(f"Disconnect timeout or error: {disconnect_error}")
-            print("Force closing connection...")
+            print(f"[AWS Publisher] Disconnect timeout or error: {disconnect_error}")
+            print("[AWS Publisher] Force closing connection...")
         
-        print("Shutdown complete.")
+        print("[AWS Publisher] AWS publishing process terminated.")
 
-# ==== MAIN EXECUTION ====
+# ==== MAIN EXECUTION FOR TESTING ====
 if __name__ == "__main__":
     # Mock shared_data structure for testing
     class MockValue:
@@ -147,15 +155,16 @@ if __name__ == "__main__":
 
     # Create test shared_data (replace with your actual shared data source)
     shared_data = {
-        "lidar_data": [round(random.uniform(300.0, 500.0), 2), round(random.uniform(100.0, 300.0), 2)],
+        #"lidar_data": Array('d', [round(random.uniform(300.0, 500.0), 2), round(random.uniform(100.0, 300.0), 2), 0.0]),
         "stepper_degrees": MockValue(round(random.uniform(0.0, 180.0), 2)),
         "servo_degrees": MockValue(round(random.uniform(0.0, 90.0), 2)),
-        "tle": MockValue(generate_tle()),
-        "position_x": round(random.uniform(-7000.0, 7000.0), 2),
-        "position_y": round(random.uniform(-7000.0, 7000.0), 2),
-        "position_z": round(random.uniform(-7000.0, 7000.0), 2),
-        "shutdown": MockValue(False)  # Added shutdown flag
+        #"generated_tle": Array('c', b"Mock TLE data for testing"),
+        #"satellite_points": Array('d', [round(random.uniform(-7000.0, 7000.0), 2), 
+        #                               round(random.uniform(-7000.0, 7000.0), 2), 
+        #                               round(random.uniform(-7000.0, 7000.0), 2), 0.0, 0.0]),
+        "shutdown": MockValue(False),  # Added shutdown flag
+        "grafana_enabled": MockValue(True)
     }
     
-    # Test the function once (like the working version)
+    # Test the continuous function
     publish_data_to_aws(shared_data)
