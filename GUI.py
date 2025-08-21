@@ -5,16 +5,90 @@ from PyQt5.QtWidgets import QVBoxLayout, QPushButton, QCheckBox
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 
+# (Your imports remain the same)
 from datahandler import (
-    get_orbit_xyz_for_query,   # you already use this to get XYZ points
-    get_acquisition_pan_deg,   # NEW: prints the pan (RAAN)
-    get_ascending_node_unit_vector,  # NEW: for drawing a line (optional)
+    get_orbit_xyz_for_query,
+    get_acquisition_pan_deg,
+    get_ascending_node_unit_vector,
     fit_tle_from_satellite_points,
-    # save_tle_to_example,     # keep if you need it
+    get_inclination_deg,
 )
 
+class Toggle(QtWidgets.QCheckBox):
+    def __init__(self, parent=None, *, track_radius=13, thumb_radius=11, duration_ms=140):
+        super().__init__(parent)
+        self._track_r = int(track_radius)
+        self._thumb_r = int(thumb_radius)
+        self._offset_val = 1.0 if self.isChecked() else 0.0
+
+        # Smooth animation
+        self._anim = QtCore.QPropertyAnimation(self, b"offset", self)
+        self._anim.setDuration(int(duration_ms))
+        self._anim.setEasingCurve(QtCore.QEasingCurve.InOutQuad)
+
+        # Make sure it actually gets space & accepts clicks
+        self.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        self.setMinimumSize(self.sizeHint())
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.toggled.connect(self._start_anim)
+
+    # Ensure the whole rect is clickable
+    def hitButton(self, pos: QtCore.QPoint) -> bool:
+        return self.rect().contains(pos)
+
+    # Animated property
+    def getOffset(self) -> float:
+        return self._offset_val
+    def setOffset(self, v: float) -> None:
+        self._offset_val = float(v)
+        self.update()
+    offset = QtCore.pyqtProperty(float, fget=getOffset, fset=setOffset)
+
+    def sizeHint(self) -> QtCore.QSize:
+        # track width ≈ 2*track + margins; height ≈ 2*track
+        w = self._track_r * 2 + 20
+        h = self._track_r * 2
+        return QtCore.QSize(w, h)
+
+    def _start_anim(self, on: bool) -> None:
+        self._anim.stop()
+        self._anim.setStartValue(self._offset_val)
+        self._anim.setEndValue(1.0 if on else 0.0)
+        self._anim.start()
+
+    def paintEvent(self, e) -> None:
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        rect = self.rect().adjusted(0, 0, -1, -1)
+
+        # Track
+        on = self.isChecked()
+        track = QtGui.QColor("#4caf50" if on else "#bdbdbd")
+        border = QtGui.QColor("#43a047" if on else "#9e9e9e")
+        p.setPen(border)
+        p.setBrush(track)
+        p.drawRoundedRect(rect, self._track_r, self._track_r)
+
+        # Thumb position
+        margin = rect.height() // 2
+        x0 = rect.left() + margin
+        x1 = rect.right() - margin
+        cx = x0 + (x1 - x0) * self._offset_val
+        cy = rect.center().y()
+
+        # Thumb
+        p.setPen(QtGui.QPen(QtGui.QColor(0, 0, 0, 40)))
+        p.setBrush(QtGui.QBrush(QtGui.QColor("white")))
+        p.drawEllipse(QtCore.QPointF(cx, cy), self._thumb_r, self._thumb_r)
+
+
+
+
 class TrackerWindow(QtWidgets.QMainWindow):
+    # CORRECTED CONSTRUCTOR NAME: from _init_ to __init__
     def __init__(self, shared_data):
+        # CORRECTED SUPER CALL: from _init_ to __init__
         super().__init__()
         self.setWindowTitle("LockedInMartin")
         # Bigger window to fit heatmap under 3D
@@ -25,9 +99,16 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.central_widget)
         main_layout = QtWidgets.QHBoxLayout(self.central_widget)
 
-        self.orbit_items = []          # holds GL items for the plotted orbit
-        self.orbit_as_points = False   # set True for points/cloud; False for a polyline
-        self.orbit_scale_cm_per_km = 0.05 # 6000km --> 300 cm
+        self.orbit_items = []  # holds GL items for the plotted orbit
+        self.orbit_as_points = False  # set True for points/cloud; False for a polyline
+        self.orbit_scale_cm_per_km = 0.05  # 6000km --> 300 cm
+        self.orbit_colors = [
+            (1.0, 1.0, 0.0, 0.9),  # yellow
+            (0.0, 1.0, 0.0, 0.9),  # green
+            (0.0, 0.5, 1.0, 0.9),  # blue
+            (1.0, 0.0, 0.0, 0.9),  # red
+            (1.0, 0.0, 1.0, 0.9),  # magenta
+        ]
 
         # ===== Left panel: 3D view (top) + 2D heatmap (bottom) =====
         left_panel = QtWidgets.QWidget()
@@ -83,7 +164,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
             # Fallback for older pyqtgraph: use transform if setRect is problematic
             self.hm_img.resetTransform()
             sx = 360.0 / self.hm_bins.shape[1]  # 360 / 360
-            sy = 91.0 / self.hm_bins.shape[0]   # 91 / 91
+            sy = 91.0 / self.hm_bins.shape[0]  # 91 / 91
             self.hm_img.scale(sx, sy)
             self.hm_img.setPos(0, 0)
 
@@ -103,10 +184,31 @@ class TrackerWindow(QtWidgets.QMainWindow):
         controls_layout = QVBoxLayout()
         main_layout.addLayout(controls_layout, stretch=1)
 
+        # Title
         controls_layout.addWidget(QtWidgets.QLabel("CONTROLLER STATUS"))
+
+        # Row: status text (left) + "Grafana" label + Toggle (right)
+        row = QtWidgets.QWidget()
+        row_h = QtWidgets.QHBoxLayout(row)
+        row_h.setContentsMargins(0, 0, 0, 0)
+        row_h.setSpacing(8)
+
         self.status_label = QtWidgets.QLabel("Status: IDLE")
         self.status_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #808080;")
-        controls_layout.addWidget(self.status_label)
+        row_h.addWidget(self.status_label)
+
+        row_h.addStretch(1)
+
+        lbl_graf = QtWidgets.QLabel("Grafana")
+        lbl_graf.setStyleSheet("color: #555;")
+        row_h.addWidget(lbl_graf)
+
+        self.switch_grafana = Toggle(track_radius=14, thumb_radius=12, duration_ms=160)
+        self.switch_grafana.setChecked(False)
+        self.switch_grafana.toggled.connect(lambda on: print(f"[GUI] Grafana toggle: {on}"))
+        row_h.addWidget(self.switch_grafana)
+
+        controls_layout.addWidget(row)
         controls_layout.addWidget(self.create_separator())
 
         mode_box = QtWidgets.QGroupBox("Main Controls")
@@ -128,7 +230,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         mode_box.setLayout(mode_layout)
         controls_layout.addWidget(mode_box)
-
 
         # TLE BOX
         tle_in_out = QtWidgets.QGroupBox("TLE IN/OUT")
@@ -197,9 +298,53 @@ class TrackerWindow(QtWidgets.QMainWindow):
         lcd_layout.addWidget(self.lcd_strength, 3, 1)
         controls_layout.addLayout(lcd_layout)
 
-        self.chk_reactive_mode = QCheckBox("Enable Reactive Mode (No Prediction)")
-        self.chk_reactive_mode.toggled.connect(self.on_reactive_mode_toggled)
-        controls_layout.addWidget(self.chk_reactive_mode)
+        # ===== Orbit Patrol (XYZ) =====
+        patrol_box = QtWidgets.QGroupBox("Orbit Patrol (XYZ)")
+        patrol_layout = QVBoxLayout()
+
+        row1 = QtWidgets.QHBoxLayout()
+        row1.addWidget(QtWidgets.QLabel("Points"))
+        self.sb_patrol_points = QtWidgets.QSpinBox()
+        self.sb_patrol_points.setRange(2, 72)
+        self.sb_patrol_points.setValue(30)
+        row1.addWidget(self.sb_patrol_points)
+
+        row1.addWidget(QtWidgets.QLabel("Dwell (s)"))
+        self.dsb_patrol_dwell = QtWidgets.QDoubleSpinBox()
+        self.dsb_patrol_dwell.setRange(0.1, 60.0)
+        self.dsb_patrol_dwell.setSingleStep(0.1)
+        self.dsb_patrol_dwell.setValue(2.0)
+        row1.addWidget(self.dsb_patrol_dwell)
+        patrol_layout.addLayout(row1)
+
+        row2 = QtWidgets.QHBoxLayout()
+        row2.addWidget(QtWidgets.QLabel("Speed (deg/s)"))
+        self.dsb_patrol_speed = QtWidgets.QDoubleSpinBox()
+        self.dsb_patrol_speed.setRange(0.0, 90.0)  # 0 = ignore, use max_wait
+        self.dsb_patrol_speed.setSingleStep(0.5)
+        self.dsb_patrol_speed.setValue(0.0)
+        row2.addWidget(self.dsb_patrol_speed)
+
+        row2.addWidget(QtWidgets.QLabel("Max wait (s)"))
+        self.dsb_patrol_maxwait = QtWidgets.QDoubleSpinBox()
+        self.dsb_patrol_maxwait.setRange(0.5, 120.0)
+        self.dsb_patrol_maxwait.setSingleStep(0.5)
+        self.dsb_patrol_maxwait.setValue(3.0)
+        row2.addWidget(self.dsb_patrol_maxwait)
+        patrol_layout.addLayout(row2)
+
+        row3 = QtWidgets.QHBoxLayout()
+        self.btn_patrol_start = QtWidgets.QPushButton("Start Patrol")
+        self.btn_patrol_start.clicked.connect(self.on_orbit_patrol_start)
+        row3.addWidget(self.btn_patrol_start)
+
+        self.btn_patrol_cancel = QtWidgets.QPushButton("Cancel Patrol")
+        self.btn_patrol_cancel.clicked.connect(self.on_orbit_patrol_cancel)
+        row3.addWidget(self.btn_patrol_cancel)
+        patrol_layout.addLayout(row3)
+
+        patrol_box.setLayout(patrol_layout)
+        controls_layout.addWidget(patrol_box)
 
         controls_layout.addStretch()
 
@@ -213,6 +358,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.timer_ui.timeout.connect(self.update_ui)
         self.timer_ui.start(15)
 
+    # ... (rest of your GUI.py file is unchanged) ...
     # ===== Heatmap helpers =====
     def clear_heatmap(self):
         self.hm_bins[...] = 0.0
@@ -274,14 +420,22 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         self._hm_last_ts = ts
 
-    #TLE SHOW
+    # TLE SHOW
     def output_TLE(self):
-        sp = self.shared_data["satellite_points"]
-        print(sp[:])
-        tle_name, l1, l2 = fit_tle_from_satellite_points(sp[:], unit="cm", name="MY-FIT")
-        #print(l1)
-        #print(l2)
-    
+        try:
+            hist = list(self.shared_data["tracking_history"])
+            if len(hist) < 3:
+                print(f"[TLE] Need ≥3 points; have {len(hist)}.")
+                return
+            import numpy as np
+            arr = np.array(hist, dtype=float)
+            tle_name, l1, l2 = fit_tle_from_satellite_points(arr, unit="cm", name="MY-FIT")
+            print("[TLE] Fitted TLE:")
+            print(tle_name); print(l1); print(l2)
+        except Exception as e:
+            print(f"[TLE] Output failed: {e}")
+
+
     def print_acquisition_pan(self, also_draw_line=True, line_length_cm=600.0):
         """
         Reads the TLE query from the text box, computes acquisition pan (≈ RAAN),
@@ -293,8 +447,11 @@ class TrackerWindow(QtWidgets.QMainWindow):
         try:
             name, l1, l2 = normalize_tle_input(query, default_path="example.tle")
             pan_deg = get_acquisition_pan_deg(tle_lines=(l1, l2))
-            print(f"[TLE] Acquisition pan for '{name}' (ascending node / RAAN): {pan_deg:.2f}°")
-
+            inc_deg = get_inclination_deg(tle_lines=(l1,l2))
+            
+            self.shared_data["rann"].value = float(pan_deg)
+            self.shared_data["inclination"].value = float(inc_deg)
+            print(f"[TLE] Acquisition pan for '{name}' (ascending node / RAAN): {pan_deg:.2f}°, (inclination): {inc_deg:.2f}°")
             if also_draw_line:
                 # build endpoint in your scene units (cm). Ascending node is in XY plane (z=0).
                 dir_unit = get_ascending_node_unit_vector(tle_lines=(l1, l2))  # (x,y,0), unitless
@@ -342,12 +499,15 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         try:
             # --- SCALE: km -> (scaled) cm in your scene
-            pts_cm = pts_km * float(self.orbit_scale_cm_per_km)  # 0.1 cm per km
+            pts_cm = pts_km * float(self.orbit_scale_cm_per_km)
+
+            # Pick next color depending on how many orbits already drawn
+            color = self.orbit_colors[len(self.orbit_items) % len(self.orbit_colors)]
 
             if as_points:
-                item = gl.GLScatterPlotItem(pos=pts_cm, size=2.5, color=(1.0, 1.0, 0.2, 0.95))
+                item = gl.GLScatterPlotItem(pos=pts_cm, size=2.5, color=color)
             else:
-                item = gl.GLLinePlotItem(pos=pts_cm, width=2.0, color=(1.0, 1.0, 0.0, 0.9),
+                item = gl.GLLinePlotItem(pos=pts_cm, width=8.0, color=color,
                                         antialias=True, mode='line_strip')
 
             self.view.addItem(item)
@@ -368,7 +528,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
                 self.view.setCameraPosition(distance=max(100.0, 2.2 * r_cm))
 
             print(f"[TLE] Plotted '{label}' scaled: 1 km → {self.orbit_scale_cm_per_km} cm. "
-                f"Max radius ~ {r_cm:.1f} cm.")
+                  f"Max radius ~ {r_cm:.1f} cm.")
         except Exception as e:
             print(f"[TLE] Plot error: {e}")
 
@@ -387,8 +547,30 @@ class TrackerWindow(QtWidgets.QMainWindow):
         print("[TLE] Orbit removed.")
 
     # ===== Controls handlers =====
-    def on_reactive_mode_toggled(self, checked):
-        self.shared_data["reactive_mode"].value = checked
+    def on_orbit_patrol_start(self):
+        # Mirror GUI to shared_data
+        try:
+            self.shared_data["orbit_patrol_points"].value = int(self.sb_patrol_points.value())
+            self.shared_data["orbit_patrol_dwell_s"].value = float(self.dsb_patrol_dwell.value())
+            self.shared_data["orbit_patrol_max_wait_s"].value = float(self.dsb_patrol_maxwait.value())
+            self.shared_data["drone_orbit_speed_deg_s"].value = float(self.dsb_patrol_speed.value())
+
+            # Use the same query field as your TLE box
+            query = (self.sat_name_input.text() or "").strip().encode("utf-8")
+            self.shared_data["orbit_patrol_query"].value = query
+
+            # Flip start flag
+            self.shared_data["orbit_patrol_start"].value = True
+            print("[GUI] Orbit Patrol requested.")
+        except Exception as e:
+            print(f"[GUI] Orbit Patrol start error: {e}")
+
+    def on_orbit_patrol_cancel(self):
+        try:
+            self.shared_data["orbit_patrol_cancel"].value = True
+            print("[GUI] Orbit Patrol cancel requested.")
+        except Exception as e:
+            print(f"[GUI] Orbit Patrol cancel error: {e}")
 
     def toggle_background_plot(self):
         """Loads data from file and displays/hides the plot."""
@@ -398,12 +580,8 @@ class TrackerWindow(QtWidgets.QMainWindow):
             return
 
         try:
-            bg_data_path_obj = self.shared_data.get("background_path", None)
-            if bg_data_path_obj is None:
-                bg_data_path = "background_data.npy"
-            else:
-                bg_data_path = bg_data_path_obj.value
-
+            # Access the string value correctly from the ctypes object
+            bg_data_path = self.shared_data["background_path"].value.decode('utf-8')
             bg_data = np.load(bg_data_path)
 
             points = []
@@ -412,7 +590,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
                 if 10 < dist_cm < 16000:
                     az_rad = np.radians(az)
                     el_rad = np.radians(el)
-                    dist_m = dist_cm / 100.0  # cm -> m
 
                     x = dist_cm * np.cos(el_rad) * np.cos(az_rad)
                     y = dist_cm * np.cos(el_rad) * np.sin(az_rad)
@@ -466,11 +643,13 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.shared_data["lidar_track_mode_active"].value = False
 
     def on_debug_mode_toggled(self, en):
-        self.shared_data["debug_mode"].value = bool(en)
-        self.shared_data["lidar_acceptance_range"][:] = [0.2, 2.0] if en else [3.0, 50.0]
+        self.shared_data["circular_tracker_active"].value = bool(en)
+        # This key was removed from main.py, so it is commented out.
+        # self.shared_data["lidar_acceptance_range"][:] = [0.2, 2.0] if en else [3.0, 50.0]
 
     def on_go_clicked(self):
         try:
+            self.shared_data["movement_request_id"].value += 1
             self.shared_data["target_azimuth"].value = float(self.az_input.text())
             self.shared_data["target_elevation"].value = float(self.el_input.text())
             self.shared_data["go_to_target"].value = True
@@ -489,19 +668,21 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         # Update Status Label
         try:
-            if self.shared_data["acquirer_status"].value == 1:
-                self.status_label.setText("Status: ACQUIRING...")
-                self.status_label.setStyleSheet("color: #FFA500;")
-            elif self.shared_data["lidar_track_mode_active"].value:
-                self.status_label.setText("Status: TRACKING")
-                self.status_label.setStyleSheet("color: #D22B2B;")
-            elif self.shared_data["background_scan_active"].value:
+            # Match the status logic to the states defined in main.py/hardware_controller
+            system_state = self.shared_data["system_state"].value
+            if system_state == 2:  # SCANNING
                 self.status_label.setText("Status: SCANNING...")
                 self.status_label.setStyleSheet("color: #007FFF;")
+            elif system_state == 3:  # TRACKER_MOVE
+                self.status_label.setText("Status: TRACKING MOVE")
+                self.status_label.setStyleSheet("color: #D22B2B;")
             elif self.shared_data["go_to_target"].value:
                 status_text = "MOVING" if not self.shared_data["target_reached"].value else "HOLDING"
                 self.status_label.setText(f"Status: {status_text}")
                 self.status_label.setStyleSheet("color: #33F;")
+            elif self.shared_data["acquire_points"].value:
+                self.status_label.setText("Status: ACQUIRING...")
+                self.status_label.setStyleSheet("color: #FFA500;")
             else:
                 self.status_label.setText("Status: IDLE")
                 self.status_label.setStyleSheet("color: #808080;")
@@ -513,7 +694,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
             az = self.shared_data['stepper_degrees'].value
             el = self.shared_data['servo_degrees'].value
             dist_cm = self.shared_data['lidar_data'][0]
-            length_m = dist_cm / 100.0 if 10.0 <= dist_cm <= 16000.0 else 15.0
+
             az_rad, el_rad = np.radians(az), np.radians(el)
             x = dist_cm * np.cos(el_rad) * np.cos(az_rad)
             y = dist_cm * np.cos(el_rad) * np.sin(az_rad)
@@ -539,11 +720,11 @@ class TrackerWindow(QtWidgets.QMainWindow):
         super().closeEvent(event)
 
 
-def run_gui(shared_data):
-    if not QtWidgets.QApplication.instance():
-        app = QtWidgets.QApplication(sys.argv)
-    else:
-        app = QtWidgets.QApplication.instance()
-    window = TrackerWindow(shared_data)
+def run_gui(shared):
+    global _shared_data
+    _shared_data = shared
+
+    app = QtWidgets.QApplication(sys.argv)
+    window = TrackerWindow(_shared_data)
     window.show()
     sys.exit(app.exec_())
