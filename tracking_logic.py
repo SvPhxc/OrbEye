@@ -622,7 +622,7 @@ def _start_orbit_patrol(shared_data):
                                             enable_spiral_search: bool = False,
                                             spiral_radius_deg: float = 0.5,
                                             spiral_points_per_rotation: int = 16,
-                                            spiral_rotations: int = 2):
+                                            spiral_rotations: int = 2)
         finally:
             shared_data["orbit_patrol_active"].value = False
             shared_data["orbit_patrol_cancel"].value = False
