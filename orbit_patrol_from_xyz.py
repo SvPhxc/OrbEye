@@ -1,5 +1,3 @@
-
-
 import time, math
 import numpy as np
 
@@ -89,7 +87,7 @@ def _should_abort(shared_data):
     )
 
 
-# ---------- spiral search helpers (NEW) ----------
+# ---------- spiral search helpers ----------
 def generate_spiral_waypoints(center_az, center_el, max_radius_deg=1.0, points_per_rotation=16, num_rotations=2):
     """Generates Archimedean spiral waypoints around a center point."""
     waypoints = []
@@ -106,8 +104,6 @@ def generate_spiral_waypoints(center_az, center_el, max_radius_deg=1.0, points_p
         angle = i * (2 * math.pi / points_per_rotation)
         radius = (i / total_points) * max_radius_deg
 
-        # Convert polar (radius, angle) to Cartesian offsets in degrees,
-        # adjusting for spherical distortion in azimuth.
         d_el = radius * math.sin(angle)
         d_az = radius * math.cos(angle) / cos_el
 
@@ -119,7 +115,7 @@ def generate_spiral_waypoints(center_az, center_el, max_radius_deg=1.0, points_p
 
 def _perform_spiral_search(shared_data, center_az, center_el, spiral_radius_deg, points_per_rotation, num_rotations):
     """
-    Performs a spiral scan, returning the position of the highest LiDAR strength.
+    Performs a single spiral scan, returning the position of the highest LiDAR strength.
     """
     spiral_wps = generate_spiral_waypoints(center_az, center_el, spiral_radius_deg, points_per_rotation, num_rotations)
 
@@ -132,16 +128,14 @@ def _perform_spiral_search(shared_data, center_az, center_el, spiral_radius_deg,
         if _should_abort(shared_data):
             break
 
-        # Use a short settle time for quick scanning
         if not _goto_and_wait(shared_data, az, el, settle_timeout_s=0.5):
-            continue  # Move to next point if settle fails
+            continue
 
-        time.sleep(0.005)  # Brief pause for LiDAR to update
+        time.sleep(0.05)
 
         strength = float(shared_data["lidar_data"][1])
         ts = float(shared_data["lidar_data"][2])
 
-        # Consider only fresh samples
         if (time.time() - ts) <= 0.5:
             if strength > max_strength:
                 max_strength = strength
@@ -156,10 +150,6 @@ def _bind_cf_detector(clutter_filter):
     """
     Inspect ClutterFilter to find a suitable method and return a callable:
         detector(az, el, dist_cm, strength) -> bool
-    Accepted method names (first one found wins): is_foreground, is_target,
-    classify, detect, predict, evaluate, check, process, feed.
-    The method's return can be bool, numeric (score>0 => True), or a tuple/list
-    where the first bool/numeric will be used.
     """
     candidates = [
         "is_foreground", "is_target", "classify", "detect",
@@ -172,15 +162,12 @@ def _bind_cf_detector(clutter_filter):
 
             def detector(az, el, dist_cm, strength, _m=meth):
                 res = _m(az, el, dist_cm, strength)
-                # Normalize result to bool
                 if isinstance(res, (bool, np.bool_)):
                     return bool(res)
                 if isinstance(res, (tuple, list)) and len(res):
-                    # Prefer first boolean in the sequence
                     for v in res:
                         if isinstance(v, (bool, np.bool_)):
                             return bool(v)
-                    # Otherwise, use first numeric as score
                     v = res[0]
                     if isinstance(v, (int, float, np.floating)):
                         return v > 0
@@ -192,8 +179,7 @@ def _bind_cf_detector(clutter_filter):
             return detector
     raise AttributeError(
         "ClutterFilter has no usable detector method. "
-        "Expected one of: is_foreground, is_target, classify, detect, "
-        "predict, evaluate, check, process, or feed."
+        "Expected one of: " + ", ".join(candidates)
     )
 
 
@@ -201,41 +187,69 @@ def make_detection_proceed_condition(clutter_filter, shared_data,
                                      confirm_hits=3, max_age_s=0.5):
     """
     Returns proceed_condition(az, el, deadline_s) -> bool
-    Waits until the ClutterFilter reports foreground at the current waypoint
-    (confirming 'confirm_hits' fresh LiDAR samples), or until deadline.
+    Waits until the ClutterFilter reports foreground at the current waypoint.
     """
     detector = _bind_cf_detector(clutter_filter)
 
-    def proceed_condition(az, el, deadline_s):
-        ok_streak = 0
-        last_seen_ts = -1.0
-        while time.monotonic() < deadline_s:
-            if _should_abort(shared_data):
-                return False
+    # Re-use the callable-based factory to keep logic in one place
+    return make_detection_proceed_condition_from_callable(
+        detector, shared_data, confirm_hits, max_age_s
+    )
 
-            # latest LiDAR sample
+
+# ---------- main patrol ----------
+def _search_with_continuous_spiral(shared_data, center_az, center_el, deadline_s,
+                                   detector, confirm_hits, max_age_s,
+                                   spiral_radius_deg, spiral_points_per_rotation, spiral_rotations):
+    """
+    Continuously spirals around a point, checking for detection, until deadline.
+    Returns (detected, (found_az, found_el)).
+    """
+    ok_streak = 0
+    last_seen_ts = -1.0
+
+    spiral_wps = generate_spiral_waypoints(
+        center_az, center_el, spiral_radius_deg, spiral_points_per_rotation, spiral_rotations
+    )
+    wp_idx = 0
+
+    print(f"[Patrol.Search] Beginning continuous spiral until {deadline_s:.1f}s")
+
+    while time.monotonic() < deadline_s:
+        if _should_abort(shared_data):
+            return False, (center_az, center_el)
+
+        # 1. Move to the next point in the spiral pattern
+        az, el = spiral_wps[wp_idx]
+        _goto_and_wait(shared_data, az, el, settle_timeout_s=0.5)
+        wp_idx = (wp_idx + 1) % len(spiral_wps)
+
+        # 2. Briefly dwell at the spiral point to check for hits
+        dwell_deadline = time.monotonic() + 0.2  # Check for 200ms
+        while time.monotonic() < dwell_deadline:
+            if _should_abort(shared_data):
+                return False, (center_az, center_el)
+
             dist_cm = float(shared_data["lidar_data"][0])
             strength = float(shared_data["lidar_data"][1])
             ts = float(shared_data["lidar_data"][2])
 
-            # only consider fresh samples
             if ts > 0 and (time.time() - ts) <= max_age_s:
                 if detector(az, el, dist_cm, strength):
                     if ts != last_seen_ts:
                         ok_streak += 1
                         last_seen_ts = ts
                     if ok_streak >= confirm_hits:
-                        return True
+                        print(f"[Patrol.Search] Detection confirmed at ({az:.2f}°, {el:.2f}°)")
+                        return True, (az, el)
                 else:
                     ok_streak = 0
-
             time.sleep(0.01)
-        return False
 
-    return proceed_condition
+    print("[Patrol.Search] Deadline reached with no confirmed detection.")
+    return False, (center_az, center_el)
 
 
-# ---------- main patrol ----------
 def patrol_waypoints(shared_data,
                      waypoints,
                      proceed_condition=None,
@@ -243,21 +257,19 @@ def patrol_waypoints(shared_data,
                      settle_timeout_s: float = 3.0,
                      max_wait_s: float | None = None,
                      next_wp_speed_deg_per_s: float | None = None,
-                     enable_spiral_search: bool = True,
-                     spiral_radius_deg: float = 2.0,
+                     enable_spiral_search: bool = False,
+                     continuous_spiral_search: bool = False,
+                     spiral_radius_deg: float = 0.5,
                      spiral_points_per_rotation: int = 16,
                      spiral_rotations: int = 2):
     """
-    For each waypoint: slew+settle -> [spiral search] -> wait -> next.
-    If spiral search finds a better spot, it corrects subsequent waypoints.
+    For each waypoint: slew+settle -> [search] -> wait until detection or timeout -> next.
     """
     n = len(waypoints)
     if n == 0:
         return
 
-    # Make a mutable copy of waypoints to allow for in-flight correction
     wps = [list(wp) for wp in waypoints]
-
     first_az, first_el = wps[0]
     if _should_abort(shared_data): return
     _goto_and_wait(shared_data, first_az, first_el, settle_timeout_s=settle_timeout_s)
@@ -266,39 +278,13 @@ def patrol_waypoints(shared_data,
         if _should_abort(shared_data): break
 
         nominal_az, nominal_el = wps[i]
-        current_az, current_el = nominal_az, nominal_el
+        detected = False
 
-        # ensure at wp
-        _goto_and_wait(shared_data, current_az, current_el, settle_timeout_s=settle_timeout_s)
-
-        # --- Optional: Spiral search and path correction ---
-        if enable_spiral_search:
-            (found_az, found_el), max_str = _perform_spiral_search(
-                shared_data, current_az, current_el,
-                spiral_radius_deg, spiral_points_per_rotation, spiral_rotations
-            )
-
-            # If a detection was made and it's offset from the nominal point
-            if max_str > 0:
-                d_az = _az_short_diff(current_az, found_az)
-                d_el = found_el - current_el
-
-                # If the correction is significant, apply it to future waypoints
-                if abs(d_az) > 0.01 or abs(d_el) > 0.01:
-                    print(f"[Patrol] Path corrected by (d_az={d_az:.2f}°, d_el={d_el:.2f}°)")
-                    for j in range(i + 1, n):
-                        wps[j][0] = (wps[j][0] + d_az + 360.0) % 360.0
-                        wps[j][1] = max(-90.0, min(90.0, wps[j][1] + d_el))
-
-                # Update current target to the best found position for detection dwell
-                current_az, current_el = found_az, found_el
-                _goto_and_wait(shared_data, current_az, current_el, settle_timeout_s=1.0)
-
-        # derive timeout from speed & spacing
+        # Determine timeout for the current waypoint
         derived_timeout = None
         if next_wp_speed_deg_per_s and next_wp_speed_deg_per_s > 1e-6 and n > 1:
             nxt = wps[(i + 1) % n]
-            arc_deg = approx_arc_deg(current_az, current_el, nxt[0], nxt[1])
+            arc_deg = approx_arc_deg(nominal_az, nominal_el, nxt[0], nxt[1])
             derived_timeout = max(0.5, arc_deg / float(next_wp_speed_deg_per_s))
 
         if max_wait_s is not None and derived_timeout is not None:
@@ -310,43 +296,72 @@ def patrol_waypoints(shared_data,
         else:
             deadline = time.monotonic() + dwell_seconds
 
-        # wait for detection or time
-        if proceed_condition is None:
-            while time.monotonic() < deadline and not _should_abort(shared_data):
-                time.sleep(0.01)
+        # --- CHOOSE SEARCH/DWELL STRATEGY ---
+        can_continuous_search = (
+                continuous_spiral_search and
+                proceed_condition is not None and
+                hasattr(proceed_condition, 'detector') and
+                hasattr(proceed_condition, 'confirm_hits')
+        )
+
+        if can_continuous_search:
+            # New: Spiral constantly until a detection is confirmed or timeout
+            detected, (current_az, current_el) = _search_with_continuous_spiral(
+                shared_data, nominal_az, nominal_el, deadline,
+                detector=proceed_condition.detector,
+                confirm_hits=proceed_condition.confirm_hits,
+                max_age_s=proceed_condition.max_age_s,
+                spiral_radius_deg=spiral_radius_deg,
+                spiral_points_per_rotation=spiral_points_per_rotation,
+                spiral_rotations=spiral_rotations
+            )
         else:
-            detected = bool(proceed_condition(current_az, current_el, deadline_s=deadline))
+            # Original: Dwell at a point (with optional single spiral for path correction)
+            current_az, current_el = nominal_az, nominal_el
+            _goto_and_wait(shared_data, current_az, current_el, settle_timeout_s=settle_timeout_s)
 
-            # If we confirmed a detection at this waypoint, save it
-            if detected and (shared_data.get("record_tle_points") and shared_data["record_tle_points"].value):
-                # Read the freshest LiDAR sample
-                dist_cm = float(shared_data["lidar_data"][0])
-                strength = float(shared_data["lidar_data"][1])
-                ts = float(shared_data["lidar_data"][2])
+            if enable_spiral_search:
+                (found_az, found_el), max_str = _perform_spiral_search(
+                    shared_data, current_az, current_el,
+                    spiral_radius_deg, spiral_points_per_rotation, spiral_rotations
+                )
+                if max_str > 0:
+                    d_az = _az_short_diff(current_az, found_az)
+                    d_el = found_el - current_el
+                    if abs(d_az) > 0.01 or abs(d_el) > 0.01:
+                        print(f"[Patrol] Path corrected by (d_az={d_az:.2f}°, d_el={d_el:.2f}°)")
+                        for j in range(i + 1, n):
+                            wps[j][0] = (wps[j][0] + d_az + 360.0) % 360.0
+                            wps[j][1] = max(-90.0, min(90.0, wps[j][1] + d_el))
+                    current_az, current_el = found_az, found_el
+                    _goto_and_wait(shared_data, current_az, current_el, settle_timeout_s=1.0)
 
-                # 1) Update the single-slot 'satellite_points' (used by GUI heatmap)
-                try:
-                    with shared_data["satellite_points"].get_lock():
-                        shared_data["satellite_points"][:] = [current_az, current_el, dist_cm, strength, ts]
-                        print("[Patrol] saved -> satellite_points")
-                except Exception:
+            if proceed_condition is None:
+                while time.monotonic() < deadline and not _should_abort(shared_data):
+                    time.sleep(0.01)
+            else:
+                detected = bool(proceed_condition(current_az, current_el, deadline_s=deadline))
+
+        # --- SAVE DATA IF DETECTED ---
+        if detected and (shared_data.get("record_tle_points") and shared_data["record_tle_points"].value):
+            dist_cm, strength, ts = [float(v) for v in shared_data["lidar_data"]]
+            try:
+                with shared_data["satellite_points"].get_lock():
                     shared_data["satellite_points"][:] = [current_az, current_el, dist_cm, strength, ts]
-                    print("[Patrol] saved -> satellite_points (no lock)")
+                    print("[Patrol] saved -> satellite_points")
+            except Exception:
+                shared_data["satellite_points"][:] = [current_az, current_el, dist_cm, strength, ts]
+                print("[Patrol] saved -> satellite_points (no lock)")
+            try:
+                shared_data["tracking_history"].append([current_az, current_el, dist_cm, strength, ts])
+                print(f"[Patrol] appended to tracking_history (N={len(shared_data['tracking_history'])})")
+            except Exception as e:
+                print(f"[Patrol] WARNING: couldn't append to tracking_history: {e}")
+            if shared_data.get("satellite_detected"):
+                shared_data["satellite_detected"].value = True
 
-                # 2) Append to the growing history for TLE fitting
-                try:
-                    shared_data["tracking_history"].append([current_az, current_el, dist_cm, strength, ts])
-                    print(f"[Patrol] appended to tracking_history (N={len(shared_data['tracking_history'])})")
-                except Exception as e:
-                    print(f"[Patrol] WARNING: couldn't append to tracking_history: {e}")
-
-                if shared_data.get("satellite_detected"):
-                    shared_data["satellite_detected"].value = True
-
-    # go back to first visible point
     if not _should_abort(shared_data):
         _goto_and_wait(shared_data, first_az, first_el, settle_timeout_s=settle_timeout_s)
-
     shared_data["go_to_target"].value = False
 
 
@@ -360,8 +375,9 @@ def run_orbit_patrol_from_xyz(shared_data,
                               proceed_condition=None,
                               max_wait_s: float | None = None,
                               next_wp_speed_deg_per_s: float | None = None,
-                              enable_spiral_search: bool = True,
-                              spiral_radius_deg: float = 2.0,
+                              enable_spiral_search: bool = False,
+                              continuous_spiral_search: bool = False,
+                              spiral_radius_deg: float = 0.5,
                               spiral_points_per_rotation: int = 16,
                               spiral_rotations: int = 2):
     azel_path = xyz_to_azel_center(pts_xyz)
@@ -391,6 +407,7 @@ def run_orbit_patrol_from_xyz(shared_data,
                      max_wait_s=max_wait_s,
                      next_wp_speed_deg_per_s=next_wp_speed_deg_per_s,
                      enable_spiral_search=enable_spiral_search,
+                     continuous_spiral_search=continuous_spiral_search,
                      spiral_radius_deg=spiral_radius_deg,
                      spiral_points_per_rotation=spiral_points_per_rotation,
                      spiral_rotations=spiral_rotations)
@@ -401,9 +418,8 @@ def run_orbit_patrol_from_xyz(shared_data,
 def make_detection_proceed_condition_from_callable(detector, shared_data,
                                                    confirm_hits=3, max_age_s=0.5):
     """
-    detector(az, el, dist_cm, strength) -> bool
-    Returns proceed_condition(az, el, deadline_s) that waits until detector is True
-    for 'confirm_hits' fresh LiDAR samples (or until deadline).
+    Returns proceed_condition(az, el, deadline_s) that waits until detector is True.
+    It also attaches the detector and its parameters for use in other modes.
     """
 
     def proceed_condition(az, el, deadline_s):
@@ -413,20 +429,13 @@ def make_detection_proceed_condition_from_callable(detector, shared_data,
         print(f"[Patrol] Waiting for detection @ ({az:.2f}°, {el:.2f}°) "
               f"confirm_hits={confirm_hits}, max_age={max_age_s}s")
         while _t.monotonic() < deadline_s:
-            if (shared_data["shutdown"].value
-                    or (shared_data.get("orbit_patrol_cancel") and shared_data["orbit_patrol_cancel"].value)
-                    or shared_data["background_scan_active"].value
-                    or shared_data["lidar_track_mode_active"].value):
+            if _should_abort(shared_data):
                 print("[Patrol] Aborted proceed-condition wait.")
                 return False
 
-            dist_cm = float(shared_data["lidar_data"][0])
-            strength = float(shared_data["lidar_data"][1])
-            ts = float(shared_data["lidar_data"][2])
-
+            dist_cm, strength, ts = [float(v) for v in shared_data["lidar_data"]]
             if ts > 0 and (_t.time() - ts) <= max_age_s:
-                hit = bool(detector(az, el, dist_cm, strength))
-                if hit:
+                if bool(detector(az, el, dist_cm, strength)):
                     if ts != last_seen_ts:
                         ok_streak += 1
                         last_seen_ts = ts
@@ -436,16 +445,17 @@ def make_detection_proceed_condition_from_callable(detector, shared_data,
                         print("[Patrol] Detection confirmed.")
                         return True
                 else:
-                    # Only log resets if we had started a streak
                     if ok_streak > 0:
                         print("[Patrol]   streak reset.")
                     ok_streak = 0
-
             _t.sleep(0.01)
-
         print("[Patrol] Proceed deadline reached with no detection.")
         return False
 
+    # Attach detector and params to the function object for advanced patrol modes
+    proceed_condition.detector = detector
+    proceed_condition.confirm_hits = confirm_hits
+    proceed_condition.max_age_s = max_age_s
     return proceed_condition
 
 
@@ -464,12 +474,12 @@ def run_orbit_patrol_from_query(shared_data,
                                 full_circle: bool = False,
                                 full_circle_samples: int = 720,
                                 enable_spiral_search: bool = False,
+                                continuous_spiral_search: bool = False,
                                 spiral_radius_deg: float = 0.5,
                                 spiral_points_per_rotation: int = 8,
-                                spiral_rotations: int = 1):
+                                spiral_rotations: int = 2):
     """
-    If full_circle=True, ignore time sampling and generate the entire orbital plane
-    from RAAN & inclination (read from shared_data["rann"], ["inclination"]).
+    If full_circle=True, generate the entire orbital plane.
     Otherwise, sample the orbit over a time window via datahandler.
     """
     if full_circle:
@@ -478,40 +488,36 @@ def run_orbit_patrol_from_query(shared_data,
         pts_unit = generate_full_circle_xyz_from_raan_incl(
             raan, incl, n_samples=full_circle_samples
         )
-        print(f"[OrbitPatrolXYZ] Full-circle mode: RAAN={raan:.2f}°, inc={incl:.2f}°, samples={len(pts_unit)}")
-        run_orbit_patrol_from_xyz(shared_data,
-                                  pts_unit,
-                                  num_points=num_points,
-                                  dwell_seconds=dwell_seconds,
-                                  min_el_deg=min_el_deg,
-                                  max_el_deg=max_el_deg,
+        print(f"[OrbitPatrolXYZ] Full-circle mode: RAAN={raan:.2f}°, inc={incl:.2f}°,"
+              f" samples={len(pts_unit)}")
+        run_orbit_patrol_from_xyz(shared_data, pts_unit,
+                                  num_points=num_points, dwell_seconds=dwell_seconds,
+                                  min_el_deg=min_el_deg, max_el_deg=max_el_deg,
                                   start_near_current=start_near_current,
                                   proceed_condition=proceed_condition,
                                   next_wp_speed_deg_per_s=next_wp_speed_deg_per_s,
                                   max_wait_s=max_wait_s,
                                   enable_spiral_search=enable_spiral_search,
+                                  continuous_spiral_search=continuous_spiral_search,
                                   spiral_radius_deg=spiral_radius_deg,
                                   spiral_points_per_rotation=spiral_points_per_rotation,
                                   spiral_rotations=spiral_rotations)
         return
 
-    # --- time-sampled fallback (existing behavior) ---
     from datahandler import get_orbit_xyz_for_query
     name, pts_km = get_orbit_xyz_for_query(query,
                                            duration_minutes=duration_minutes,
                                            step_seconds=step_seconds)
     print(f"[OrbitPatrolXYZ] Using orbit '{name}', {len(pts_km)} samples.")
-    run_orbit_patrol_from_xyz(shared_data,
-                              pts_km,
-                              num_points=num_points,
-                              dwell_seconds=dwell_seconds,
-                              min_el_deg=min_el_deg,
-                              max_el_deg=max_el_deg,
+    run_orbit_patrol_from_xyz(shared_data, pts_km,
+                              num_points=num_points, dwell_seconds=dwell_seconds,
+                              min_el_deg=min_el_deg, max_el_deg=max_el_deg,
                               start_near_current=start_near_current,
                               proceed_condition=proceed_condition,
                               next_wp_speed_deg_per_s=next_wp_speed_deg_per_s,
                               max_wait_s=max_wait_s,
                               enable_spiral_search=enable_spiral_search,
+                              continuous_spiral_search=continuous_spiral_search,
                               spiral_radius_deg=spiral_radius_deg,
                               spiral_points_per_rotation=spiral_points_per_rotation,
                               spiral_rotations=spiral_rotations)
