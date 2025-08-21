@@ -9,7 +9,15 @@ Key Features:
 - Wide hemisphere search when inclination is unknown
 - Adaptive arc scanning that shrinks as confidence increases
 - Continuous orbital plane refinement using SVD
+- Wait-and-scan strategy to find strongest signal (accounts for drone dimensions)
 - Fallback for systems without scipy
+
+Tracking Strategy:
+1. SEARCHING: Find first strong signal from drone
+2. CONFIRMING_DIRECTION: Wait for drone to move, find second point with wide search
+3. CALCULATING_PLANE: Collect 5+ well-spaced points to define orbital plane
+4. TRACKING: Predict intercept point, wait for drone arrival, track strongest signal
+5. LOST: Expanding recovery search if tracking fails
 """
 
 from enum import Enum
@@ -136,7 +144,7 @@ class CircularDroneTracker:
         self.clutter_filter = ClutterFilter(background_file)
 
         # Drone parameters
-        self.TARGET_DISTANCE_CM = 100.0  # 2 meters in cm
+        self.TARGET_DISTANCE_CM = 200.0  # 2 meters in cm
         self.DISTANCE_TOLERANCE_CM = 20.0  # ±20cm tolerance
         self.ANGULAR_VELOCITY_DEG = 18.0  # degrees per second
         self.MIN_STRENGTH = 100  # Minimum LiDAR strength threshold
@@ -213,8 +221,72 @@ class CircularDroneTracker:
             if target_reached and target_reached.value:
                 return True
 
-            time.sleep(0.01)
+            time.sleep(0.002)
         return False
+
+    def wait_and_scan_for_target(self, center_az, center_el, wait_time=0.5, scan_radius=2.0):
+        """
+        Move to position and wait for drone to arrive, continuously scanning.
+        Returns the strongest measurement during the wait period.
+        """
+        # Move to intercept position
+        self.command_motors_to_target(center_az, center_el)
+
+        # Wait for motors to reach position
+        if not self.wait_for_position(center_az, center_el, timeout=0.2):
+            print("[Tracker] Failed to reach position ({:.1f}°, {:.1f}°)".format(center_az, center_el))
+            return None
+
+        print("[Tracker] Waiting at ({:.1f}°, {:.1f}°) for {:.2f}s".format(
+            center_az, center_el, wait_time))
+
+        # Now wait and continuously scan for the target
+        start_wait = time.time()
+        best_measurement = None
+        best_strength = 0
+        measurements_collected = []
+
+        while (time.time() - start_wait) < wait_time:
+            if not self.active or self.shared_data["shutdown"].value:
+                break
+
+            # Small spiral pattern around center while waiting
+            elapsed = time.time() - start_wait
+            spiral_angle = elapsed * math.pi * 4  # 2 rotations during wait
+            spiral_radius = min(scan_radius * (elapsed / wait_time), scan_radius)
+
+            # Calculate scan position
+            scan_az = (center_az + spiral_radius * math.cos(spiral_angle)) % 360.0
+            scan_el = np.clip(center_el + spiral_radius * math.sin(spiral_angle) * 0.5, 0, 90)
+
+            # Move to scan position (small movement)
+            self.command_motors_to_target(scan_az, scan_el)
+            time.sleep(0.01)  # Brief settling time
+
+            # Take multiple readings
+            for _ in range(5):  # More readings while waiting
+                current_az, current_el, dist, strength, timestamp = self.read_current_state()
+
+                # Check if valid with clutter filtering
+                if self.is_valid_measurement(dist, strength, current_az, current_el):
+                    measurement = (current_az, current_el, dist, strength, timestamp)
+                    measurements_collected.append(measurement)
+
+                    # Track the strongest signal
+                    if strength > best_strength:
+                        best_measurement = measurement
+                        best_strength = strength
+                        print("[Tracker]   Found signal: str={:.0f} at ({:.1f}°, {:.1f}°)".format(
+                            strength, current_az, current_el))
+
+                time.sleep(0.002)  # 500Hz polling
+
+        if best_measurement:
+            print("[Tracker] Best signal during wait: str={:.0f}".format(best_strength))
+        else:
+            print("[Tracker] No valid target found during {:.2f}s wait".format(wait_time))
+
+        return best_measurement
 
     def read_current_state(self):
         """Read current motor positions and LiDAR data"""
@@ -313,6 +385,7 @@ class CircularDroneTracker:
     def refine_orbital_plane(self):
         """Refine orbital plane estimation using accumulated points"""
         if len(self.orbit_points) < 3:
+            print("[Tracker] Need at least 3 points for plane calculation")
             return
 
         # Convert recent points to 3D
@@ -328,55 +401,124 @@ class CircularDroneTracker:
             print("[Tracker] ERROR: Invalid 3D points shape: {}".format(points_3d.shape))
             return
 
-        # Use SVD to find best-fit plane through origin
-        # The points should lie on a circle, so we find the plane that minimizes
-        # the sum of squared distances
-        try:
-            U, s, Vt = np.linalg.svd(points_3d.T, full_matrices=False)
+        # Check if points are well-distributed (not all clustered)
+        distances = []
+        for i in range(len(points_3d) - 1):
+            dist = np.linalg.norm(points_3d[i + 1] - points_3d[i])
+            distances.append(dist)
 
-            # The normal is the singular vector with smallest singular value
-            new_normal = Vt[-1, :]
+        min_dist = np.min(distances)
+        max_dist = np.max(distances)
 
-            # Ensure it's a proper 3D vector
-            new_normal = np.array(new_normal).flatten()
-            if new_normal.shape[0] != 3:
-                print("[Tracker] ERROR: SVD produced invalid normal vector")
-                return
+        if max_dist < 0.1:  # Points too close together (< 10cm spacing)
+            print("[Tracker] Points too close for reliable plane calculation")
+            return
 
-            # Ensure consistency of normal direction
-            if self.orbital_normal is not None:
-                if np.dot(new_normal, self.orbital_normal) < 0:
-                    new_normal = -new_normal
+        # Method 1: For well-spaced points, use SVD
+        if len(points_3d) >= 4 and min_dist > 0.05:
+            try:
+                # Center the points
+                center = np.mean(points_3d, axis=0)
+                centered = points_3d - center
 
-            # Smooth update using weighted average
-            if self.orbital_normal is not None:
-                alpha = 0.3  # Smoothing factor
-                self.orbital_normal = (1 - alpha) * self.orbital_normal + alpha * new_normal
-                self.orbital_normal = self.orbital_normal / np.linalg.norm(self.orbital_normal)
-            else:
-                self.orbital_normal = new_normal / np.linalg.norm(new_normal)
+                # SVD to find best-fit plane
+                U, s, Vt = np.linalg.svd(centered.T, full_matrices=False)
 
-            # Ensure orbital_normal is properly shaped
-            self.orbital_normal = np.array(self.orbital_normal).flatten()
+                # The normal is the singular vector with smallest singular value
+                new_normal = Vt[-1, :]
 
-            # Update confidence based on fit quality
-            # Use the ratio of singular values as a measure of planarity
-            if s[2] > 0:
-                planarity = 1.0 - (s[2] / s[0])  # Close to 1 means good plane fit
-                self.orbital_confidence = 0.7 * self.orbital_confidence + 0.3 * planarity
+                # Check quality of fit
+                if s[2] > 0:
+                    planarity = 1.0 - (s[2] / s[0])
+                else:
+                    planarity = 1.0
 
-            # Update arc scan radius based on confidence
-            self.arc_radius_current = self.arc_radius_initial * (1 - self.orbital_confidence * 0.7)
-            self.arc_radius_current = max(self.arc_radius_current, self.arc_radius_min)
+                print("[Tracker] SVD plane fit - Planarity: {:.3f}".format(planarity))
 
-            inclination_deg = math.degrees(math.acos(np.clip(abs(self.orbital_normal[2]), 0, 1)))
-            print("[Tracker] Plane refined - Inclination: {:.1f}°, Confidence: {:.2f}, Arc: {:.1f}°".format(
-                inclination_deg, self.orbital_confidence, self.arc_radius_current))
+            except Exception as e:
+                print("[Tracker] SVD failed: {}, using cross product".format(e))
+                # Fallback to cross product method
+                new_normal = self._calculate_normal_from_cross_product(points_3d)
+        else:
+            # Method 2: For fewer points, use cross product of well-separated vectors
+            new_normal = self._calculate_normal_from_cross_product(points_3d)
 
-        except Exception as e:
-            print("[Tracker] ERROR in plane refinement: {}".format(e))
-            import traceback
-            traceback.print_exc()
+        if new_normal is None:
+            return
+
+        # Ensure it's a proper 3D vector
+        new_normal = np.array(new_normal).flatten()
+        if new_normal.shape[0] != 3:
+            print("[Tracker] ERROR: Invalid normal vector shape")
+            return
+
+        # Normalize
+        norm = np.linalg.norm(new_normal)
+        if norm < 1e-10:
+            print("[Tracker] ERROR: Zero-length normal vector")
+            return
+        new_normal = new_normal / norm
+
+        # Ensure consistency of normal direction
+        if self.orbital_normal is not None:
+            if np.dot(new_normal, self.orbital_normal) < 0:
+                new_normal = -new_normal
+
+        # Smooth update using weighted average
+        if self.orbital_normal is not None:
+            alpha = 0.3  # Smoothing factor
+            self.orbital_normal = (1 - alpha) * self.orbital_normal + alpha * new_normal
+            self.orbital_normal = self.orbital_normal / np.linalg.norm(self.orbital_normal)
+        else:
+            self.orbital_normal = new_normal
+
+        # Ensure orbital_normal is properly shaped
+        self.orbital_normal = np.array(self.orbital_normal).flatten()
+
+        # Calculate inclination from normal vector
+        # The inclination is the angle between the normal and the Z-axis
+        z_component = abs(self.orbital_normal[2])
+        inclination_deg = math.degrees(math.acos(np.clip(z_component, 0, 1)))
+
+        # Update confidence
+        if len(points_3d) >= 4:
+            self.orbital_confidence = min(1.0, self.orbital_confidence + 0.1)
+
+        # Update arc scan radius based on confidence
+        self.arc_radius_current = self.arc_radius_initial * (1 - self.orbital_confidence * 0.7)
+        self.arc_radius_current = max(self.arc_radius_current, self.arc_radius_min)
+
+        print("[Tracker] Plane refined - Inclination: {:.1f}°, Normal: [{:.3f}, {:.3f}, {:.3f}], Conf: {:.2f}".format(
+            inclination_deg, self.orbital_normal[0], self.orbital_normal[1],
+            self.orbital_normal[2], self.orbital_confidence))
+
+    def _calculate_normal_from_cross_product(self, points_3d):
+        """Calculate normal vector using cross product of well-separated points"""
+        if len(points_3d) < 2:
+            return None
+
+        # Find the two most separated points
+        max_dist = 0
+        best_pair = (0, 1)
+        for i in range(len(points_3d)):
+            for j in range(i + 1, len(points_3d)):
+                dist = np.linalg.norm(points_3d[j] - points_3d[i])
+                if dist > max_dist:
+                    max_dist = dist
+                    best_pair = (i, j)
+
+        if max_dist < 0.1:  # Too close
+            print("[Tracker] Points too close for cross product")
+            return None
+
+        # Use the best separated pair
+        v1 = points_3d[best_pair[0]]
+        v2 = points_3d[best_pair[1]]
+
+        # Cross product gives normal to plane containing origin and two points
+        normal = np.cross(v1, v2)
+
+        return normal
 
     def perform_arc_scan(self, center_az, center_el, radius_deg, radius_el_deg=None, num_points=None):
         """
@@ -431,7 +573,7 @@ class CircularDroneTracker:
 
         return best_measurement
 
-    def start_tracking(self, initial_heading=0, heading_deviation=0.0, initial_inclination=0):
+    def start_tracking(self, initial_heading=-1, heading_deviation=30.0, initial_inclination=-1):
         """Initialize search parameters and start tracking"""
         self.initial_heading = initial_heading
         self.heading_deviation = heading_deviation
@@ -444,114 +586,149 @@ class CircularDroneTracker:
         self.orbital_normal = None
         self.orbital_confidence = 0.0
         self.arc_radius_current = self.arc_radius_initial
+        self.consecutive_hits = 0
+        self.consecutive_misses = 0
 
-        print("[Tracker] Starting - Heading: {}, Inclination: {}".format(
-            initial_heading if initial_heading != -1 else "UNKNOWN",
-            initial_inclination if initial_inclination != -1 else "UNKNOWN"))
+        print("[Tracker] ========== STARTING CIRCULAR DRONE TRACKER ==========")
+        print("[Tracker] Target: 2m distance, 18°/s angular velocity")
+        print("[Tracker] Initial heading: {}".format(
+            "{:.1f}°".format(initial_heading) if initial_heading != -1 else "UNKNOWN (will search)"))
+        print("[Tracker] Initial inclination: {}".format(
+            "{:.1f}°".format(initial_inclination) if initial_inclination != -1 else "UNKNOWN (will determine)"))
+        print("[Tracker] Search deviation: ±{:.1f}°".format(heading_deviation / 2))
+        print("[Tracker] Clutter filter: {}".format(
+            "Active" if self.clutter_filter.background_data is not None else "Disabled"))
+        print("[Tracker] =======================================================")
+        print("[Tracker] Entering SEARCHING state")
 
     def stop_tracking(self):
-        """Stop tracking"""
+        """Stop tracking and clear state"""
         self.active = False
         self.state = TrackerState.IDLE
-        print("[Tracker] Stopped")
+
+        # Clear tracking data
+        self.orbit_points.clear()
+        self.last_confirmed_point = None
+        self.last_confirmed_3d = None
+        self.orbital_normal = None
+        self.orbital_confidence = 0.0
+        self.consecutive_hits = 0
+        self.consecutive_misses = 0
+
+        # Clear shared satellite points
+        try:
+            with self.shared_data["satellite_points"].get_lock():
+                for i in range(5):
+                    self.shared_data["satellite_points"][i] = 0.0
+        except:
+            pass
+
+        print("[Tracker] ========== STOPPED ==========")
+        print("[Tracker] Tracking data cleared")
 
     def state_searching(self):
-        """Search for first drone detection with arc scanning"""
+        """Search for first drone detection, looking for strongest signal"""
         # Determine search center
         if self.initial_heading != -1:
-            # Search around known heading with normal scan points
+            # Search around known heading
             center_az = self.initial_heading
             center_el = 45 if self.initial_inclination == -1 else self.initial_inclination
-            num_points = self.arc_scan_points
+            search_radius = self.heading_deviation / 2
+
+            print("[Tracker] Searching near heading {:.1f}° at elevation {:.1f}°".format(
+                center_az, center_el))
         else:
-            # Sweep search - use more points for wider coverage
+            # Sweep search
             sweep_time = time.time() % 10.0
             center_az = (sweep_time * 36.0) % 360.0
             center_el = 30.0
-            num_points = self.arc_scan_points_wide
+            search_radius = 20.0  # Wider search when heading unknown
 
-        # Perform arc scan with both azimuth and elevation radius
-        measurement = self.perform_arc_scan(center_az, center_el,
-                                            self.heading_deviation / 2,
-                                            self.heading_deviation / 3,
-                                            num_points)
+            if int(sweep_time) % 2 == 0:  # Print every 2 seconds
+                print("[Tracker] Sweep searching at {:.1f}°".format(center_az))
+
+        # Use wait-and-scan to find the strongest signal in the area
+        measurement = self.wait_and_scan_for_target(center_az, center_el,
+                                                    wait_time=0.3,
+                                                    scan_radius=search_radius)
 
         if measurement:
             az, el, dist, strength, timestamp = measurement
             self.orbit_points.append((az, el, dist, time.time()))
             print("[Tracker] First point found at ({:.1f}°, {:.1f}°) dist={:.0f}cm str={:.0f}".format(
                 az, el, dist, strength))
+            print("[Tracker] Moving to CONFIRMING_DIRECTION state")
             self.state = TrackerState.CONFIRMING_DIRECTION
 
     def state_confirming_direction(self):
-        """Find second point to determine direction and start defining orbital plane"""
+        """Find second point after waiting for drone to move significantly"""
         if len(self.orbit_points) == 0:
             self.state = TrackerState.SEARCHING
             return
 
         first_point = self.orbit_points[-1]
 
-        # Wait for drone to move (0.5 seconds = 9 degrees of movement)
+        # Wait longer for drone to move (1 second = 18 degrees of movement)
+        # This gives better separation for calculating the orbital plane
         time_elapsed = time.time() - first_point[3]
-        wait_time = 0.5
+        wait_time = 1.0  # Increased from 0.5 to get better point separation
         if time_elapsed < wait_time:
+            print("[Tracker] Waiting {:.2f}s for drone to move...".format(wait_time - time_elapsed))
             time.sleep(wait_time - time_elapsed)
 
         # Predict next position - drone moves "right" at 18 deg/s
         predicted_az = (first_point[0] + self.ANGULAR_VELOCITY_DEG * wait_time) % 360.0
 
         if self.initial_inclination != -1:
-            # Inclination known - narrow search
-            predicted_el = first_point[1]
-            # Small arc scan since we know roughly where to look
-            measurement = self.perform_arc_scan(predicted_az, predicted_el, 8.0, 4.0)
+            # Inclination known - can predict elevation change
+            predicted_el = first_point[1]  # Will refine this with actual inclination
+
+            # Wait at predicted position for drone to arrive
+            measurement = self.wait_and_scan_for_target(predicted_az, predicted_el,
+                                                        wait_time=0.5, scan_radius=3.0)
         else:
             # Inclination unknown - must search wide area
-            # The drone could be at any elevation depending on orbital plane
-            print("[Tracker] Unknown inclination - performing wide hemisphere search")
+            print("[Tracker] Unknown inclination - searching hemisphere for second point")
 
-            # Search strategy: Cover the right hemisphere where drone should be
-            # Center the search 9 degrees to the right of first point
+            # The drone has moved 18° in azimuth, but could be at any elevation
+            # Search strategy: Try multiple intercept points at different elevations
             best_measurement = None
             best_strength = 0
 
-            # Search in a grid pattern covering possible positions
-            # Azimuth: ±15° around predicted position (covers timing uncertainty)
-            # Elevation: ±30° from first point (covers most orbital inclinations)
-            az_offsets = [0, 5, -5, 10, -10, 15, -15]
-            el_offsets = [0, 5, -5, 10, -10, 15, -15, 20, -20, 25, -25, 30, -30]
-
-            # Quick grid search
-            for el_offset in el_offsets:
+            # Search elevations from -30° to +30° relative to first point
+            elevation_steps = 11  # Check 11 different elevations
+            for i in range(elevation_steps):
+                el_offset = -30 + (60 * i / (elevation_steps - 1))
                 search_el = np.clip(first_point[1] + el_offset, 5, 85)
 
-                for az_offset in az_offsets:
-                    if not self.active or self.shared_data["shutdown"].value:
-                        break
-
+                # Also vary azimuth slightly to account for timing uncertainty
+                for az_offset in [0, -3, 3]:  # ±3° azimuth variation
                     scan_az = (predicted_az + az_offset) % 360.0
 
-                    # Move and check
+                    print("[Tracker] Checking ({:.1f}°, {:.1f}°)...".format(scan_az, search_el))
+
+                    # Move and wait briefly
                     self.command_motors_to_target(scan_az, search_el)
                     if self.wait_for_position(scan_az, search_el, timeout=0.05):
 
-                        # Take readings
-                        for _ in range(2):  # Fewer readings for speed
+                        # Take several readings to find strongest signal
+                        for _ in range(5):
                             current_az, current_el, dist, strength, timestamp = self.read_current_state()
 
-                            # Check if valid with clutter filtering
                             if self.is_valid_measurement(dist, strength, current_az, current_el):
                                 if strength > best_strength:
                                     best_measurement = (current_az, current_el, dist, strength, timestamp)
                                     best_strength = strength
-                                    print("[Tracker] Found candidate at ({:.1f}°, {:.1f}°) str={}".format(
-                                        current_az, current_el, strength))
+                                    print("[Tracker]   Found signal str={:.0f}".format(strength))
 
                             time.sleep(0.002)
 
-                # If we found a strong signal, can stop early
-                if best_strength > self.MIN_STRENGTH * 3:
-                    print("[Tracker] Strong signal found, ending search early")
+                    # If we found a very strong signal, can stop searching
+                    if best_strength > self.MIN_STRENGTH * 5:
+                        print("[Tracker] Strong signal found, ending search")
+                        break
+
+                if best_strength > self.MIN_STRENGTH * 5:
                     break
 
             measurement = best_measurement
@@ -560,24 +737,21 @@ class CircularDroneTracker:
             az, el, dist, strength, timestamp = measurement
             self.orbit_points.append((az, el, dist, time.time()))
 
-            # Calculate approximate inclination from first two points
+            # Calculate motion vector from first to second point
             az_change = (az - first_point[0] + 180) % 360 - 180
             el_change = el - first_point[1]
+            distance_2d = math.sqrt(az_change ** 2 + el_change ** 2)
 
-            if abs(az_change) > 0.1:
-                # Estimate the orbital plane inclination
-                # If elevation increases as azimuth increases, plane is tilted
-                approx_inclination = math.degrees(math.atan2(el_change, abs(az_change)))
-                print("[Tracker] Second point found at ({:.1f}°, {:.1f}°)".format(az, el))
-                print("[Tracker] Elevation change: {:.1f}°, Azimuth change: {:.1f}°".format(
-                    el_change, az_change))
-                print("[Tracker] Estimated orbital tilt: {:.1f}°".format(approx_inclination))
+            print("[Tracker] Second point found at ({:.1f}°, {:.1f}°) str={:.0f}".format(
+                az, el, strength))
+            print("[Tracker] Motion: Δaz={:.1f}°, Δel={:.1f}°, distance={:.1f}°".format(
+                az_change, el_change, distance_2d))
 
-                # Store this estimate for future use
-                if self.initial_inclination == -1:
-                    self.initial_inclination = first_point[1] + approx_inclination * 5
-            else:
-                print("[Tracker] Second point found at ({:.1f}°, {:.1f}°)".format(az, el))
+            if distance_2d < 5.0:
+                print("[Tracker] Points too close, need more separation")
+                # Keep first point, try again with longer wait
+                self.orbit_points.pop()  # Remove second point
+                return
 
             self.state = TrackerState.CALCULATING_PLANE
         else:
@@ -586,29 +760,54 @@ class CircularDroneTracker:
             self.state = TrackerState.SEARCHING
 
     def state_calculating_plane(self):
-        """Calculate initial orbital plane from points"""
+        """Collect enough well-spaced points to reliably calculate orbital plane"""
         if len(self.orbit_points) < 2:
             self.state = TrackerState.SEARCHING
             return
 
-        # Get more points for better plane estimation
-        if len(self.orbit_points) < 4:
+        # Need at least 5 well-spaced points for reliable plane calculation
+        min_points_needed = 5
+
+        if len(self.orbit_points) < min_points_needed:
             # Collect more points
             last_point = self.orbit_points[-1]
-            predicted_az = (last_point[0] + self.ANGULAR_VELOCITY_DEG * 0.3) % 360.0
+
+            # Wait for drone to move further
+            time_since_last = time.time() - last_point[3]
+            wait_time = 0.5  # Wait 0.5s between points (9° separation)
+            if time_since_last < wait_time:
+                time.sleep(wait_time - time_since_last)
+
+            # Predict next position
+            predicted_az = (last_point[0] + self.ANGULAR_VELOCITY_DEG * wait_time) % 360.0
             predicted_el = last_point[1]
 
-            # Use moderate search radius since we're still learning the plane
-            measurement = self.perform_arc_scan(predicted_az, predicted_el, 6.0, 4.0)
+            # If we have an initial inclination estimate, use it
+            if len(self.orbit_points) >= 2:
+                # Estimate elevation change from previous points
+                p1 = self.orbit_points[-2]
+                p2 = self.orbit_points[-1]
+                el_rate = (p2[1] - p1[1]) / ((p2[3] - p1[3]) if p2[3] != p1[3] else 1.0)
+                predicted_el = np.clip(last_point[1] + el_rate * wait_time, 0, 90)
+
+            print("[Tracker] Collecting point {} for plane calculation".format(len(self.orbit_points) + 1))
+
+            # Use wait-and-scan to find the drone
+            measurement = self.wait_and_scan_for_target(predicted_az, predicted_el,
+                                                        wait_time=0.3,
+                                                        scan_radius=4.0)
 
             if measurement:
                 az, el, dist, strength, timestamp = measurement
                 self.orbit_points.append((az, el, dist, time.time()))
-                print("[Tracker] Point {} collected at ({:.1f}°, {:.1f}°)".format(
-                    len(self.orbit_points), az, el))
+                print("[Tracker] Point {} collected at ({:.1f}°, {:.1f}°) str={:.0f}".format(
+                    len(self.orbit_points), az, el, strength))
+            else:
+                print("[Tracker] Failed to find point {}, trying again".format(len(self.orbit_points) + 1))
             return
 
-        # Calculate orbital plane
+        # We have enough points, calculate orbital plane
+        print("[Tracker] Calculating orbital plane from {} points".format(len(self.orbit_points)))
         self.refine_orbital_plane()
 
         if self.orbital_normal is not None:
@@ -626,14 +825,20 @@ class CircularDroneTracker:
                 self.state = TrackerState.SEARCHING
                 return
 
-            print("[Tracker] Entering tracking mode")
+            print("[Tracker] Orbital plane established, entering tracking mode")
             self.state = TrackerState.TRACKING
         else:
-            print("[Tracker] Failed to calculate plane, restarting")
-            self.state = TrackerState.SEARCHING
+            print("[Tracker] Failed to calculate plane, need better points")
+            # Remove oldest point and try again
+            if len(self.orbit_points) > 2:
+                self.orbit_points.popleft()
+            else:
+                # Start over
+                self.orbit_points.clear()
+                self.state = TrackerState.SEARCHING
 
     def state_tracking(self):
-        """Main tracking loop with predict-and-intercept using arc scanning"""
+        """Main tracking loop using predict-and-wait intercept strategy"""
         if self.last_confirmed_3d is None or self.orbital_normal is None:
             self.state = TrackerState.SEARCHING
             return
@@ -649,7 +854,7 @@ class CircularDroneTracker:
             self.state = TrackerState.SEARCHING
             return
 
-        # PREDICT: Calculate intercept point
+        # PREDICT: Calculate intercept point (where drone will be in prediction_time seconds)
         rotation_angle_rad = math.radians(self.prediction_angle)
         predicted_3d = self.rotate_vector_rodrigues(
             self.last_confirmed_3d,
@@ -660,12 +865,14 @@ class CircularDroneTracker:
         # Convert to spherical coordinates
         pred_az, pred_el, pred_dist = self.cartesian_to_spherical(predicted_3d)
 
-        # INTERCEPT: Perform arc scan around predicted position
-        # Use adaptive radius based on confidence
-        elevation_radius = self.arc_radius_current * 0.7  # Slightly smaller for elevation
-        measurement = self.perform_arc_scan(pred_az, pred_el,
-                                            self.arc_radius_current,
-                                            elevation_radius)
+        print("[Tracker] Predicting intercept at ({:.1f}°, {:.1f}°)".format(pred_az, pred_el))
+
+        # WAIT AND INTERCEPT: Move to predicted position and wait for drone
+        # Use adaptive scan radius based on confidence
+        scan_radius = self.arc_radius_current
+        measurement = self.wait_and_scan_for_target(pred_az, pred_el,
+                                                    wait_time=self.prediction_time,
+                                                    scan_radius=scan_radius)
 
         if measurement:
             # Success - update tracking
@@ -687,11 +894,13 @@ class CircularDroneTracker:
                 self.refine_orbital_plane()
                 self.points_since_refinement = 0
 
-            # Update confidence
+            # Update confidence and shrink arc radius
             self.orbital_confidence = min(1.0, self.orbital_confidence + 0.05)
+            self.arc_radius_current = self.arc_radius_initial * (1 - self.orbital_confidence * 0.7)
+            self.arc_radius_current = max(self.arc_radius_current, self.arc_radius_min)
 
-            print("[Tracker] Hit #{} at ({:.1f}°, {:.1f}°) - Arc: {:.1f}°, Conf: {:.2f}".format(
-                self.consecutive_hits, az, el, self.arc_radius_current, self.orbital_confidence))
+            print("[Tracker] Intercepted #{} at ({:.1f}°, {:.1f}°) str={:.0f} - Arc: {:.1f}°, Conf: {:.2f}".format(
+                self.consecutive_hits, az, el, strength, self.arc_radius_current, self.orbital_confidence))
 
             # Update shared satellite points for visualization
             try:
@@ -714,12 +923,12 @@ class CircularDroneTracker:
             # Miss - expand search
             self.consecutive_misses += 1
             self.consecutive_hits = 0
-            self.orbital_confidence = max(0.0, self.orbital_confidence - 0.1)
+            self.orbital_confidence = max(0.0, self.orbital_confidence - 0.15)
 
             # Increase arc radius for next attempt
             self.arc_radius_current = min(
-                self.arc_radius_current * 1.2,
-                self.arc_radius_initial * 2
+                self.arc_radius_current * 1.5,
+                self.arc_radius_initial * 3
             )
 
             print("[Tracker] Miss #{} - Expanding arc to {:.1f}°".format(
@@ -739,24 +948,27 @@ class CircularDroneTracker:
         time_elapsed = time.time() - self.last_confirmed_point[3]
         predicted_angle = self.ANGULAR_VELOCITY_DEG * time_elapsed
 
-        # Search in expanding pattern
+        # Cap prediction at one full orbit
+        if predicted_angle > 360:
+            predicted_angle = predicted_angle % 360
+
+        # Search radius expands with each miss
         search_radius = 10.0 + 5.0 * (self.consecutive_misses - self.max_misses)
         search_radius = min(search_radius, 45.0)  # Cap at 45 degrees
 
         predicted_az = (self.last_confirmed_point[0] + predicted_angle) % 360.0
         predicted_el = self.last_confirmed_point[1]
 
-        # Use more scan points for wider searches
-        num_points = self.arc_scan_points_wide if search_radius > 20 else self.arc_scan_points
+        print("[Tracker] Recovery search at ({:.1f}°, {:.1f}°) radius={:.1f}°".format(
+            predicted_az, predicted_el, search_radius))
 
-        # Wide search in both azimuth and elevation
-        measurement = self.perform_arc_scan(predicted_az, predicted_el,
-                                            search_radius,
-                                            search_radius * 0.8,
-                                            num_points)
+        # Use wait-and-scan with expanding radius
+        measurement = self.wait_and_scan_for_target(predicted_az, predicted_el,
+                                                    wait_time=0.5,
+                                                    scan_radius=search_radius)
 
         if measurement:
-            print("[Tracker] Reacquired target!")
+            print("[Tracker] TARGET REACQUIRED!")
             az, el, dist, strength, timestamp = measurement
 
             # Reset tracking
@@ -768,11 +980,19 @@ class CircularDroneTracker:
 
             self.consecutive_misses = 0
             self.arc_radius_current = self.arc_radius_initial
+
+            print("[Tracker] Returning to TRACKING state")
             self.state = TrackerState.TRACKING
-        elif self.consecutive_misses > self.max_misses + 10:
-            print("[Tracker] Reacquisition failed, restarting search")
-            self.state = TrackerState.SEARCHING
-            self.consecutive_misses = 0
+        else:
+            self.consecutive_misses += 1
+
+            if self.consecutive_misses > self.max_misses + 10:
+                print("[Tracker] Reacquisition failed after {} attempts, restarting search".format(
+                    self.consecutive_misses))
+                self.orbit_points.clear()
+                self.orbital_normal = None
+                self.state = TrackerState.SEARCHING
+                self.consecutive_misses = 0
 
     def update(self):
         """Main update loop - call this repeatedly"""
@@ -790,15 +1010,15 @@ class CircularDroneTracker:
                     if heading is not None:
                         heading = heading.value if hasattr(heading, 'value') else float(heading)
                     else:
-                        heading = 0
+                        heading = -1
 
                     inclination = self.shared_data.get("inclination")
                     if inclination is not None:
                         inclination = inclination.value if hasattr(inclination, 'value') else float(inclination)
                     else:
-                        inclination = 0
+                        inclination = -1
 
-                    self.start_tracking(heading, 0.0, inclination)
+                    self.start_tracking(heading, 30.0, inclination)
                 except Exception as e:
                     print("[Tracker] Error reading initial parameters: {}".format(e))
                     self.start_tracking()
@@ -854,7 +1074,7 @@ def run_circular_tracker(shared_data, background_file="background_scan.npy"):
             shared_data["circular_tracker_active"] = Value('b', False)
 
         tracker = CircularDroneTracker(shared_data,
-                                       prediction_time_sec=1,
+                                       prediction_time_sec=0.5,
                                        background_file=background_file)
         tracker.run()
     except Exception as e:
@@ -863,7 +1083,7 @@ def run_circular_tracker(shared_data, background_file="background_scan.npy"):
 
 
 # Example of how to control the tracker from your main program
-def start_circular_tracking(shared_data, heading=0, inclination=0):
+def start_circular_tracking(shared_data, heading=-1, inclination=-1):
     """Start the circular tracker with given parameters"""
     try:
         if "heading" in shared_data:
