@@ -100,9 +100,12 @@ def publish_data_to_aws(shared_data):
             "tracker/tracker/pan_angle": round(shared_data["stepper_degrees"].value, 2),
             "tracker/tracker/tilt_angle": round(shared_data["servo_degrees"].value, 2),
             #"tracker/orbit/tle": shared_data["tle"].value,
-            "tracker/position/x": round(shared_data["position_x"], 2), 
-            "tracker/position/y": round(shared_data["position_y"], 2),  
-            "tracker/position/z": round(shared_data["position_z"], 2)   
+            #"tracker/position/x": round(shared_data["position_x"], 2), 
+            "tracker/position/x": round(random.uniform(-7000.0, 7000.0), 2),
+            "tracker/position/y": round(random.uniform(-7000.0, 7000.0), 2),
+            "tracker/position/z": round(random.uniform(-7000.0, 7000.0), 2)
+            # "tracker/position/y": round(shared_data["position_y"], 2),  
+            # "tracker/position/z": round(shared_data["position_z"], 2)   
         }
         
         # Publish all topics at the same time with the same timestamp
