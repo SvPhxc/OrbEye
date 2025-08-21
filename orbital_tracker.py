@@ -40,7 +40,7 @@ class CircularDroneTracker:
         self.TARGET_DISTANCE_CM = 200.0  # 2 meters in cm
         self.DISTANCE_TOLERANCE_CM = 20.0  # ±20cm tolerance
         self.ANGULAR_VELOCITY_DEG = 18.0  # degrees per second
-        self.MIN_STRENGTH = 100  # Minimum LiDAR strength threshold
+        self.MIN_STRENGTH = 500  # Minimum LiDAR strength threshold
         self.LIDAR_FOV_DEG = 2.0  # LiDAR field of view
 
         # Prediction parameters
@@ -67,8 +67,8 @@ class CircularDroneTracker:
 
         # Search parameters
         self.initial_heading = 0
-        self.initial_inclination = 0
-        self.heading_deviation = 30.0
+        self.initial_inclination = -1
+        self.heading_deviation = 0.0
 
         # Performance tracking
         self.consecutive_hits = 0
@@ -304,7 +304,7 @@ class CircularDroneTracker:
 
         return best_measurement
 
-    def start_tracking(self, initial_heading=-1, heading_deviation=30.0, initial_inclination=-1):
+    def start_tracking(self, initial_heading=0, heading_deviation=00.0, initial_inclination=-1):
         """Initialize search parameters and start tracking"""
         self.initial_heading = initial_heading
         self.heading_deviation = heading_deviation
