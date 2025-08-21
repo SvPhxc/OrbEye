@@ -9,7 +9,7 @@ import traceback
 from tracking_logic import run_tracker_process
 from tle_generator import run_tle_generator
 from orbital_tracker import run_circular_tracker
-from grafana_visualisation import publish_data_to_aws
+#from grafana_visualisation import publish_data_to_aws
 
 # Import all process functions
 from hardware_controller import run_hardware_controller
