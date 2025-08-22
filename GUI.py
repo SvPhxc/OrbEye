@@ -275,12 +275,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
         ekf_box = QtWidgets.QGroupBox("EKF Control")
         ekf_layout = QVBoxLayout()
-        self.btn_acquire = QPushButton("Acquire Target (3 pts)")
-        self.btn_acquire.clicked.connect(self.on_acquire_clicked)
-        ekf_layout.addWidget(self.btn_acquire)
-        self.btn_stop_ekf = QPushButton("Stop Tracking & Generate Plot")
-        self.btn_stop_ekf.clicked.connect(self.stop_and_plot_ekf)
-        ekf_layout.addWidget(self.btn_stop_ekf)
         self.chk_debug_mode = QCheckBox("Debug Mode (Hand Tracking)")
         self.chk_debug_mode.toggled.connect(self.on_debug_mode_toggled)
         ekf_layout.addWidget(self.chk_debug_mode)
