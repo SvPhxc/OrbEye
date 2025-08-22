@@ -13,6 +13,9 @@ from datahandler import (
     fit_tle_from_satellite_points,
     get_inclination_deg,
     generate_orbit_xyz,
+    normalize_tle_input,
+    save_tle,
+    adjust_tle_l2_inc_raan,
 )
 
 class Toggle(QtWidgets.QCheckBox):
@@ -431,9 +434,19 @@ class TrackerWindow(QtWidgets.QMainWindow):
             import numpy as np
             arr = np.array(hist, dtype=float)
             tle_name, l1, l2 = fit_tle_from_satellite_points(arr, unit="cm", name="MY-FIT")
+
+            example_name, ex_l1, ex_l2 = normalize_tle_input("example.tle", default_path="example.tle")
+
+            # 1) Build adjusted L2 (only inc & RAAN replaced; everything else from example)
+            adj_l2 = adjust_tle_l2_inc_raan(ex_l2, l2)
+
+            # 2) Save to output/
+            out_path = save_tle(example_name, ex_l1, adj_l2, out_dir="output")
+            print("[TLE] Adjusted saved to:", out_path)
+
             print("[TLE] Fitted TLE:")
-            print(tle_name); print(l1); print(l2)
-            pts = generate_orbit_xyz(tle_lines=(l1, l2), duration_minutes=90, step_seconds=60)
+            print(tle_name); print(l1); print(adj_l2)
+            pts = generate_orbit_xyz(tle_lines=(l1, adj_l2), duration_minutes=90, step_seconds=60)
             self._plot_orbit_xyz(pts, as_points=self.orbit_as_points, label=tle_name)
             self.print_acquisition_pan(also_draw_line=True)
             

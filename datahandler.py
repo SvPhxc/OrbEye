@@ -548,3 +548,72 @@ def get_ascending_node_unit_vector(*, tle_lines=None, tle_filename=None) -> np.n
     pan_deg = get_acquisition_pan_deg(tle_lines=tle_lines, tle_filename=tle_filename)
     az = math.radians(pan_deg)
     return np.array([math.cos(az), math.sin(az), 0.0], dtype=float)
+
+
+
+
+
+def _tle_checksum(line_0_67: str) -> int:
+    """TLE checksum over cols 1..68 (Python slice [:68])."""
+    s = 0
+    for ch in line_0_67[:68]:
+        if ch.isdigit():
+            s += int(ch)
+        elif ch == '-':
+            s += 1
+    return s % 10
+
+def _format_deg_8_4(val_deg: float) -> str:
+    # width 8, 4 decimals, right-justified — e.g. "  98.7356"
+    return f"{float(val_deg):8.4f}"
+
+def _parse_inc_raan_from_l2(l2: str) -> tuple[float, float]:
+    """Prefer fixed columns; fallback to split() if needed."""
+    s = l2.rstrip("\r\n")
+    if len(s) >= 25:
+        inc_str  = s[8:16]
+        raan_str = s[17:25]
+        try:
+            return float(inc_str), float(raan_str)
+        except Exception:
+            pass
+    parts = s.split()
+    if len(parts) >= 4 and parts[0] == '2':
+        return float(parts[2]), float(parts[3])
+    raise ValueError("Cannot parse inclination/RAAN from line 2")
+
+def adjust_tle_l2_inc_raan(example_l2: str, source_l2: str) -> str:
+    """
+    Return example_l2 with ONLY inclination (cols 9–16) and RAAN (18–25) replaced
+    by the values from source_l2. Recomputes checksum.
+    """
+    inc, raan = _parse_inc_raan_from_l2(source_l2)
+
+    base = example_l2.rstrip("\r\n")
+    if len(base) < 68:  # ensure space for checksum computation
+        base = base.ljust(68)
+
+    # normalize angles
+    inc  = max(0.0, min(180.0, float(inc)))
+    raan = float(raan) % 360.0
+
+    inc_str  = _format_deg_8_4(inc)   # cols  9–16 -> [8:16]
+    raan_str = _format_deg_8_4(raan)  # cols 18–25 -> [17:25]
+
+    tmp = base[:8] + inc_str + base[16:17] + raan_str + base[25:68]
+    cksum = _tle_checksum(tmp)
+    return tmp + str(cksum)
+
+def save_tle(name: str, line1: str, line2: str, out_dir: str = "output", filename: str | None = None) -> str:
+    """Write a 3-line TLE file (name, L1, L2) and return its path."""
+    os.makedirs(out_dir, exist_ok=True)
+    if not filename:
+        stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        safe = "".join(ch for ch in (name or "SAT") if ch.isalnum() or ch in "-_") or "SAT"
+        filename = f"{safe}_adjusted_{stamp}.tle"
+    path = os.path.join(out_dir, filename)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write((name or "SAT") + "\n")
+        f.write(line1.rstrip() + "\n")
+        f.write(line2.rstrip() + "\n")
+    return path
