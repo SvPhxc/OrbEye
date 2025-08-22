@@ -31,7 +31,7 @@ class ClutterFilter:
     significantly closer than the known background object.
     """
 
-    def __init__(self, background_file="background_scan.npy", angular_tolerance=2.0, distance_margin_cm=50.0):
+    def __init__(self, background_file="background_scan.npy", angular_tolerance=1.0, distance_margin_cm=90.0):
         """
         Initializes the filter with a 2D (azimuth, elevation) background map.
 
@@ -620,8 +620,13 @@ def _start_orbit_patrol(shared_data):
                 max_wait_s=max_wait_s,
                 full_circle=use_full_circle,           # <-- NEW
                 full_circle_samples=720,
-                enable_spiral_search = True,  # <-- ADD THIS LINE
-                spiral_radius_deg = 1
+                enable_spiral_search = True,
+                continuous_spiral_search = True ,# <-- ADD THIS LINE
+                spiral_radius_deg = 5,
+                spiral_rotations = 0,
+                spiral_settle_s = 0.002
+                # <-- NEW (optional; 2 rotations)
+                 # <-- NEW (optional; True to keep searching after the patrol)
             # <-- NEW (optional; 720 gives 0.5° spacing)
             )
         finally:
