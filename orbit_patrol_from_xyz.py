@@ -175,7 +175,7 @@ def _bind_cf_detector(clutter_filter):
                         return v > 0
                     return bool(v)
                 if isinstance(res, (int, float, np.floating)):
-                    return v > 0
+                    return res > 0
                 return bool(res)
 
             return detector
@@ -338,26 +338,39 @@ def patrol_waypoints(shared_data,
             else:
                 detected = bool(proceed_condition(current_az, current_el, deadline_s=deadline))
 
-        if detected and (shared_data.get("record_tle_points") and shared_data["record_tle_points"].value):
+        # Decide if recording is enabled
+        record_ok = True if not shared_data.get("record_tle_points") else shared_data["record_tle_points"].value
+
+        if detected and record_ok:
+            # Use ACTUAL encoder angles at detection time
+            cur_az = float(shared_data["stepper_degrees"].value) % 360.0
+            cur_el = float(shared_data["servo_degrees"].value)
+
+            # Fresh LiDAR
             dist_cm, strength, ts = [float(v) for v in shared_data["lidar_data"]]
+
+            # 1) Single-slot for heatmap
             try:
                 with shared_data["satellite_points"].get_lock():
-                    shared_data["satellite_points"][:] = [current_az, current_el, dist_cm, strength, ts]
-                    print("[Patrol] saved -> satellite_points")
+                    shared_data["satellite_points"][:] = [cur_az, cur_el, dist_cm, strength, ts]
+                    print(f"[Patrol] saved -> satellite_points ({cur_az:.2f}°, {cur_el:.2f}°)")
             except Exception:
-                shared_data["satellite_points"][:] = [current_az, current_el, dist_cm, strength, ts]
-                print("[Patrol] saved -> satellite_points (no lock)")
+                shared_data["satellite_points"][:] = [cur_az, cur_el, dist_cm, strength, ts]
+                print(f"[Patrol] saved -> satellite_points (no lock) ({cur_az:.2f}°, {cur_el:.2f}°)")
+
+            # 2) Append to history (for later TLE fit)
             try:
-                shared_data["tracking_history"].append([current_az, current_el, dist_cm, strength, ts])
+                shared_data["tracking_history"].append([cur_az, cur_el, dist_cm, strength, ts])
                 print(f"[Patrol] appended to tracking_history (N={len(shared_data['tracking_history'])})")
             except Exception as e:
                 print(f"[Patrol] WARNING: couldn't append to tracking_history: {e}")
+
             if shared_data.get("satellite_detected"):
                 shared_data["satellite_detected"].value = True
 
-    if not _should_abort(shared_data):
-        _goto_and_wait(shared_data, first_az, first_el, settle_timeout_s=settle_timeout_s)
-    shared_data["go_to_target"].value = False
+            if not _should_abort(shared_data):
+                _goto_and_wait(shared_data, first_az, first_el, settle_timeout_s=settle_timeout_s)
+            shared_data["go_to_target"].value = False
 
 
 def run_orbit_patrol_from_xyz(shared_data,
