@@ -9,11 +9,9 @@ import math
 from sgp4.api import Satrec, jday
 from sgp4.conveniences import sat_epoch_datetime
 
+
+#NOTE: Preparing TLE for input in program
 def parse_tle_file(file_path: str) -> list[tuple[str, str, str]]:
-    """
-    Read a .tle file and return a list of (name, line1, line2) triples.
-    The file is expected in 3-line blocks: name, L1, L2.
-    """
     triples: list[tuple[str, str, str]] = []
     with open(file_path, "r", encoding="utf-8") as f:
         lines = [ln.strip() for ln in f if ln.strip()]
@@ -102,17 +100,14 @@ def save_tle_to_example(name: str, line1: str, line2: str, path: str = "example.
         f.write(f"{name.rstrip()}\n{line1.rstrip()}\n{line2.rstrip()}\n")
 
 
+#NOTE: Using the common SPG4 libary to generate the point of the tle we want to plot in 3D. We also use this function for the patrol waypoints
+
 def generate_orbit_xyz(*,
                        tle_lines: tuple[str, str] | tuple[str, str, str] | None = None,
                        tle_filename: str | None = None,
                        duration_minutes: int = 90,
                        step_seconds: int = 60,
                        start_time_utc = None) -> np.ndarray:
-    """
-    Propagate a TLE with SGP4 and return Nx3 TEME/ECI positions in *kilometers*.
-    - Provide either tle_lines=(L1,L2) or (name,L1,L2), or tle_filename="file.tle".
-    - No coordinate transforms; output is geocentric (Earth center), perfect for your GL view.
-    """
     line1, line2 = _resolve_tle_lines(tle_lines=tle_lines, tle_filename=tle_filename)
 
     # Build SGP4 satellite record
@@ -138,7 +133,7 @@ def generate_orbit_xyz(*,
 
     return xyz_km
 
-
+#NOTE: Helper for the generate orbit function
 def get_orbit_xyz_for_query(query: str | None,
                             duration_minutes: int = 90,
                             step_seconds: int = 60,
@@ -152,9 +147,6 @@ def get_orbit_xyz_for_query(query: str | None,
     pts = generate_orbit_xyz(tle_lines=(l1, l2), duration_minutes=duration_minutes, step_seconds=step_seconds)
     return name, pts
 
-# ---------------------------
-# Internal helpers
-# ---------------------------
 
 def _looks_like_tle(l1: str, l2: str) -> bool:
     return l1.startswith("1 ") and l2.startswith("2 ") and len(l1) >= 60 and len(l2) >= 60
@@ -198,10 +190,8 @@ def get_inclination_deg(*, tle_lines=None, tle_filename=None) -> float:
 MU_EARTH_KM3_S2 = 398600.4418  # Earth's GM (km^3/s^2)
 
 
+#NOTE: THINETH here this is the point where the fitting starts
 
-# =========================
-#  TLE fitting from samples
-# =========================
 def fit_tle_from_satellite_points(
     sat_points,
     *,
@@ -212,26 +202,12 @@ def fit_tle_from_satellite_points(
     """
     Fit a rough TLE from a sequence of satellite_points samples.
 
-    Input
-    -----
-    sat_points : array-like (N x 5 or N x 4)
-        Rows: [az_deg, el_deg, dist_cm_or_unit, (strength optional), timestamp_seconds]
-        - az, el in degrees (your GUI convention)
-        - dist in unit (default "cm")
-        - timestamp in seconds (preferably Unix epoch seconds; otherwise relative seconds)
-    unit : {"cm","m","km"}  distance unit for the 3rd column
-    name : str               TLE name to embed
-    epoch_hint : datetime    if given, use as the TLE epoch; otherwise inferred from timestamps
+    Input: sat_points, unit to convert to, name, datetime epoch_hint (optional) -->  but dont really need it
 
-    Returns
-    -------
-    (name, line1, line2) : tuple[str, str, str]
-        Two TLE lines ready to use with sgp4.
+    Returns: (name, line1, line2) : tuple[str, str, str] --> Two TLE lines ready to use with sgp4.
 
-    Notes
-    -----
-    - Assumes geocentric observer (as per your project simplification).
-    - Uses central-difference velocity at the median time sample.
+    Notes:
+    - Assumes geocentric observer (simplification due to drone requirement).
     - Produces approximate SGP4-compatible elements; good for visualization.
     """
     pts = _np_as_array(sat_points)
@@ -242,7 +218,7 @@ def fit_tle_from_satellite_points(
     az_deg = pts[:, 0].astype(float)
     el_deg = pts[:, 1].astype(float)
     dist   = pts[:, 2].astype(float)
-    ts     = pts[:, -1].astype(float)  # last col = timestamp
+    ts     = pts[:, -1].astype(float)  # timestamp 
 
     if len(pts) < 3:
         raise ValueError("Need at least 3 samples to estimate velocity.")
@@ -272,7 +248,6 @@ def fit_tle_from_satellite_points(
     # Time array (s) and epoch
     t0 = _infer_epoch_from_ts(ts, epoch_hint)
     t_sec = ts - ts[0] if _looks_like_relative_time(ts) else (ts - ts[0])  # centered at first sample
-    # Better: use actual deltas for gradient
     dt = np.gradient(ts)
 
     # Velocity via central differences (km/s) – robust over nonuniform ts
@@ -316,9 +291,7 @@ def fit_tle_from_satellite_points(
     return name, line1, line2
 
 
-# ------------------------
-# Helpers for TLE fitting
-# ------------------------
+#NOTE: All the functions are need for simplification and debugging the single steps
 
 def _np_as_array(x):
     return x if isinstance(x, np.ndarray) else np.asarray(x, dtype=float)
@@ -337,10 +310,6 @@ def _infer_epoch_from_ts(ts, epoch_hint):
     return datetime.now(tz=timezone.utc)
 
 def _epoch_from_ts_for_tle(ts, epoch0):
-    """
-    Choose an epoch near the middle of the dataset to reduce mean anomaly bias.
-    If ts are absolute, use mid timestamp; else use epoch0 + mid offset.
-    """
     mid_idx = len(ts) // 2
     if _looks_like_relative_time(ts):
         return epoch0 + (ts[mid_idx] - ts[0]) * _SEC
@@ -350,9 +319,7 @@ _SEC = timedelta(seconds=1)
 
 
 def _rv_to_coe(r, v, mu):
-    """
-    r [km], v [km/s] -> dict of classical orbital elements in radians & km.
-    """
+
     r = np.asarray(r, float)
     v = np.asarray(v, float)
     rn = np.linalg.norm(r)
@@ -429,9 +396,8 @@ def _wrap_deg(x):
     return x + 360.0 if x < 0.0 else x
 
 
-# ------------------------
-# TLE building & checksum
-# ------------------------
+#NOTE: Choosing to use inc and RAAN and not the other parameters because of the noise in the data
+
 def _build_tle_lines(
     *,
     name: str,
@@ -516,10 +482,10 @@ def _tle_exp_field(val: float) -> str:
     es = "+" if e >= 0 else "-"
     return f"{sgn}{digits:05d}{es}{abs(e):02d}"
 
+
+#NOTE: Important addition to the code, becasue we were getting wrong data and unplottable TLEs
 def _tle_checksum(line: str) -> int:
-    """
-    TLE checksum: sum of all digits + count of '-' characters, modulo 10.
-    """
+
     s = 0
     for ch in line[:68]:  # checksum excludes the checksum itself
         if ch.isdigit():
@@ -543,7 +509,7 @@ def get_acquisition_pan_deg(*, tle_lines=None, tle_filename=None) -> float:
 def get_ascending_node_unit_vector(*, tle_lines=None, tle_filename=None) -> np.ndarray:
     """
     Unit vector in ECI/TEME toward the ascending node (lies in the equatorial plane).
-    Useful to draw a line in your 3D view.
+    Useful to draw a line in the 3D view.
     """
     pan_deg = get_acquisition_pan_deg(tle_lines=tle_lines, tle_filename=tle_filename)
     az = math.radians(pan_deg)

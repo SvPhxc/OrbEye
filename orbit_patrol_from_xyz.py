@@ -1,8 +1,8 @@
 import time, math
 import numpy as np
 
+# Main tracking logic for patroling an orbit path defined by XYZ points. -Thineth
 
-# ---------- helpers: convert & choose ----------
 def _eci_plane_basis_from_raan_incl(raan_deg: float, incl_deg: float):
     Ω = math.radians(raan_deg)
     i = math.radians(incl_deg)
@@ -87,7 +87,8 @@ def _should_abort(shared_data):
     )
 
 
-# ---------- spiral search helpers ----------
+#NOTE: Spiral searching helper - Alex & Thineth
+
 def generate_spiral_waypoints(center_az, center_el, max_radius_deg=1.0, points_per_rotation=16, num_rotations=2):
     """Generates Archimedean spiral waypoints around a center point."""
     waypoints = []
@@ -147,7 +148,7 @@ def _perform_spiral_search(shared_data, center_az, center_el, spiral_radius_deg,
     return best_pos, max_strength
 
 
-# ---------- proceed condition (ClutterFilter) ----------
+# NOTE: Due to the ClutterFilter changing over time, we need to inspect it and find a suitable method to use for detection. - Alex
 def _bind_cf_detector(clutter_filter):
     """
     Inspect ClutterFilter to find a suitable method and return a callable:
@@ -198,7 +199,7 @@ def make_detection_proceed_condition(clutter_filter, shared_data,
     )
 
 
-# ---------- main patrol ----------
+# Main partol logic with options and addons - Thineth
 def _search_with_continuous_spiral(shared_data, center_az, center_el, deadline_s,
                                    detector, confirm_hits, max_age_s,
                                    spiral_radius_deg, spiral_points_per_rotation, spiral_rotations, spiral_settle_s):
@@ -259,7 +260,7 @@ def patrol_waypoints(shared_data,
                      spiral_radius_deg: float = 4,
                      spiral_points_per_rotation: int = 16,
                      spiral_rotations: int = 2,
-                     spiral_settle_s: float = 0.001):  # MODIFIED: Added parameter
+                     spiral_settle_s: float = 0.001):  
     """
     For each waypoint: slew+settle -> [search] -> wait until detection or timeout -> next.
     """
@@ -388,7 +389,7 @@ def run_orbit_patrol_from_xyz(shared_data,
                               spiral_radius_deg: float = 0.5,
                               spiral_points_per_rotation: int = 16,
                               spiral_rotations: int = 2,
-                              spiral_settle_s: float = 0.001):  # MODIFIED: Added parameter
+                              spiral_settle_s: float = 0.001):  
     azel_path = xyz_to_azel_center(pts_xyz)
     visible = filter_by_elevation(azel_path, min_el=min_el_deg, max_el=max_el_deg)
     if not visible:

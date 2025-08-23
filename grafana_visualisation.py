@@ -47,7 +47,7 @@ def publish_data_to_aws(shared_data):
                 # Get LiDAR data from shared memory
                 # lidar_data = [distance_cm, strength, timestamp]
                 lidar_data = shared_data["lidar_data"]
-                lidar_distance = lidar_data[0]
+                lidar_distance = lidar_data[0]*0.01 # Convert cm to meters 
                 lidar_intensity = lidar_data[1]
                 stepper_degrees = round(shared_data["stepper_degrees"].value,2)
                 servo_degrees = round(shared_data["servo_degrees"].value,2)

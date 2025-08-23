@@ -405,7 +405,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
         w = max(1.0, strength / 100.0)
         self.hm_bins[tilt_bin, pan_bin] += w
 
-        # Optional gentle time decay so old hits fade (uncomment to enable)
         # self.hm_bins *= 0.9995
 
         # Normalize and update image; flip vertically so tilt increases upward
@@ -453,10 +452,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
 
     def print_acquisition_pan(self, also_draw_line=True, line_length_cm=600.0):
-        """
-        Reads the TLE query from the text box, computes acquisition pan (≈ RAAN),
-        prints it, and optionally draws a line from origin in that direction.
-        """
         from datahandler import normalize_tle_input  # only needed to resolve "TLE"/filename/name
         query = (self.sat_name_input.text() or "").strip()
 
@@ -486,11 +481,9 @@ class TrackerWindow(QtWidgets.QMainWindow):
         except Exception as e:
             print(f"[TLE] Acquisition pan failed for '{query}': {e}")
 
+
+
     def fetch_and_plot_satellite(self):
-        """
-        Reads the text field (sat name / 'TLE' / .tle path), gets Nx3 km coords
-        from datahandler, and plots them in the 3D view.
-        """
         query = (self.sat_name_input.text() or "").strip()
 
         try:
@@ -505,10 +498,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
             print(f"[TLE] Fetch/plot error for '{query}': {e}")
 
     def _plot_orbit_xyz(self, pts_km: np.ndarray, as_points: bool = False, label: str = "ORBIT"):
-        """
-        pts_km: Nx3 in kilometers (TEME/ECI).
-        We scale to centimeters used by the LiDAR background.
-        """
         if not isinstance(pts_km, np.ndarray) or pts_km.ndim != 2 or pts_km.shape[1] != 3:
             print("[TLE] Invalid orbit array; expected Nx3.")
             return
@@ -529,7 +518,6 @@ class TrackerWindow(QtWidgets.QMainWindow):
             self.view.addItem(item)
             self.orbit_items.append(item)
 
-            # Optional start marker
             try:
                 first = pts_cm[0]
                 start_marker = gl.GLScatterPlotItem(pos=first.reshape(1, 3), size=6.0, color=(1.0, 0.4, 0.2, 1.0))
