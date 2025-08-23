@@ -341,7 +341,7 @@ def patrol_waypoints(shared_data,
         # Decide if recording is enabled
         record_ok = True if not shared_data.get("record_tle_points") else shared_data["record_tle_points"].value
 
-        if detected and record_ok:
+        if detected and record_ok and shared_data["lidar_data"][0] < 250:
             # Use ACTUAL encoder angles at detection time
             cur_az = float(shared_data["stepper_degrees"].value) % 360.0
             cur_el = float(shared_data["servo_degrees"].value)

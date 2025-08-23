@@ -623,7 +623,7 @@ def _start_orbit_patrol(shared_data):
                 enable_spiral_search = True,
                 continuous_spiral_search = True ,# <-- ADD THIS LINE
                 spiral_radius_deg = 5,
-                spiral_rotations = 0,
+                spiral_rotations = 1,
                 spiral_settle_s = 0.002
                 # <-- NEW (optional; 2 rotations)
                  # <-- NEW (optional; True to keep searching after the patrol)
