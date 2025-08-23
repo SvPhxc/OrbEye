@@ -655,7 +655,7 @@ class TrackerWindow(QtWidgets.QMainWindow):
         self.shared_data["lidar_track_mode_active"].value = False
 
     def on_debug_mode_toggled(self, en):
-        self.shared_data["circular_tracker_active"].value = bool(en)
+        self.shared_data["debug_mode"].value = bool(en)
         # This key was removed from main.py, so it is commented out.
         # self.shared_data["lidar_acceptance_range"][:] = [0.2, 2.0] if en else [3.0, 50.0]
 
