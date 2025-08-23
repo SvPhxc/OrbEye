@@ -436,6 +436,10 @@ class TrackerWindow(QtWidgets.QMainWindow):
 
             # 2) Save to output/
             out_path = save_tle(example_name, ex_l1, adj_l2, out_dir="output")
+            bg_path = self.shared_data["background_path"].value.decode("utf-8")
+            bg = np.load(bg_path)  # rows: [az, el, dist_cm, strength]
+            np.save('output/background_data.npy', bg)
+            np.save('output/satellite_points.npy', arr)
             print("[TLE] Adjusted saved to:", out_path)
 
             print("[TLE] Fitted TLE:")
